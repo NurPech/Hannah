@@ -1,0 +1,27 @@
+[Unit]
+Description=Hannah Voice-ID Service (ECAPA-TDNN speaker identification)
+Documentation=https://dev.kernstock.net/gessinger/voice/hannah
+After=network.target local-fs.target
+# /mnt/hannah_mem must be mounted before we start — see fstab entry added by install.sh
+
+[Service]
+Type=simple
+User=hannah-voiceid
+WorkingDirectory=/opt/hannah-voiceid/voiceid
+Environment=HOME=/opt/hannah-voiceid
+
+ExecStart=/opt/hannah-voiceid/venv/bin/python app.py --config /etc/hannah-voiceid/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+# The RAM-disk is mounted via /etc/fstab (added by install.sh).
+# If it somehow isn't mounted yet, abort rather than write profiles to disk directly.
+ExecStartPre=/bin/mountpoint -q /mnt/hannah_mem
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/hannah-voiceid
+ReadWritePaths=/mnt/hannah_mem /opt/hannah-voiceid
+
+[Install]
+WantedBy=multi-user.target

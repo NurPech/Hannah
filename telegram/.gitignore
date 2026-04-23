@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.env
+config.local.yaml
+*.wav
+*.ogg
+*.mp3
+.tts_cache/
+hannah_users.db

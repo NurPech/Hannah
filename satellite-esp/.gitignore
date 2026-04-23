@@ -1,0 +1,6 @@
+build/
+sdkconfig
+sdkconfig.local
+managed_components/
+dependencies.lock
+.history

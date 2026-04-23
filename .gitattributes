@@ -1,0 +1,3 @@
+# Alle Textdateien mit LF speichern
+*       text=auto eol=lf
+*.sh    eol=lf

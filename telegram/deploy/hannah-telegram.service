@@ -1,0 +1,21 @@
+[Unit]
+Description=Hannah Telegram Bot
+Documentation=https://dev.kernstock.net/gessinger/voice/hannah
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hannah-telegram
+WorkingDirectory=/opt/hannah-telegram/telegram
+ExecStart=/opt/hannah-telegram/venv/bin/python main.py --config /etc/hannah-telegram/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/hannah-telegram
+
+[Install]
+WantedBy=multi-user.target

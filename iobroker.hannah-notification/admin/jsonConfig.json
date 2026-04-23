@@ -1,0 +1,44 @@
+{
+  "type": "panel",
+  "items": {
+    "mqtt_broker": {
+      "type": "text",
+      "label": "MQTT Broker (Host/IP)",
+      "sm": 12,
+      "md": 6
+    },
+    "mqtt_port": {
+      "type": "number",
+      "label": "MQTT Port",
+      "sm": 12,
+      "md": 2,
+      "min": 1,
+      "max": 65535
+    },
+    "_divider": {
+      "type": "divider"
+    },
+    "mqtt_user": {
+      "type": "text",
+      "label": "MQTT Benutzername",
+      "sm": 12,
+      "md": 6
+    },
+    "mqtt_pass": {
+      "type": "password",
+      "label": "MQTT Passwort",
+      "sm": 12,
+      "md": 6
+    },
+    "_divider2": {
+      "type": "divider"
+    },
+    "hannah_topic": {
+      "type": "text",
+      "label": "Hannah MQTT Topic",
+      "sm": 12,
+      "md": 6,
+      "help": "Standardmäßig: hannah/notification"
+    }
+  }
+}

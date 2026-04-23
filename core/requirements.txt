@@ -1,0 +1,8 @@
+faster-whisper>=1.0.0
+paho-mqtt>=2.0.0
+PyYAML>=6.0
+requests>=2.31.0
+numpy>=1.24.0
+piper-tts>=1.2.0    # TTS-Synthese (optional, deaktivierbar via config)
+miniaudio>=1.58     # Audio-Dekodierung (MP3, WAV, OGG, FLAC) für Bestätigungstöne
+grpcio>=1.60.0      # gRPC-Laufzeit (Server + Client)

@@ -1,0 +1,57 @@
+menu "Hannah Audio"
+
+    config HANNAH_AUDIO_SAMPLE_RATE
+        int "Sample Rate (Hz)"
+        default 16000
+        help
+            Muss mit Hannah Core übereinstimmen (config.yaml: audio.sample_rate).
+
+    config HANNAH_AUDIO_FRAME_MS
+        int "Audio Frame Größe (ms)"
+        default 30
+        help
+            Länge eines UDP-Pakets in Millisekunden.
+            30 ms @ 16 kHz = 480 Samples = 960 Bytes (16-bit mono).
+
+    config HANNAH_MIC_I2S_PORT
+        int "Mikrofon I2S Port"
+        default 0
+        range 0 1
+
+    config HANNAH_MIC_BCK_GPIO
+        int "Mikrofon BCK GPIO"
+        default 4
+
+    config HANNAH_MIC_WS_GPIO
+        int "Mikrofon WS GPIO"
+        default 5
+
+    config HANNAH_MIC_DATA_GPIO
+        int "Mikrofon DATA GPIO"
+        default 6
+
+    config HANNAH_SPK_I2S_PORT
+        int "Speaker I2S Port"
+        default 1
+        range 0 1
+
+    config HANNAH_SPK_BCK_GPIO
+        int "Speaker BCK GPIO"
+        default 15
+
+    config HANNAH_SPK_WS_GPIO
+        int "Speaker WS GPIO"
+        default 16
+
+    config HANNAH_SPK_DATA_GPIO
+        int "Speaker DATA GPIO"
+        default 7
+
+    config HANNAH_MUTE_GPIO
+        int "Mute-Taster GPIO"
+        default 0
+        help
+            GPIO des Hardware-Mute-Tasters. Gegen GND geschaltet,
+            interner Pull-up wird aktiviert.
+
+endmenu

@@ -1,0 +1,78 @@
+menu "Hannah Network"
+
+    config HANNAH_WIFI_SSID
+        string "WiFi SSID"
+        default "smarthome"
+        help
+            SSID des WLAN-Netzwerks.
+
+    config HANNAH_WIFI_PASS
+        string "WiFi Passwort"
+        default ""
+        help
+            WPA2-Passwort. Leer lassen für offene Netzwerke.
+
+    config HANNAH_DEVICE_ID
+        string "Geräte-ID"
+        default "wohnzimmer-esp"
+        help
+            Eindeutiger Name dieses Satelliten. Wird als MQTT-Client-ID
+            und im Discovery-Protokoll verwendet.
+            Beispiele: wohnzimmer-esp, kueche-esp, schreibtisch-esp
+
+    config HANNAH_MQTT_BROKER
+        string "MQTT Broker Adresse"
+        default "192.168.8.1"
+        help
+            IP-Adresse oder Hostname des MQTT-Brokers.
+
+    config HANNAH_MQTT_PORT
+        int "MQTT Broker Port"
+        default 1883
+        range 1 65535
+
+    config HANNAH_MQTT_USER
+        string "MQTT Benutzername"
+        default "mqtt"
+
+    config HANNAH_MQTT_PASS
+        string "MQTT Passwort"
+        default ""
+
+    config HANNAH_ROOM_NAME
+        string "Raum-Name"
+        default "Wohnzimmer"
+        help
+            Anzeigename des Raums in dem sich dieser Satellit befindet.
+            Wird beim UDP-Register an Hannah Core übermittelt.
+
+    config HANNAH_UDP_LISTEN_PORT
+        int "UDP Empfangsport (TTS)"
+        default 7776
+        range 1024 65535
+        help
+            Lokaler UDP-Port auf dem TTS-Audio und Status-Meldungen
+            vom Go-Proxy empfangen werden.
+
+    config HANNAH_UDP_TIMEOUT_MS
+        int "UDP Send Timeout (ms)"
+        default 100
+        help
+            Timeout für UDP-Audio-Pakete. Bei Überschreitung wird das
+            Paket verworfen (kein Blocking).
+
+    config HANNAH_HEARTBEAT_INTERVAL_S
+        int "Heartbeat-Intervall (s)"
+        default 30
+        range 5 300
+        help
+            Intervall in Sekunden zwischen Heartbeat-Paketen an den Proxy.
+
+    config HANNAH_WIFI_MAX_RETRY
+        int "WiFi Reconnect-Versuche"
+        default 10
+        range 1 50
+        help
+            Maximale Anzahl WiFi-Reconnects bevor esp_restart() aufgerufen wird.
+
+endmenu

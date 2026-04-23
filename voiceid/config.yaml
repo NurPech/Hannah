@@ -1,0 +1,9 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+recognition:
+  # Unter diesem Wert gilt der Sprecher als unbekannt
+  unknown_threshold: 0.25
+  # Unter diesem Wert wird die Erkennung als unsicher geloggt
+  uncertain_threshold: 0.40

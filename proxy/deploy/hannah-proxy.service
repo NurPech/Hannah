@@ -1,0 +1,24 @@
+[Unit]
+Description=Hannah Proxy — Satellite UDP/gRPC Bridge
+Documentation=https://dev.kernstock.net/gessinger/voice/hannah
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hannah-proxy --config /etc/hannah-proxy/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+# Run as dedicated user if it exists, otherwise fall back to nobody.
+# Create with: useradd -r -s /sbin/nologin hannah-proxy
+User=hannah-proxy
+
+# Harden the service — the proxy only needs network + its config file.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/hannah-proxy
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,350 @@
+syntax = "proto3";
+
+package hannah;
+
+option java_package = "io.hannah";
+option java_outer_classname = "HannahProto";
+
+// ============================================================
+//  Hannah gRPC Service
+//
+//  Allows external services (Telegram bot, web UI, etc.) to:
+//    - query and manage the user registry
+//    - submit text commands and receive answers
+//    - trigger TTS announcements on satellites
+//    - inspect registered satellites
+//    - query live car state
+//    - subscribe to a stream of Hannah events (car parked, resident arrived, …)
+//    - register as a satellite audio proxy (Go gRPC proxy replaces UDP server)
+// ============================================================
+
+service HannahService {
+
+  // --- User Registry ---
+  rpc GetUsers      (GetUsersRequest)      returns (GetUsersResponse);
+  rpc GetUser       (GetUserRequest)       returns (UserResponse);
+  rpc LinkAccount   (LinkAccountRequest)   returns (StatusResponse);
+  rpc UnlinkAccount (UnlinkAccountRequest) returns (StatusResponse);
+  rpc SetTrustLevel (SetTrustLevelRequest) returns (StatusResponse);
+
+  // --- Device Control Menu ---
+  // Returns all rooms and devices with current state — for building control menus.
+  rpc GetDevices    (Empty)                returns (GetDevicesResponse);
+  // Directly set a device state (bypasses NLU). Trust level check is done by the caller.
+  rpc ControlDevice (ControlDeviceRequest) returns (StatusResponse);
+
+  // --- Control ---
+  // Submit a plain-text command; Hannah processes it through NLU and returns the answer.
+  rpc SubmitText    (SubmitTextRequest)    returns (SubmitTextResponse);
+  // Submit a voice message (OGG/Opus bytes); Hannah does STT → NLU → TTS and returns the result.
+  rpc SubmitVoice   (SubmitVoiceRequest)   returns (SubmitVoiceResponse);
+  // Send a TTS announcement to one satellite or all ("all").
+  rpc Announce      (AnnounceRequest)      returns (StatusResponse);
+  // List all currently registered UDP satellites.
+  rpc GetSatellites (Empty)               returns (GetSatellitesResponse);
+
+  // --- Car ---
+  // Returns the current cached car state (available=false if no data received yet).
+  rpc GetCarState   (Empty)               returns (CarStateResponse);
+  rpc GetAllCarStates (Empty)             returns (GetAllCarStatesResponse);
+
+  // --- Event stream ---
+  // Opens a server-side stream; Hannah pushes events as they occur.
+  // Pass event_types to filter (empty = all events).
+  // Known event types: "car.parked", "resident.arrived", "resident.departed"
+  rpc SubscribeEvents (EventFilter)       returns (stream HannahEvent);
+
+  // --- Satellite Proxy (Go gRPC proxy) ---
+  // Bidirectional keepalive stream. Proxy sends heartbeats; Hannah sends TTS
+  // audio commands back (for announcements). While this stream is open, Hannah
+  // disables its own UDP server. If the stream drops, Hannah re-enables UDP.
+  rpc RegisterProxy       (stream ProxyHeartbeat)              returns (stream ProxyCommand);
+  // Submit a complete satellite audio session for processing.
+  // Hannah runs the full pipeline (STT → NLU → TTS → MQTT status) and returns
+  // the result so the proxy can play TTS audio back to the satellite.
+  rpc SubmitSatelliteAudio(SubmitSatelliteAudioRequest)        returns (SubmitSatelliteAudioResponse);
+
+  // --- Speaker Enrollment ---
+  // Register a voice sample for a roomie so a Voice-ID service can identify
+  // them later. Requires trust_level >= 10 to enroll others; own voiceprint
+  // can be enrolled at trust_level >= 5.
+  // Returns ok=false with a message if no Voice-ID backend is configured.
+  rpc EnrollVoiceprint    (EnrollVoiceprintRequest)            returns (StatusResponse);
+}
+
+// ============================================================
+//  Shared
+// ============================================================
+
+message Empty {}
+
+message StatusResponse {
+  bool   ok      = 1;
+  string message = 2;
+}
+
+// ============================================================
+//  User Registry messages
+// ============================================================
+
+message User {
+  string uuid         = 1;
+  string roomie_id    = 2;
+  string display_name = 3;
+  int32  trust_level  = 4;
+  bool   active       = 5;
+  // linked_accounts: service → account_id  (e.g. "telegram" → "123456789")
+  map<string, string> linked_accounts = 6;
+}
+
+message GetUsersRequest {
+  bool include_inactive = 1;
+}
+
+message GetUsersResponse {
+  repeated User users = 1;
+}
+
+// Exactly one of the lookup fields should be set.
+message GetUserRequest {
+  oneof lookup {
+    string                roomie_id      = 1;
+    string                uuid           = 2;
+    LinkedAccountLookup   linked_account = 3;
+  }
+}
+
+message LinkedAccountLookup {
+  string service    = 1;
+  string account_id = 2;
+}
+
+message UserResponse {
+  bool found = 1;
+  User user  = 2;  // only valid when found == true
+}
+
+message LinkAccountRequest {
+  string roomie_id  = 1;
+  string service    = 2;
+  string account_id = 3;
+}
+
+message UnlinkAccountRequest {
+  string service    = 1;
+  string account_id = 2;
+}
+
+message SetTrustLevelRequest {
+  string roomie_id = 1;
+  int32  level     = 2;  // clamped to [0, 10]
+}
+
+// ============================================================
+//  Control messages
+// ============================================================
+
+message SubmitTextRequest {
+  string text            = 1;
+  // Identifies the calling service and its user, so Hannah can look up
+  // the corresponding roomie via linked_accounts.
+  string source_service  = 2;  // e.g. "telegram"
+  string source_user_id  = 3;  // e.g. Telegram chat_id as string
+}
+
+message SubmitTextResponse {
+  string answer      = 1;  // text to send back to the user
+  string intent_name = 2;  // e.g. "WeatherQuery", "TurnOn", "Unknown"
+}
+
+message SubmitVoiceRequest {
+  bytes  audio           = 1;  // OGG/Opus audio bytes (from Telegram voice message)
+  string source_service  = 2;  // e.g. "telegram"
+  string source_user_id  = 3;  // e.g. Telegram chat_id as string
+}
+
+message SubmitVoiceResponse {
+  string transcript  = 1;  // STT result (for display / caption)
+  string answer      = 2;  // text answer from Hannah
+  string intent_name = 3;  // e.g. "CarQuery" — caller may enrich the text reply
+  bytes  audio_ogg   = 4;  // OGG/Opus TTS response (empty if TTS disabled or failed)
+}
+
+message AnnounceRequest {
+  string text   = 1;
+  string device = 2;  // satellite device name, or "all" for broadcast
+}
+
+message Satellite {
+  string device_id = 1;
+  string room      = 2;   // room name as registered
+  string address   = 3;   // IP:port of the UDP satellite
+}
+
+message GetSatellitesResponse {
+  repeated Satellite satellites = 1;
+}
+
+// ============================================================
+//  Car state messages
+// ============================================================
+
+message CarStateResponse {
+  bool         available = 1;  // false if no MQTT data received yet
+  CarStateProto state    = 2;
+}
+
+message CarStateProto {
+  // position
+  float  latitude      = 1;
+  float  longitude     = 2;
+  string address       = 3;
+  bool   is_moving     = 4;
+  int64  position_date = 5;   // Unix timestamp (seconds)
+
+  // status
+  int32  odometer         = 6;
+  int32  total_range      = 7;
+  bool   is_car_locked    = 8;
+  string door_lock_status = 9;
+  string overall_status   = 10;
+
+  // doors/windows: name → true (closed) / false (open)
+  map<string, bool> doors   = 11;
+  map<string, bool> windows = 12;
+
+  // Roomie-ID des Fahrzeughalters (leer = kein Owner-Filter)
+  string owner_roomie = 13;
+
+  // Metadaten aus ioBroker (info/displayName, info/plate, info/vin)
+  string display_name  = 14;
+  string plate         = 15;
+  string vin           = 16;
+
+  // Heimadresse — für "steht zu Hause"-Erkennung im Client
+  string home_address  = 17;
+}
+
+message GetAllCarStatesResponse {
+  repeated CarStateProto states = 1;
+}
+
+// ============================================================
+//  Event stream messages
+// ============================================================
+
+message EventFilter {
+  // If empty, subscribe to all event types.
+  repeated string event_types = 1;
+}
+
+message HannahEvent {
+  string event_type = 1;   // "car.parked" | "resident.arrived" | "resident.departed"
+  string timestamp  = 2;   // ISO 8601 UTC
+
+  oneof payload {
+    CarStateProto      car_state      = 10;
+    ResidentEventProto resident_event = 11;
+  }
+}
+
+message ResidentEventProto {
+  string roomie_id    = 1;
+  string display_name = 2;
+  string event        = 3;   // "arrived" | "departed"
+}
+
+// ============================================================
+//  Satellite Proxy messages (Go gRPC proxy ↔ Hannah Core)
+// ============================================================
+
+// Sent by the proxy periodically to keep the RegisterProxy stream alive.
+message ProxyHeartbeat {
+  string proxy_id = 1;   // human-readable identifier, e.g. "hannah-proxy-living-room"
+  // UDP address the proxy is listening on for satellite connections.
+  // When set, Hannah publishes this address to the discovery topic so
+  // satellites connect to the proxy instead of Hannah's own UDP server.
+  string udp_host = 2;   // advertise host, e.g. "192.168.8.5"
+  int32  udp_port = 3;   // UDP port, e.g. 7775
+}
+
+// Sent by Hannah to the proxy over the RegisterProxy stream.
+message ProxyCommand {
+  oneof command {
+    ProxyAck         ack        = 1;  // initial confirmation when stream is established
+    PlayAudioCommand play_audio = 2;  // Hannah wants the proxy to play TTS on a satellite
+  }
+}
+
+// Sent once by Hannah after RegisterProxy stream is established.
+message ProxyAck {
+  bool   udp_disabled = 1;  // true = Hannah has disabled its own UDP server
+  string message      = 2;  // human-readable status, e.g. "UDP server stopped"
+}
+
+// Hannah instructs the proxy to play TTS audio on a specific satellite.
+// Used for announcements and other server-initiated audio.
+message PlayAudioCommand {
+  string device_id   = 1;  // satellite device name (as registered via UDP or proxy)
+  bytes  audio_pcm   = 2;  // raw PCM, 16-bit signed mono
+  int32  sample_rate = 3;  // e.g. 24000 (Azure) or 16000 (Piper)
+}
+
+// Sent by the proxy when a satellite has finished recording an utterance.
+message SubmitSatelliteAudioRequest {
+  string device_id    = 1;  // satellite device name
+  string room         = 2;  // room name (from proxy registration / config)
+  bytes  audio_pcm    = 3;  // raw PCM, 16-bit signed mono, 16000 Hz
+  int32  sample_rate  = 4;  // sample rate of the audio (typically 16000)
+  // Optional: speaker identity provided by an upstream speaker-ID service.
+  // Empty = anonymous (Hannah treats as unknown user).
+  string speaker_roomie_id = 5;
+}
+
+message SubmitSatelliteAudioResponse {
+  string transcript  = 1;  // STT result
+  string answer      = 2;  // text answer from Hannah
+  string intent_name = 3;  // e.g. "TurnOn", "CarQuery", "Unknown"
+  bytes  audio_pcm   = 4;  // TTS response as raw PCM, 16-bit signed mono
+  int32  sample_rate = 5;  // sample rate of audio_pcm
+}
+
+// ============================================================
+//  Device Control Menu messages
+// ============================================================
+
+message DeviceInfo {
+  string id       = 1;  // full device prefix, e.g. "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.DeckeSeite"
+  string name     = 2;  // display name, e.g. "DeckeSeite"
+  string category = 3;  // e.g. "Licht", "Stecker", "Temperaturen"
+  repeated string states = 4;       // available state keys: "on", "level", "color", …
+  map<string, string> current = 5;  // current values as strings, e.g. {"on": "true", "level": "75"}
+}
+
+message RoomInfo {
+  string key              = 1;  // room_id (lowercase), e.g. "wohnzimmer"
+  string name             = 2;  // display name, e.g. "Wohnzimmer"
+  repeated DeviceInfo devices = 3;
+}
+
+message GetDevicesResponse {
+  repeated RoomInfo rooms = 1;
+}
+
+message ControlDeviceRequest {
+  string device_id = 1;  // DeviceInfo.id
+  string state     = 2;  // state key: "on", "level", "color"
+  string value     = 3;  // string-serialised value: "true", "false", "50", "#FF0000"
+}
+
+// ============================================================
+//  Speaker Enrollment messages
+// ============================================================
+
+// Register a voice sample so a Voice-ID service can build a voiceprint.
+// The actual forwarding to the Voice-ID backend is handled by Hannah Core.
+message EnrollVoiceprintRequest {
+  string roomie_id   = 1;  // whose voice this sample belongs to
+  bytes  audio_pcm   = 2;  // raw PCM, 16-bit signed mono
+  int32  sample_rate = 3;  // e.g. 16000
+}

@@ -1,0 +1,42 @@
+menu "Hannah Wake Word"
+
+    config HANNAH_WAKEWORD_ENABLED
+        bool "Wake-Word-Erkennung aktivieren"
+        default n
+        help
+            Aktiviert die lokale Wake-Word-Erkennung (microWakeWord, TFLite Micro).
+            Wenn deaktiviert: PTT-Modus (Taster halten zum Sprechen).
+
+    config HANNAH_WAKEWORD_THRESHOLD
+        int "Erkennungsschwelle (0–100)"
+        default 75
+        range 0 100
+        depends on HANNAH_WAKEWORD_ENABLED
+        help
+            Confidence-Schwelle für die Wake-Word-Erkennung (Prozent).
+            75 (~0.75) ist ein guter Startwert.
+
+    config HANNAH_VAD_SILENCE_MS
+        int "Stille-Timeout nach Erkennung (ms)"
+        default 1500
+        range 500 5000
+        help
+            Wie lange Stille anhält bis audio_end gesendet wird.
+
+    config HANNAH_VAD_ENERGY_THRESHOLD
+        int "VAD Energie-Schwelle (RMS, 0–32767)"
+        default 200
+        range 10 10000
+        help
+            RMS-Pegel unterhalb dessen ein Frame als Stille gilt.
+
+    config HANNAH_TFLITE_ARENA_KB
+        int "TFLite-Micro Arena-Größe (KB)"
+        default 128
+        range 64 512
+        help
+            Arbeitsspeicher für den TFLite-Micro-Interpreter.
+            Bei AllocateTensors-Fehler erhöhen.
+            128 KB reicht für das hey_hannah inception-Modell (55 KB).
+
+endmenu

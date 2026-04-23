@@ -1,0 +1,16 @@
+proxy_id: "hannah-proxy"   # human-readable name shown in Hannah logs
+
+hannah:
+  address: "192.168.8.15:50051"  # Hannah Core gRPC address
+
+udp:
+  listen_addr: ":7775"          # UDP port satellites connect to (same as Hannah's UDP port)
+  advertise_host: "192.168.8.5" # LAN IP published to satellites via MQTT discovery;
+                                 # leave empty to keep Hannah's own address in the topic
+
+voice_id:
+  enabled: false                 # true = call Voice-ID service before each SubmitSatelliteAudio
+  base_url: "http://localhost:8080"  # Voice-ID REST service (see internal/voiceid/client.go for API)
+  timeout_sec: 10.0              # seconds before giving up on Voice-ID (pipeline continues with speaker="")
+  min_confidence: 0.3            # Wichtig: NICHT auf 0.0 setzen — das löst einen internen Default von 0.7 aus.
+                                 # 0.3 akzeptiert alle Erkennungen die voiceid selbst nicht als "unknown" markiert.

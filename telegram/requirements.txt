@@ -1,0 +1,13 @@
+# Telegram bot
+python-telegram-bot>=20.0
+
+# gRPC
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
+protobuf>=4.25.0
+
+# Config
+pyyaml>=6.0
+
+# Optional: for development / testing
+# pytest>=8.0

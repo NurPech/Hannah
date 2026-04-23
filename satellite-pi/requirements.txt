@@ -1,0 +1,20 @@
+# Hannah Satellit — Basis-Abhängigkeiten
+# openwakeword ist NICHT hier drin — plattformabhängige Installation via install.sh
+#
+# Direkte Installation NUR wenn du weißt was du tust:
+#   bash install.sh
+#
+# Voraussetzungen:
+#   sudo apt install portaudio19-dev libopenblas0
+
+# Audio-I/O
+PyAudio>=0.2.14
+
+# Audio-Dekodierung (MP3, WAV, OGG, FLAC) + Resampling
+miniaudio>=1.58
+
+# Numerik (wird auch von openwakeword benötigt)
+numpy>=1.24.0,<2.0.0
+
+# MQTT
+paho-mqtt>=2.0.0

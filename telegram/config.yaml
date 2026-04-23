@@ -1,0 +1,13 @@
+# hannah-telegram configuration
+# Copy this file, fill in the secrets, and keep config.local.yaml out of git.
+
+# Telegram Bot Token from @BotFather
+telegram_token: "YOUR_BOT_TOKEN_HERE"
+
+grpc:
+  host: "127.0.0.1"
+  port: 50051
+
+# Car settings — home_address used for rich "Auto steht zu Hause" message formatting.
+car:
+  home_address: "Unterm Weinberg 5, 54492 Zeltingen-Rachtig, Deutschland"

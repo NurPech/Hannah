@@ -1,0 +1,15 @@
+{
+  "name": "iobroker.hannah-notification",
+  "version": "0.1.0",
+  "description": "Hannah Notification Provider für ioBroker",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "@iobroker/adapter-core": "^3.0.0",
+    "mqtt": "^5.0.0"
+  },
+  "author": "Leonie",
+  "license": "MIT"
+}

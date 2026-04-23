@@ -1,0 +1,219 @@
+routines_file: "routines.yaml"  # Pfad zur Routinen-Datei (hot-reload bei Änderung)
+
+device_rooms:
+  rpi-test: "Wohnzimmer"  # Fallback für MQTT-Satelliten ohne UDP-Registrierung
+
+groups:
+  erdgeschoss:
+    - Wohnzimmer
+    - Küche
+  alle:
+    - Wohnzimmer
+    - Küche
+    - Schlafzimmer
+
+udp:
+  host: "0.0.0.0"       # Bind-Adresse des Servers
+  port: 7775             # UDP-Port für Audio-Streaming und Registrierung
+  advertise_host: ""     # Leer = eigene IP automatisch ermitteln
+  discovery_topic: "hannah/server"  # Retained MQTT-Topic für Satellit-Discovery
+
+mqtt:
+  host: "192.168.1.1"         # IP-Adresse des MQTT-Brokers
+  port: 1883
+  username: "mqtt"
+  password: "IHR_MQTT_PASSWORT"
+  # Ausgehende Topics: {device} wird durch den Gerätenamen ersetzt
+  topic_intent_out: "hannah/{device}/intent"
+  topic_text_out: "hannah/{device}/text"        # STT-Ergebnis (optional)
+  topic_answer_out: "hannah/{device}/answer"    # Textantwort auf Fragen
+  topic_error_out: "hannah/{device}/error"      # Fehler
+  topic_text_command_in: "0_userdata/0/hannah/set/textCommand"
+  # Satellit-Status (retained, von Hannah publiziert)
+  # hannah/satelite/{device}/status  → idle | listening | processing | speaking
+  # hannah/satelite/{device}/online  → true | false (LWT vom Satellit)
+
+# Fahrzeug-Integration (optional, beliebig viele Einträge)
+# cars:
+#   - topic_prefix: "javascript/0/virtualDevice/Auto/Person/Auto1"
+#     home_address: "Musterstraße 1, 12345 Musterstadt, Deutschland"
+#     owner_roomies: ["person"]   # Roomie-IDs mit Zugriff auf dieses Auto
+
+grpc:
+  host: "0.0.0.0"   # Bind-Adresse des gRPC-Servers
+  port: 50051        # Standard gRPC-Port
+
+user_registry:
+  db_path: "hannah_users.db"   # SQLite-Datei (relativ zum Arbeitsverzeichnis)
+  sync_interval: 60            # Sekunden zwischen ioBroker-Abfragen
+
+residents:
+  topic_prefix_read:  "residents/0/roomie"          # ioBroker → Hannah (subscribe)
+  topic_prefix_write: "hannah/set/residents/roomie" # Hannah → ioBroker (publish, kein /0/)
+  state_key: "presence/state"   # Datenpunkt-Suffix unterhalb von /{name}/
+  hannah_roomie: "hannah"
+  user_roomies:                 # Roomie-IDs aller Bewohner (außer Hannah)
+    - "bewohner1"
+  state_home: 1   # 🏠 zu Hause
+  state_away: 0   # ⏸️ Abwesend
+
+iobroker:
+  host: "192.168.1.1"   # IP-Adresse des ioBroker-Servers
+  port: 8093
+  # Pfad-Prefix der virtualDevice-Geräte in ioBroker
+  virtual_device_prefix: "javascript.0.virtualDevice"
+  feedback_timeout: 3.0   # Sekunden bis "Gerät antwortet nicht"
+  # State-Namen der Geräte (anpassen falls abweichend)
+  state_names:
+    "on":        "on"
+    level:       "level"
+    color:       "color"
+    colorTemp:   "colorTemp"
+    # Sensor-States (an tatsächliche ioBroker-State-Namen anpassen)
+    current:     "current"       # z.B. Temperaturen.*.*.Raumtemperatur.current
+    expected:    "expected"      # z.B. Temperaturen.*.*.Raumtemperatur.expected
+    illuminance: "illuminance"   # z.B. Helligkeit.*.*.illuminance
+    open:        "open"          # z.B. Fenster.*.*.open
+
+tts:
+  # Backend: piper (lokal/offline) | azure | polly
+  # Piper ist immer der Fallback wenn ein Cloud-Backend nicht erreichbar ist.
+  backend: piper
+
+  # Piper — lokal, kein Internet nötig (auch als Fallback für Cloud-Backends)
+  model: "/home/pi/de_DE-kerstin-low.onnx"   # leer = TTS deaktiviert
+  length_scale: 1.0    # Sprechgeschwindigkeit (>1 = langsamer)
+  noise_scale: 0.667
+  noise_w: 0.8
+
+  # Azure Cognitive Services TTS (backend: azure)
+  # Freies Tier: 500.000 Zeichen/Monat
+  # azure_key: "..."
+  # azure_region: westeurope
+  # azure_voice: de-DE-KatjaNeural   # Alternativen: de-DE-ConradNeural
+
+  # Amazon Polly (backend: polly)
+  # polly_key_id: "..."
+  # polly_secret_key: "..."
+  # polly_region: eu-central-1
+  # polly_voice: Vicki               # Alternativen: Daniel
+  # polly_engine: neural
+
+  # Disk-Cache für Cloud-Synthesen (Phrasen werden nach erster Synthese gespeichert)
+  cache_dir: .tts_cache
+
+  # Standard-Phrasen beim Start vorsynthetisieren — danach ohne Cloud-Aufruf verfügbar
+  warm_phrases:
+    - "Ich habe dich nicht verstanden."
+    - "Tut mir leid, ich weiß nicht was du meinst."
+    - "Es wurden keine Geräte gefunden."
+
+  confirmation_sound: "/home/pi/confirmation.wav"  # leer = synthetisiert
+
+stt:
+  model: "base"          # tiny | base | small | medium | large-v3 (lokales Fallback)
+  language: "de"
+  device: "cpu"          # cpu | cuda
+  compute_type: "int8"   # int8 (schnell, Pi) | float16 (GPU) | float32
+  # Mindest-Confidence: unterhalb wird kein Intent gesendet
+  no_speech_threshold: 0.6
+
+  # Remote-STT: faster-whisper-server auf einem stärkeren Rechner (empfohlen)
+  # Wenn gesetzt, wird Remote bevorzugt — bei Fehler automatischer Fallback auf lokales Modell.
+  # Setup: https://github.com/fedirz/faster-whisper-server
+  # remote_url: "http://192.168.1.2:8000"
+  # remote_model: "Systran/faster-whisper-large-v3"
+  # remote_timeout: 15.0   # Sekunden (beim ersten Request wird das Modell geladen)
+
+audio:
+  sample_rate: 16000
+  sample_width: 2        # Bytes pro Sample (2 = 16-bit)
+  channels: 1
+  # Format des base64-Payloads: "raw_pcm" | "wav"
+  # "auto" versucht WAV-Header zu erkennen, fällt auf raw_pcm zurück
+  format: "auto"
+
+nlu:
+  # Aktions-Wörter (deutsch)
+  turn_on_words:
+    - "an"
+    - "einschalten"
+    - "anschalten"
+    - "anmachen"
+    - "einmachen"
+    - "starte"
+    - "aktiviere"
+  turn_off_words:
+    - "aus"
+    - "ausschalten"
+    - "ausmachen"
+    - "ausdrehen"
+    - "stoppe"
+    - "deaktiviere"
+  # Kategorie-Filter: Wort im Befehl → nur Geräte dieser Kategorie schalten
+  category_words:
+    licht:        "Licht"
+    lichter:      "Licht"
+    lampe:        "Licht"
+    lampen:       "Licht"
+    stecker:      "Stecker"
+    strom:        "Stecker"
+    temperatur:   "Temperaturen"
+    temperaturen: "Temperaturen"
+    warm:         "Temperaturen"
+    kalt:         "Temperaturen"
+    heiss:        "Temperaturen"
+    grad:         "Temperaturen"
+    fenster:      "Fenster"
+    helligkeit:   "Helligkeit"
+    lux:          "Helligkeit"
+  # Fragewörter (lösen Query-Intent aus)
+  query_words:
+    - "ist"
+    - "sind"
+    - "wie"
+    - "was"
+    - "welche"
+    - "wieviel"
+    - "status"
+  # Einheiten für SetValue
+  temperature_units:
+    - "grad"
+    - "°c"
+    - "°"
+    - "celsius"
+  percentage_units:
+    - "prozent"
+    - "%"
+
+llm:
+  enabled: false          # true = LLM aktiv (Smalltalk, Notification-Reformulierung)
+  provider: ollama        # ollama | openai | groq | mistral
+  base_url: "http://localhost:11434"   # Ollama lokal; für OpenAI: https://api.openai.com/v1
+  # api_key: ""           # Nur für Cloud-Anbieter (OpenAI, Groq, Mistral)
+  model: "llama3.2"       # Ollama-Modell, Cloud-Modell-ID, oder custom Modelfile-Name
+
+  # Persönlichkeit (optional) — weglassen wenn die Persönlichkeit im Modell eingebaut ist.
+  #
+  # Ollama Modelfile-Alternative: ollama create hannah -f Hannah.mf
+  #   → System-Prompt ist dann fest im Modell, kein Eintrag hier nötig.
+  #   → Funktioniert nur mit selbst gehostetem Ollama.
+  #
+  # Für Cloud-Anbieter (OpenAI, Groq, Mistral) oder Standard-Modelle:
+  #   system_prompt hier eintragen. Antworten werden per TTS vorgelesen —
+  #   kurze Sätze, kein Markdown, keine Emojis.
+  #
+  # system_prompt: |
+  #   Du bist Hannah. Deine Antworten werden per Sprachausgabe vorgelesen.
+  #   Deshalb: maximal 2 kurze Sätze, keine Listen, keine Aufzählungen, keine Klammern,
+  #   keine Emojis, keine Markdown-Formatierung. Schreib wie du sprichst.
+  #
+  #   Wer du bist:
+  #   [Hier deine Figur beschreiben]
+  #
+  #   Persönlichkeit:
+  #   [Charakter, Werte, Hobbys, Besonderheiten]
+
+memory:
+  db: "memory.db"        # SQLite-Datei für Langzeitgedächtnis (relativ zum Arbeitsverzeichnis)
+  recent_limit: 10       # Wie viele Erinnerungen in den System-Prompt injiziert werden

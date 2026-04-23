@@ -1,0 +1,30 @@
+[Unit]
+Description=Hannah Voice Assistant Core
+Documentation=https://dev.kernstock.net/gessinger/voice/hannah
+After=network-online.target mosquitto.service
+Wants=network-online.target
+# Neustart wenn MQTT-Broker noch nicht bereit ist
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hannah
+WorkingDirectory=/opt/hannah-core/core
+ExecStart=/opt/hannah-core/venv/bin/python main.py -c /etc/hannah/config.yaml
+Environment=HOME=/opt/hannah-core
+Restart=on-failure
+RestartSec=10
+
+# Sauberes Beenden abwarten (TTS darf noch fertig sprechen)
+TimeoutStopSec=15
+KillMode=mixed
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/hannah
+ReadWritePaths=/opt/hannah-core
+
+[Install]
+WantedBy=multi-user.target
