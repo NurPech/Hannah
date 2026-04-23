@@ -20,7 +20,6 @@ REPO_TOKEN="${REPO_TOKEN:-}"
 INSTALL_DIR="/opt/hannah-voiceid"
 PROFILES_DIR="/opt/hannah-voiceid/voice_profiles"
 MEM_DIR="/opt/hannah-voiceid/mem"          # Embedding-Cache (kein RAM-Disk auf macOS nötig)
-MEM_SYMLINK="/mnt/hannah_mem"              # app.py erwartet diesen Pfad
 SERVICE_NAME="com.hannah.voiceid"
 PLIST="/Library/LaunchDaemons/${SERVICE_NAME}.plist"
 LOG="/var/log/hannah-voiceid.log"
@@ -48,7 +47,7 @@ uninstall() {
     rm -f "$PLIST"
     rm -f "$MEM_SYMLINK"
     rm -rf "$INSTALL_DIR"
-    ok "Deinstalliert. Stimm-Profile in ${PROFILES_DIR} wurden behalten (falls vorhanden)."
+    ok "Deinstalliert. Stimm-Profile in /opt/hannah-voiceid/voice_profiles wurden behalten (falls vorhanden)."
 }
 
 [[ "${1:-}" == "--uninstall" ]] && { uninstall; exit 0; }
@@ -82,15 +81,6 @@ mkdir -p "$PROFILES_DIR"
 mkdir -p "$MEM_DIR"
 ok "Verzeichnisse angelegt: ${PROFILES_DIR}, ${MEM_DIR}"
 
-# /mnt/hannah_mem → /opt/hannah-voiceid/mem (app.py erwartet diesen Pfad)
-mkdir -p /mnt
-if [[ ! -L "$MEM_SYMLINK" ]]; then
-    ln -s "$MEM_DIR" "$MEM_SYMLINK"
-    ok "Symlink angelegt: ${MEM_SYMLINK} → ${MEM_DIR}"
-else
-    info "Symlink ${MEM_SYMLINK} existiert bereits."
-fi
-
 # ── LaunchDaemon ──────────────────────────────────────────────────────────────
 cat > "$PLIST" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -110,6 +100,10 @@ cat > "$PLIST" << EOF
     <dict>
         <key>HOME</key>
         <string>/opt/hannah-voiceid</string>
+        <key>VOICEID_MEM_PATH</key>
+        <string>${MEM_DIR}</string>
+        <key>VOICEID_DISK_PATH</key>
+        <string>${PROFILES_DIR}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

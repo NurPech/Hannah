@@ -33,8 +33,8 @@ UNCERTAIN_THRESHOLD = float(_recog.get("uncertain_threshold", 0.40))
 
 # ── Pfade (Deployment-Konstanten, nicht per Config änderbar) ──────────────────
 
-MEM_PATH  = "/mnt/hannah_mem"
-DISK_PATH = os.path.expanduser("~/hannah/voice_profiles")
+MEM_PATH  = os.environ.get("VOICEID_MEM_PATH",  "/mnt/hannah_mem")
+DISK_PATH = os.environ.get("VOICEID_DISK_PATH", os.path.expanduser("~/hannah/voice_profiles"))
 os.makedirs(DISK_PATH, exist_ok=True)
 
 # ── Modell ────────────────────────────────────────────────────────────────────

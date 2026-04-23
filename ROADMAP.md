@@ -278,6 +278,15 @@ Ab ~500+ Einträgen: Chroma (reines Python-Package, kein separater Service) für
 semantische Suche statt blindem Injizieren aller letzten Einträge.
 S3-Storage (Synology NAS hat S3-kompatiblen Endpoint) als Backup-Ziel.
 
+#### Voice-ID: Kontinuierliches Enrollment im Betrieb
+Wenn der Proxy einen Sprecher mit hohem Confidence-Score erkennt (z.B. > 0.75),
+soll das Audio automatisch als weiteres Enrollment-Sample genutzt werden um das
+Stimmprofil über Zeit zu verfeinern — ohne manuellen Eingriff.
+Technisch: `Identify()` im Go-Client gibt zusätzlich den Score zurück;
+Proxy ruft `/enroll` auf wenn Score oberhalb eines konfigurierbaren Schwellwerts liegt.
+
+---
+
 #### Mustererkennung & autonomes Verhalten (History-Adapter)
 `history.1` — zweite History-Instanz in ioBroker exklusiv für Hannah:
 Residents-States (`lastAway`, `lastHome`, `lastNight`, `lastAwoken`) pro Person.
