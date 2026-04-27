@@ -1,0 +1,11 @@
+[Unit]
+Description=Hannah Auto-Deploy Timer (alle 5 Minuten)
+Requires=hannah-auto-deploy.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=hannah-auto-deploy.service
+
+[Install]
+WantedBy=timers.target

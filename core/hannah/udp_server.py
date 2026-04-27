@@ -264,7 +264,8 @@ class UDPServer:
                     self._send_control({"type": "heartbeat_ack", "device": device}, addr)
                     log.info(f"Heartbeat von '{device}' — ACK gesendet")
                 else:
-                    log.warning(f"Heartbeat von unbekanntem Satellit '{device}' {addr} — nicht registriert!")
+                    log.warning(f"Heartbeat von unbekanntem Satellit '{device}' {addr} — sende reregister")
+                    self._send_control({"type": "reregister"}, addr)
 
         else:
             log.debug(f"UDP Control unbekannt: type='{t}' von {addr}")

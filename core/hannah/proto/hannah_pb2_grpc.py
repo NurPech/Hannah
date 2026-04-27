@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from hannah.proto import hannah_pb2 as hannah__pb2
+from . import hannah_pb2 as hannah__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
@@ -112,6 +112,11 @@ class HannahServiceStub(object):
                 request_serializer=hannah__pb2.Empty.SerializeToString,
                 response_deserializer=hannah__pb2.CarStateResponse.FromString,
                 _registered_method=True)
+        self.GetAllCarStates = channel.unary_unary(
+                '/hannah.HannahService/GetAllCarStates',
+                request_serializer=hannah__pb2.Empty.SerializeToString,
+                response_deserializer=hannah__pb2.GetAllCarStatesResponse.FromString,
+                _registered_method=True)
         self.SubscribeEvents = channel.unary_stream(
                 '/hannah.HannahService/SubscribeEvents',
                 request_serializer=hannah__pb2.EventFilter.SerializeToString,
@@ -141,6 +146,11 @@ class HannahServiceStub(object):
                 '/hannah.HannahService/EnrollVoiceprint',
                 request_serializer=hannah__pb2.EnrollVoiceprintRequest.SerializeToString,
                 response_deserializer=hannah__pb2.StatusResponse.FromString,
+                _registered_method=True)
+        self.AgentConnect = channel.stream_stream(
+                '/hannah.HannahService/AgentConnect',
+                request_serializer=hannah__pb2.AgentMessage.SerializeToString,
+                response_deserializer=hannah__pb2.AgentCommand.FromString,
                 _registered_method=True)
 
 
@@ -249,6 +259,13 @@ class HannahServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetAllCarStates(self, request, context):
+        """Returns all tracked car states (one per configured car).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SubscribeEvents(self, request, context):
         """--- Event stream ---
         Opens a server-side stream; Hannah pushes events as they occur.
@@ -294,6 +311,17 @@ class HannahServiceServicer(object):
 
     def EnrollVoiceprint(self, request, context):
         """--- Speaker Enrollment ---
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AgentConnect(self, request_iterator, context):
+        """--- ioBroker Agent ---
+        Single bidirectional stream between the HannahAgent ioBroker adapter and Hannah Core.
+        The adapter pushes state updates (device states, presence, text commands);
+        Hannah pushes device-control commands and on-demand state-subscription requests back.
+        The adapter initiates the connection; if Hannah restarts, the adapter reconnects.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -367,6 +395,11 @@ def add_HannahServiceServicer_to_server(servicer, server):
                     request_deserializer=hannah__pb2.Empty.FromString,
                     response_serializer=hannah__pb2.CarStateResponse.SerializeToString,
             ),
+            'GetAllCarStates': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetAllCarStates,
+                    request_deserializer=hannah__pb2.Empty.FromString,
+                    response_serializer=hannah__pb2.GetAllCarStatesResponse.SerializeToString,
+            ),
             'SubscribeEvents': grpc.unary_stream_rpc_method_handler(
                     servicer.SubscribeEvents,
                     request_deserializer=hannah__pb2.EventFilter.FromString,
@@ -396,6 +429,11 @@ def add_HannahServiceServicer_to_server(servicer, server):
                     servicer.EnrollVoiceprint,
                     request_deserializer=hannah__pb2.EnrollVoiceprintRequest.FromString,
                     response_serializer=hannah__pb2.StatusResponse.SerializeToString,
+            ),
+            'AgentConnect': grpc.stream_stream_rpc_method_handler(
+                    servicer.AgentConnect,
+                    request_deserializer=hannah__pb2.AgentMessage.FromString,
+                    response_serializer=hannah__pb2.AgentCommand.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -773,6 +811,33 @@ class HannahService(object):
             _registered_method=True)
 
     @staticmethod
+    def GetAllCarStates(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/hannah.HannahService/GetAllCarStates',
+            hannah__pb2.Empty.SerializeToString,
+            hannah__pb2.GetAllCarStatesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def SubscribeEvents(request,
             target,
             options=(),
@@ -924,6 +989,33 @@ class HannahService(object):
             '/hannah.HannahService/EnrollVoiceprint',
             hannah__pb2.EnrollVoiceprintRequest.SerializeToString,
             hannah__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AgentConnect(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/hannah.HannahService/AgentConnect',
+            hannah__pb2.AgentMessage.SerializeToString,
+            hannah__pb2.AgentCommand.FromString,
             options,
             channel_credentials,
             insecure,

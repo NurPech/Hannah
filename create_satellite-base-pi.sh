@@ -17,6 +17,7 @@ SSH_PUBLIC_KEY=""        # Eigenen SSH Public Key eintragen, z.B. "ssh-ed25519 A
 WIFI_SSID=""             # WLAN-SSID eintragen
 WIFI_COUNTRY="DE"
 WIFI_PASS=""
+HARDWARE_TYPE="respeaker-2mic"   # Unterstützte Typen: "respeaker-2mic", "none"
 
 echo "🚀 Starte Base-Image Build..."
 
@@ -31,7 +32,7 @@ if [[ -z "$WIFI_PASS" ]]; then
 fi
 
 # 0. Voraussetzungen & Aufräumen
-sudo apt-get update && sudo apt-get install -y util-linux parted arch-install-scripts qemu-user-static
+sudo apt-get update && sudo apt-get install -y util-linux parted arch-install-scripts qemu-user-static binfmt-support
 
 echo "🧹 Räume alte Mounts und Loops auf..."
 sudo umount -R "$MOUNT_POINT/root/.cache" 2>/dev/null || true
@@ -110,6 +111,23 @@ sudo chown -R root:root "$MOUNT_POINT/root/.cache"
 # 6. SSH & Daten vorbereiten
 echo "✅ Aktiviere SSH..."
 sudo touch "$BOOT_DIR/ssh"
+
+# Pi-User vorkonfigurieren (RPi OS Trixie: userconf.txt statt firstrun-Wizard)
+echo "👤 Konfiguriere pi-User via userconf.txt..."
+HASHED_PW=$(echo "raspberry" | openssl passwd -6 -stdin)
+echo "pi:${HASHED_PW}" | sudo tee "$BOOT_DIR/userconf.txt" > /dev/null
+echo "    → userconf.txt geschrieben (pi / raspberry)."
+
+# SSH-Key außerhalb des Chroot schreiben — im <<'EOF'>-Heredoc werden Variablen nicht expandiert
+if [[ -n "$SSH_PUBLIC_KEY" ]]; then
+    echo "🔑 Schreibe SSH-Key..."
+    sudo mkdir -p "$MOUNT_POINT/home/pi/.ssh"
+    echo "$SSH_PUBLIC_KEY" | sudo tee "$MOUNT_POINT/home/pi/.ssh/authorized_keys" > /dev/null
+    sudo chmod 700 "$MOUNT_POINT/home/pi/.ssh"
+    sudo chmod 600 "$MOUNT_POINT/home/pi/.ssh/authorized_keys"
+    sudo chown -R 1000:1000 "$MOUNT_POINT/home/pi/.ssh"
+    echo "    → SSH-Key hinterlegt."
+fi
 
 # --- WLAN konfigurieren (NetworkManager, Debian 13 Trixie) ---
 echo "📶 Konfiguriere WLAN ($WIFI_SSID, $WIFI_COUNTRY)..."
@@ -212,6 +230,18 @@ fi
 
 # 7. Chroot-Konfiguration
 echo "🛠️ Starte Konfiguration im Chroot..."
+
+# binfmt_misc für ARM64 sicherstellen.
+# In WSL2 ohne systemd wirkt update-binfmts nicht auf den laufenden Kernel →
+# direkt in /proc/sys/fs/binfmt_misc/register schreiben + Binary ins Chroot kopieren.
+if [[ ! -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
+    echo "    → binfmt qemu-aarch64 nicht aktiv, registriere direkt..."
+    echo ':qemu-aarch64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-aarch64-static:' \
+        | sudo tee /proc/sys/fs/binfmt_misc/register > /dev/null 2>&1 || true
+fi
+# Binary ins Chroot kopieren — nötig wenn binfmt ohne F-Flag registriert ist (WSL2-Standard)
+sudo cp /usr/bin/qemu-aarch64-static "$MOUNT_POINT/usr/bin/qemu-aarch64-static"
+
 # WICHTIG: <<'EOF' verhindert, dass Variablen lokal interpretiert werden
 sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'EOF'
     set -e
@@ -224,13 +254,6 @@ sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'EOF'
     echo "pi:raspberry" | chpasswd
     usermod -U pi
     chage -d -1 pi
-
-    # SSH Key Setup
-    mkdir -p /home/pi/.ssh
-    echo "$SSH_PUBLIC_KEY" > /home/pi/.ssh/authorized_keys
-    chown -R pi:pi /home/pi/.ssh
-    chmod 700 /home/pi/.ssh
-    chmod 600 /home/pi/.ssh/authorized_keys
 
     # Software-Installation
     apt-get update
@@ -257,6 +280,96 @@ sudo arch-chroot "$MOUNT_POINT" /bin/bash <<'EOF'
     chown -R pi:pi /home/pi/
     echo "✅ Base-Image Setup abgeschlossen — kein Service installiert (folgt in Stage 2)."
 EOF
+
+# QEMU-Binary aus dem Image entfernen — gehört nicht ins fertige Image
+sudo rm -f "$MOUNT_POINT/usr/bin/qemu-aarch64-static"
+
+# 7b. ReSpeaker 2-Mic HAT — Firstboot-Vorbereitung
+if [[ "$HARDWARE_TYPE" == "respeaker-2mic" ]]; then
+    echo "🎤 ReSpeaker 2-Mic HAT: Vorbereitung..."
+
+    # seeed-voicecard Treiber-Source direkt ins Image klonen (kein Chroot nötig)
+    echo "    Klone seeed-voicecard → $MOUNT_POINT/opt/seeed-voicecard ..."
+    sudo mkdir -p "$MOUNT_POINT/opt"
+    if [[ -d "$MOUNT_POINT/opt/seeed-voicecard" ]]; then
+        echo "    → Bereits vorhanden, überspringe Clone."
+    else
+        sudo git clone --depth=1 https://github.com/HinTak/seeed-voicecard \
+            "$MOUNT_POINT/opt/seeed-voicecard"
+    fi
+
+    # Firstboot-Script (läuft einmalig beim ersten echten Pi-Boot)
+    sudo tee "$MOUNT_POINT/usr/local/bin/hannah-firstboot.sh" > /dev/null <<'FBEOF'
+#!/bin/bash
+# Hannah Firstboot — ReSpeaker 2-Mic HAT Treiber-Installation
+# Läuft einmalig beim ersten Boot; baut DKMS-Modul und startet dann neu.
+set -e
+LOG="/var/log/hannah-firstboot.log"
+exec > >(tee -a "$LOG") 2>&1
+
+echo "[$(date)] Hannah Firstboot: ReSpeaker 2-Mic HAT Treiber..."
+
+# Systemzeit synchronisieren — RPi hat keine RTC-Batterie, bootet mit altem Datum
+# Ohne korrektes Datum lehnt sqv/GPG alle Paketsignaturen ab
+echo "[$(date)] Synchronisiere Systemzeit..."
+systemctl start systemd-timesyncd 2>/dev/null || true
+for i in $(seq 1 30); do
+    timedatectl status 2>/dev/null | grep -q "synchronized: yes" && break
+    sleep 2
+done
+echo "[$(date)] Systemzeit: $(date)"
+
+# Kernel-Header müssen zur laufenden Kernel-Version passen → daher hier, nicht im Image-Build
+apt-get update -q
+apt-get install -y dkms linux-headers-$(uname -r)
+
+# seeed-voicecard: Kernel-6.12-Kompatibilitätspatch
+# snd_soc_pcm_runtime->id wurde in 6.x entfernt → rtd->dai_link->id
+sed -i 's/rtd->id/rtd->dai_link->id/g' /opt/seeed-voicecard/seeed-voicecard.c
+
+# DKMS-Modul bauen + dtoverlay in config.txt + asound.conf
+cd /opt/seeed-voicecard
+./install.sh
+
+# Fertig — Service deaktivieren, dann neu starten
+touch /var/lib/hannah-firstboot-done
+systemctl disable hannah-firstboot.service
+
+echo "[$(date)] Treiber installiert. Neustart in 5 Sekunden..."
+sleep 5
+reboot
+FBEOF
+    sudo chmod +x "$MOUNT_POINT/usr/local/bin/hannah-firstboot.sh"
+
+    # Firstboot-Systemd-Service
+    sudo tee "$MOUNT_POINT/etc/systemd/system/hannah-firstboot.service" > /dev/null <<'SVCEOF'
+[Unit]
+Description=Hannah Firstboot: ReSpeaker 2-Mic HAT Treiber
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/hannah-firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/hannah-firstboot.sh
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+    # Service aktivieren (Symlink statt systemctl — kein laufendes systemd im Image)
+    sudo mkdir -p "$MOUNT_POINT/etc/systemd/system/multi-user.target.wants"
+    sudo ln -sf /etc/systemd/system/hannah-firstboot.service \
+        "$MOUNT_POINT/etc/systemd/system/multi-user.target.wants/hannah-firstboot.service"
+
+    # Onboard-Audio deaktivieren — verhindert Konflikte mit dem ReSpeaker WM8960
+    if ! grep -q "dtparam=audio=off" "$BOOT_DIR/config.txt" 2>/dev/null; then
+        echo "dtparam=audio=off" | sudo tee -a "$BOOT_DIR/config.txt" > /dev/null
+    fi
+
+    echo "    → Firstboot-Service aktiviert, Onboard-Audio deaktiviert."
+fi
 
 # 8. Aufräumen
 echo "🧼 Räume auf..."

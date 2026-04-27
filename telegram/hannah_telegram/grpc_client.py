@@ -249,24 +249,34 @@ class HannahClient:
     async def subscribe_events(
         self,
         event_types: list[str],
-        on_event,   # Callable[[hannah_pb2.HannahEvent], Awaitable[None]]
+        on_event,                  # Callable[[HannahEvent], Awaitable[None]]
+        on_connected=None,         # Callable[[], Awaitable[None]] | None
+        on_disconnected=None,      # Callable[[], Awaitable[None]] | None
     ) -> None:
         """
         Streams events from Hannah. Reconnects automatically on error.
         Runs until the task is cancelled.
 
-        on_event: async callback called for each received event.
-        event_types: list of event type strings to filter, e.g. ["car.parked"].
-                     Empty list = all events.
+        on_event:        async callback called for each received event.
+        on_connected:    async callback when stream is (re-)established.
+        on_disconnected: async callback when stream is lost (before reconnect).
+        event_types:     list of event type strings to filter; empty = all.
         """
         import asyncio
         assert self._stub, "call connect() first"
+        first_connect = True
         while True:
             try:
                 log.info("Subscribing to Hannah events (filter=%s)", event_types or "all")
                 stream = self._stub.SubscribeEvents(
                     hannah_pb2.EventFilter(event_types=event_types)
                 )
+                if on_connected:
+                    try:
+                        await on_connected(first_connect)
+                    except Exception as exc:
+                        log.error("on_connected callback error: %s", exc)
+                first_connect = False
                 async for event in stream:
                     try:
                         await on_event(event)
@@ -274,6 +284,11 @@ class HannahClient:
                         log.error("on_event callback error: %s", exc)
             except grpc.aio.AioRpcError as exc:
                 log.warning("Event stream disconnected: %s – reconnecting in 5s", exc)
+                if on_disconnected:
+                    try:
+                        await on_disconnected()
+                    except Exception as exc:
+                        log.error("on_disconnected callback error: %s", exc)
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 log.info("Event stream subscription cancelled.")

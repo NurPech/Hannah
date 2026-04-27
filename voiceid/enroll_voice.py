@@ -8,7 +8,7 @@ import time
 # --- KONFIGURATION ---
 SAMPLERATE = 16000
 DURATION = 10  # 10 Sekunden sind ideal für ein stabiles Stimmprofil
-PI_URL = "http://192.168.8.15:8080/enroll"  # IP deines Pi 5 einsetzen
+PI_URL = "http://192.168.8.2:8080/enroll"  # IP deines Pi 5 einsetzen
 ROOMIE_ID = "leonie"  # Dein Name für die Stimm-ID
 
 # Ein Text, der viele verschiedene Laute abdeckt

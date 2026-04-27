@@ -261,6 +261,8 @@ class Satellite:
         self._heartbeat_failures = 0              # Zähler: fehlgeschlagene Heartbeats
         self._backoff_level = 0                   # Zähler für Backoff-Stufe
         self._heartbeat_thread: Optional[threading.Thread] = None
+        # Wenn gesetzt: TTS-Receiver verwirft alle eingehenden Chunks (alte Session)
+        self._tts_discard = threading.Event()
 
         # LED-Steuerung (optional, nur wenn led_pin > 0 und RPi.GPIO verfügbar)
         self._gpio = None
@@ -438,12 +440,12 @@ class Satellite:
                 if not self._running:
                     break
 
-                # Sende Heartbeat
+                # clear VOR send — sonst race condition: ACK kommt auf LAN in <1ms
+                # zurück, setzt das Event, dann erst clear() → ACK geht verloren
+                self._heartbeat_ack_received.clear()
                 self._send_control({"type": "heartbeat", "device": self.cfg.device_name})
                 log.debug("Heartbeat gesendet")
 
-                # Warte auf ACK
-                self._heartbeat_ack_received.clear()
                 if self._heartbeat_ack_received.wait(timeout=self.cfg.max_heartbeat_wait):
                     self._heartbeat_failures = 0
                     log.debug("Heartbeat-ACK OK")
@@ -508,7 +510,10 @@ class Satellite:
             payload  = data[1:]
 
             if msg_type == TYPE_TTS and payload:
-                tts_chunks.append(payload)
+                if self._tts_discard.is_set():
+                    tts_chunks.clear()  # alte Session — verwerfen
+                else:
+                    tts_chunks.append(payload)
             elif msg_type == TYPE_CONTROL:
                 try:
                     msg = json.loads(payload.decode("utf-8"))
@@ -517,6 +522,9 @@ class Satellite:
                     if msg_t == "heartbeat_ack":
                         log.debug("Heartbeat-ACK empfangen")
                         self._heartbeat_ack_received.set()
+                    elif msg_t == "reregister":
+                        log.warning("Core fordert Re-Registrierung (nach Neustart?)")
+                        threading.Thread(target=self._reregister, daemon=True, name="reregister").start()
                     elif msg_t == "registered":
                         ok = msg.get("ok", False)
                         if ok:
@@ -738,8 +746,10 @@ class Satellite:
                     if best_score >= self.cfg.wakeword_score:
                         log.info(f"Wake-Word erkannt: {best} ({best_score:.3f})")
                         self._oww.reset()
-                        self._set_led(True)   # sofortiges visuelles Feedback, kein MQTT-Roundtrip
+                        self._tts_discard.set()   # alte TTS-Chunks verwerfen
+                        self._set_led(True)
                         self._play_pling()
+                        self._tts_discard.clear() # neue Session beginnt
                         self._record_and_stream(stream, pre_buffer=list(pre_buffer))
                         pre_buffer.clear()
                         log.info("Aufnahme beendet. Lausche wieder auf Wake-Word ...")

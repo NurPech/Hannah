@@ -204,6 +204,10 @@ static void udp_receive_task(void *arg)
 
             } else if (strcmp(jtype->valuestring, "heartbeat_ack") == 0) {
                 ESP_LOGD(TAG, "Heartbeat ACK empfangen.");
+
+            } else if (strcmp(jtype->valuestring, "reregister") == 0) {
+                ESP_LOGW(TAG, "Core fordert Re-Registrierung (nach Neustart?)");
+                send_register();
             }
 
             cJSON_Delete(root);

@@ -209,12 +209,12 @@ class HannahBot:
                 log.warning("Car parked: owner roomie %r not found – nobody to notify", owner_roomie)
                 return
             telegram_id = user.linked_accounts.get("telegram")
-            chat_ids = [telegram_id] if telegram_id else []
+            chat_ids = [telegram_id] if telegram_id and self._is_private_chat(telegram_id) else []
             if not chat_ids:
                 log.warning("Car parked: owner %r has no linked Telegram account", owner_roomie)
                 return
         else:
-            chat_ids = await self._hannah.get_all_telegram_chat_ids()
+            chat_ids = [c for c in await self._hannah.get_all_telegram_chat_ids() if self._is_private_chat(c)]
             if not chat_ids:
                 log.warning("Car parked but no Telegram users linked – nobody to notify")
                 return
@@ -230,7 +230,7 @@ class HannahBot:
         """Send a system notification to all users with system_messages=True."""
         if self._app is None:
             return
-        chat_ids = await self._hannah.get_system_message_telegram_ids()
+        chat_ids = [c for c in await self._hannah.get_system_message_telegram_ids() if self._is_private_chat(c)]
         log.info("system.notification: %d Empfänger mit system_messages=True", len(chat_ids))
         if not chat_ids:
             return
@@ -240,6 +240,30 @@ class HannahBot:
                 log.info("system.notification: gesendet an chat_id=%s", cid)
             except Exception as exc:
                 log.error("system.notification: Senden an chat_id=%s fehlgeschlagen: %s", cid, exc)
+
+    async def send_status_update(self, text: str) -> None:
+        """Send a connection status message to all users with system_messages=True."""
+        if self._app is None:
+            return
+        chat_ids = [c for c in await self._hannah.get_system_message_telegram_ids() if self._is_private_chat(c)]
+        if not chat_ids:
+            return
+        for cid in chat_ids:
+            try:
+                await self._app.bot.send_message(chat_id=cid, text=text)
+            except Exception as exc:
+                log.error("status update: Senden an chat_id=%s fehlgeschlagen: %s", cid, exc)
+
+    # ------------------------------------------------------------------
+    # Helpers
+
+    @staticmethod
+    def _is_private_chat(chat_id: str) -> bool:
+        """Persönliche Chats haben positive IDs, Gruppen negative."""
+        try:
+            return int(chat_id) > 0
+        except (ValueError, TypeError):
+            return False
 
     # ------------------------------------------------------------------
     # Auth helpers
@@ -272,6 +296,11 @@ class HannahBot:
 
     async def _cmd_link(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
+        if not self._is_private_chat(chat_id):
+            await update.message.reply_text(
+                "Verknüpfungen bitte im privaten Chat mit mir vornehmen, nicht in Gruppen."
+            )
+            return
         args = ctx.args or []
         if not args:
             await update.message.reply_text("Bitte gib deine Roomie-ID an:\n  /verknuepfen <roomie-id>")
@@ -292,18 +321,42 @@ class HannahBot:
         else:
             await update.message.reply_text(f"Verknüpfung fehlgeschlagen: {msg}")
 
-    async def _cmd_auto(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _cmd_auto(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
         if not await self._is_known_user(chat_id):
             await update.message.reply_text(_UNKNOWN_USER)
             return
 
+        debug = bool(ctx.args and ctx.args[0].lower() == "debug")
         states = await self._hannah.get_all_car_states()
         if not states:
             await update.message.reply_text("Ich habe noch keine Auto-Daten empfangen.")
             return
 
         for state in states:
+            if debug:
+                home_prefix = state.home_address[:20] if state.home_address else "(nicht gesetzt)"
+                addr_match = bool(state.home_address and state.address and state.address.startswith(state.home_address[:20]))
+                ts = ""
+                if state.position_date:
+                    from datetime import datetime
+                    ts_val = state.position_date / 1000 if state.position_date > 1e10 else state.position_date
+                    ts = datetime.fromtimestamp(ts_val).strftime("%d.%m.%y %H:%M:%S")
+                debug_text = (
+                    f"🔍 Auto-Debug\n"
+                    f"is_moving: {state.is_moving}\n"
+                    f"lat/lon: {state.latitude} / {state.longitude}\n"
+                    f"address: {state.address or '(leer)'}\n"
+                    f"home_address: {state.home_address or '(nicht gesetzt)'}\n"
+                    f"home_prefix ([:20]): {home_prefix}\n"
+                    f"→ startswith match: {addr_match}\n"
+                    f"is_car_locked: {state.is_car_locked}\n"
+                    f"door_lock_status: {state.door_lock_status or '(leer)'}\n"
+                    f"position_date: {ts or '(leer)'}"
+                )
+                await update.message.reply_text(debug_text)
+                continue
+
             answer = _car_proto_to_message(state)
             buttons = [[
                 InlineKeyboardButton("🔄 Aktualisieren", callback_data="refresh:car"),

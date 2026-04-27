@@ -34,6 +34,7 @@ from hannah.llm import load as load_llm, prepare_prompt
 from hannah.memory import LongTermMemory
 from hannah.user_registry import UserRegistry
 from hannah.weather import WeatherCache
+from hannah.trigger_engine import TriggerEngine
 
 
 def setup_logging(level: str):
@@ -536,16 +537,25 @@ def main():
             mqtt_handler.publish_satellite_online(device, False)
         _known_satellites = current
         mqtt_handler.publish_rooms(satellite_map)
-    iobroker.set_publisher(mqtt_handler.publish_raw)
-    mqtt_handler.set_state_subscriber(
-        iobroker.state_topic_prefix, iobroker.handle_state_update
+    trigger_engine = TriggerEngine(
+        path=cfg.get("triggers_file", "triggers.yaml"),
+        announce_fn=process_announcement,
     )
-    log.info(f"State-Cache abonniert: {iobroker.state_topic_prefix}/#")
-    mqtt_handler.set_weather_handler(weather.topic_prefix, weather.update)
-    log.info(f"Wetter-Cache abonniert: {weather.topic_prefix}/#")
-    for _ct in car_manager:
-        mqtt_handler.add_car_handler(_ct.topic_prefix, _ct.update)
-        log.info(f"Auto-Status abonniert: {_ct.topic_prefix}/#")
+
+    def _on_state_update(state_id: str, raw: str) -> None:
+        iobroker.handle_state_update(state_id, raw)
+        trigger_engine.on_state_update(state_id, raw)
+
+    def _json_to_raw(json_value: str) -> str:
+        """Decode a JSON-encoded gRPC state value to a plain string for legacy handlers."""
+        import json as _json
+        try:
+            parsed = _json.loads(json_value)
+            if isinstance(parsed, bool):
+                return "true" if parsed else "false"
+            return str(parsed)
+        except (ValueError, TypeError):
+            return json_value
 
     # ------------------------------------------------------------------
     # Voice-Pipeline für gRPC: OGG/Opus → STT → NLU → TTS → OGG/Opus
@@ -662,6 +672,37 @@ def main():
             log.info("Discovery: eigene Hannah-Adresse wiederherstellen")
             mqtt_handler.publish_discovery(udp_host=_own_advertise_host, udp_port=_own_udp_port, topic=_discovery_topic)
 
+    # ── ioBroker-Adapter gRPC-Callbacks ──────────────────────────────────────
+
+    def _on_agent_state(state_id: str, value: str, *_):
+        _on_state_update(state_id, value)
+        # Route to handlers that expect slash-notation topics and plain string values
+        topic = state_id.replace(".", "/")
+        raw = _json_to_raw(value)
+        if topic.startswith(weather.topic_prefix):
+            weather.update(topic, raw)
+        for _ct in car_manager:
+            if topic.startswith(_ct.topic_prefix):
+                _ct.update(topic, raw)
+
+    def _on_agent_resident(roomie_id: str, presence_state: int, is_guest: bool):
+        # Residents-Update via gRPC in bestehendes Update-System einleiten.
+        # residents ist per late-binding sichtbar (wird kurz nach grpc_servicer gesetzt).
+        if is_guest:
+            topic = f"{residents.guest_topic_prefix}/{roomie_id}/{residents._state_key}"
+        else:
+            topic = f"{residents.topic_prefix_read}/{roomie_id}/{residents._state_key}"
+        residents.update(topic, str(presence_state))
+
+    def _on_agent_text_command(text: str):
+        process_text_command(text)
+
+    def _on_agent_connect():
+        state_ids = trigger_engine.get_referenced_state_ids()
+        if state_ids:
+            log.info(f"[grpc] ioBroker-Adapter connected — WatchMore: {len(state_ids)} trigger states")
+            grpc_servicer.agent_watch_more(list(state_ids))
+
     # gRPC-Servicer wird hier erstellt damit _on_arrival/_on_departure Events pushen können.
     # get_satellites und get_car_state sind Lambdas (late binding) — udp_server ist
     # zum Zeitpunkt des Aufrufs bereits gesetzt.
@@ -683,14 +724,20 @@ def main():
         on_satellite_change=_on_satellite_change,
         get_devices=lambda: iobroker.get_devices_snapshot(),
         control_device=lambda device_id, state, value: iobroker.control_direct(device_id, state, value),
+        on_agent_state=_on_agent_state,
+        on_agent_resident=_on_agent_resident,
+        on_agent_text_command=_on_agent_text_command,
+        on_agent_connect=_on_agent_connect,
     )
+
+    iobroker.set_setter(grpc_servicer.agent_set_state)
 
     # ------------------------------------------------------------------
     # Residents + Callbacks (referenzieren grpc_servicer für Event-Push)
+    # Presence-Updates kommen via gRPC (_on_agent_resident); MQTT wird nur noch
+    # für das Zurückschreiben von Presence-States in den Residents-Adapter genutzt.
 
     residents = ResidentsClient(cfg.get("residents", {}), mqtt_handler.publish_raw)
-    mqtt_handler.set_residents_handler(residents.topic_prefix_read, residents.update)
-    log.info(f"Residents abonniert: {residents.topic_prefix_read}/#")
 
     def _on_arrival(name: str):
         process_announcement("all", "Willkommen zuhause!")
@@ -704,8 +751,18 @@ def main():
         display = user["display_name"] if user else name
         grpc_servicer.publish_event(make_resident_event(name, display, "departed"))
 
+    def _on_guest_arrival(name: str):
+        process_announcement("all", "Es ist Besuch angekommen!")
+        grpc_servicer.publish_event(make_resident_event(f"guest:{name}", name, "arrived"))
+
+    def _on_guest_departure(name: str):
+        log.info(f"Residents: Gast '{name}' ist gegangen.")
+        grpc_servicer.publish_event(make_resident_event(f"guest:{name}", name, "departed"))
+
     residents.on_arrival(_on_arrival)
     residents.on_departure(_on_departure)
+    residents.on_guest_arrival(_on_guest_arrival)
+    residents.on_guest_departure(_on_guest_departure)
 
     # Auto-Einpark-Event → gRPC-Stream (pro Tracker, damit home_address bekannt ist)
     for _ct in car_manager:
@@ -723,7 +780,22 @@ def main():
         Empfängt rohen Notification-Text aus ioBroker, formuliert ihn per LLM um,
         spielt ihn auf DND-freien Satelliten ab und pusht ihn per gRPC an Telegram-Nutzer
         mit system_messages=True.
+
+        severity="direct": LLM wird übersprungen, Text wird unverändert weitergeleitet.
         """
+        # Direct-Modus: kein LLM, aber TTS + Telegram wie normale Notification
+        if severity == "direct":
+            log.info(f"Direct-Notification: {raw_text!r}")
+            if tts.enabled:
+                result = tts.synthesize(raw_text)
+                if result:
+                    pcm, rate = result
+                    for target in _resolve_targets("all"):
+                        if not _device_dnd.get(target):
+                            _send_audio(target, pcm, rate)
+            grpc_servicer.publish_event(make_system_notification_event(raw_text))
+            return
+
         # LLM-Reformulierung (optional — wenn kein LLM verfügbar: rohen Text nutzen)
         text = raw_text
         if llm is not None:

@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from hannah_telegram.proto import hannah_pb2 as hannah__pb2
+from . import hannah_pb2 as hannah__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
@@ -111,6 +111,11 @@ class HannahServiceStub(object):
                 '/hannah.HannahService/GetCarState',
                 request_serializer=hannah__pb2.Empty.SerializeToString,
                 response_deserializer=hannah__pb2.CarStateResponse.FromString,
+                _registered_method=True)
+        self.GetAllCarStates = channel.unary_unary(
+                '/hannah.HannahService/GetAllCarStates',
+                request_serializer=hannah__pb2.Empty.SerializeToString,
+                response_deserializer=hannah__pb2.GetAllCarStatesResponse.FromString,
                 _registered_method=True)
         self.SubscribeEvents = channel.unary_stream(
                 '/hannah.HannahService/SubscribeEvents',
@@ -249,6 +254,13 @@ class HannahServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetAllCarStates(self, request, context):
+        """Returns all tracked car states (one per configured car).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SubscribeEvents(self, request, context):
         """--- Event stream ---
         Opens a server-side stream; Hannah pushes events as they occur.
@@ -366,6 +378,11 @@ def add_HannahServiceServicer_to_server(servicer, server):
                     servicer.GetCarState,
                     request_deserializer=hannah__pb2.Empty.FromString,
                     response_serializer=hannah__pb2.CarStateResponse.SerializeToString,
+            ),
+            'GetAllCarStates': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetAllCarStates,
+                    request_deserializer=hannah__pb2.Empty.FromString,
+                    response_serializer=hannah__pb2.GetAllCarStatesResponse.SerializeToString,
             ),
             'SubscribeEvents': grpc.unary_stream_rpc_method_handler(
                     servicer.SubscribeEvents,
@@ -762,6 +779,33 @@ class HannahService(object):
             '/hannah.HannahService/GetCarState',
             hannah__pb2.Empty.SerializeToString,
             hannah__pb2.CarStateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetAllCarStates(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/hannah.HannahService/GetAllCarStates',
+            hannah__pb2.Empty.SerializeToString,
+            hannah__pb2.GetAllCarStatesResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -59,8 +59,22 @@ async def main(config_path: str) -> None:
             log.info("system.notification event received – notifying recipients")
             await bot.send_system_notification(event.system_notification.text)
 
+    async def on_connected(first_connect: bool) -> None:
+        text = "Hannah ist bereit ✅" if first_connect else "Hannah Core Verbindung wiederhergestellt ✅"
+        log.info("gRPC event stream connected (first=%s)", first_connect)
+        await bot.send_status_update(text)
+
+    async def on_disconnected() -> None:
+        log.warning("gRPC event stream disconnected")
+        await bot.send_status_update("⚠️ Verbindung zu Hannah Core unterbrochen")
+
     event_task = asyncio.create_task(
-        hannah.subscribe_events(["car.parked", "system.notification"], on_event),
+        hannah.subscribe_events(
+            ["car.parked", "system.notification"],
+            on_event,
+            on_connected=on_connected,
+            on_disconnected=on_disconnected,
+        ),
         name="event_stream",
     )
 

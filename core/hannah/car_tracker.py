@@ -218,6 +218,7 @@ class CarTracker:
                 new_moving = _bool(value)
                 if self._prev_moving is True and new_moving is False:
                     log.info("Auto eingeparkt — on_parked-Callback wird aufgerufen")
+                    s.is_moving = new_moving  # Snapshot mit aktuellem Wert
                     snapshot = CarState(**{
                         k: (dict(v) if isinstance(v, dict) else v)
                         for k, v in s.__dict__.items()

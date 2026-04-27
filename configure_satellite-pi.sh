@@ -100,14 +100,15 @@ StartLimitBurst=5
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/hannah-satellite-pi
-ExecStart=/home/pi/hannah-satellite-pi/venv/bin/python satelite.py \\
+ExecStart=/home/pi/hannah-satellite-pi/venv/bin/python satellite.py \\
   --device ${DEVICE} \\
   --room ${ROOM} \\
   --broker ${BROKER} \\
   --mqtt-user ${MQTT_USER} \\
   --mqtt-pass ${MQTT_PASS} \\
   --wakeword-model ${WAKEWORD_MODEL} \\
-  --wakeword-score ${WAKEWORD_SCORE}
+  --wakeword-score ${WAKEWORD_SCORE} \\
+  --tts-rate 48000
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal

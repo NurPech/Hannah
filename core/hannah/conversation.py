@@ -86,14 +86,18 @@ class ConversationContext:
             ctx = self._ctxs.get(source)
             if not ctx or not self._valid(ctx):
                 return
+            user_specified_room = intent.room_id is not None
             if intent.room_id is None and ctx.room_id:
                 intent.room = ctx.room
                 intent.room_id = ctx.room_id
                 log.debug(f"[{source}] Kontext: Raum '{ctx.room}' ergänzt")
             if intent.device is None and ctx.device_id:
-                intent.device = ctx.device
-                intent.device_id = ctx.device_id
-                log.debug(f"[{source}] Kontext: Gerät '{ctx.device}' ergänzt")
+                # Kein Gerät erben wenn der User explizit einen Raum genannt hat —
+                # er meint dann den ganzen Raum, nicht ein spezifisches Gerät aus dem Kontext.
+                if not user_specified_room:
+                    intent.device = ctx.device
+                    intent.device_id = ctx.device_id
+                    log.debug(f"[{source}] Kontext: Gerät '{ctx.device}' ergänzt")
             if intent.category_filter is None and ctx.category_filter:
                 intent.category_filter = ctx.category_filter
                 log.debug(f"[{source}] Kontext: Kategorie '{ctx.category_filter}' ergänzt")

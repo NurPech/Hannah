@@ -71,6 +71,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         control_device: Optional[Callable[[str, str, str], bool]] = None,  # (device_id, state, value) → bool
         enroll_voiceprint: Optional[Callable[[str, bytes, int], tuple]] = None,  # (roomie_id, pcm, rate) → (ok, msg)
         on_satellite_change: Optional[Callable[[dict], None]] = None,           # ({device: room}) bei Register/Disconnect via Proxy
+        on_agent_state: Optional[Callable[[str, str, bool, int], None]] = None,      # (state_id, value, ack, ts)
+        on_agent_resident: Optional[Callable[[str, int, bool], None]] = None,        # (roomie_id, presence_state, is_guest)
+        on_agent_text_command: Optional[Callable[[str], tuple[str, str]]] = None,    # (text) → (answer, intent)
+        on_agent_connect: Optional[Callable[[], None]] = None,                       # called on each new adapter connection
     ):
         self._registry              = registry
         self._handle_text           = handle_text
@@ -87,6 +91,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._control_device        = control_device or (lambda *_: False)
         self._enroll_voiceprint     = enroll_voiceprint
         self._on_satellite_change   = on_satellite_change
+        self._on_agent_state        = on_agent_state
+        self._on_agent_resident     = on_agent_resident
+        self._on_agent_text_command = on_agent_text_command
+        self._on_agent_connect      = on_agent_connect
 
         self._subscribers: list[_Subscriber] = []
         self._subs_lock = threading.Lock()
@@ -98,6 +106,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         # Per-connection command queues for active proxy streams
         self._proxy_queues: list[queue.Queue] = []
         self._proxy_lock = threading.Lock()
+
+        # Per-connection command queues for active agent streams
+        self._agent_queues: list[queue.Queue] = []
+        self._agent_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public: proxy helpers (called from main.py)
@@ -432,6 +444,85 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 target=self._on_satellite_change, args=(snapshot,), daemon=True
             ).start()
         return pb.StatusResponse(ok=True, message="gone")
+
+    # ------------------------------------------------------------------
+    # ioBroker Adapter
+
+    def agent_connected(self) -> bool:
+        """True if at least one adapter stream is active."""
+        with self._agent_lock:
+            return len(self._agent_queues) > 0
+
+    def agent_set_state(self, state_id: str, value: str) -> bool:
+        """Push SetState command to all connected adapters. Returns True if at least one is active."""
+        cmd = pb.AgentCommand(set_state=pb.AgentSetState(state_id=state_id, value=value))
+        with self._agent_lock:
+            for q in self._agent_queues:
+                q.put(cmd)
+            return len(self._agent_queues) > 0
+
+    def agent_watch_more(self, state_ids: list[str]) -> bool:
+        """Push WatchMore request to all connected adapters."""
+        cmd = pb.AgentCommand(watch_more=pb.AgentWatchMore(state_ids=state_ids))
+        with self._agent_lock:
+            for q in self._agent_queues:
+                q.put(cmd)
+            return len(self._agent_queues) > 0
+
+    def AgentConnect(self, request_iterator, context):
+        """
+        Bidirektionaler Stream: Adapter → State-Updates, Hannah → Geräte-Befehle.
+
+        Der Adapter sendet AgentMessage-Frames (state_update / resident_update /
+        text_command); Hannah antwortet mit AgentCommand-Frames (set_state /
+        watch_more). Beim Disconnect werden alle gepufferten Befehle verworfen.
+        """
+        q: queue.Queue = queue.Queue()
+        with self._agent_lock:
+            self._agent_queues.append(q)
+        log.info("[grpc] ioBroker-Adapter connected")
+
+        if self._on_agent_connect:
+            try:
+                self._on_agent_connect()
+            except Exception as e:
+                log.warning(f"[grpc] on_agent_connect Fehler: {e}")
+
+        def _drain():
+            try:
+                for msg in request_iterator:
+                    which = msg.WhichOneof("payload")
+                    if which == "state_update" and self._on_agent_state:
+                        u = msg.state_update
+                        self._on_agent_state(u.state_id, u.value, u.ack, u.ts)
+                    elif which == "resident_update" and self._on_agent_resident:
+                        r = msg.resident_update
+                        self._on_agent_resident(r.roomie_id, r.presence_state, r.is_guest)
+                    elif which == "text_command" and self._on_agent_text_command:
+                        self._on_agent_text_command(msg.text_command.text)
+            except Exception as e:
+                log.debug(f"[grpc] Adapter drain ended: {e}")
+            finally:
+                q.put(None)
+
+        drain_thread = threading.Thread(target=_drain, daemon=True, name="agent-drain")
+        drain_thread.start()
+
+        try:
+            while context.is_active():
+                try:
+                    cmd = q.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                if cmd is None:
+                    break
+                yield cmd
+        finally:
+            drain_thread.join(timeout=2)
+            with self._agent_lock:
+                if q in self._agent_queues:
+                    self._agent_queues.remove(q)
+            log.info("[grpc] ioBroker-Adapter disconnected")
 
     def EnrollVoiceprint(self, request, _context):
         if self._enroll_voiceprint is None:

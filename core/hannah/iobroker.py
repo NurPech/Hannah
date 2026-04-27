@@ -79,8 +79,8 @@ class IoBrokerClient:
         # {device_id: Device}
         self._devices_by_id: dict[str, Device] = {}
 
-        # Wird von main.py gesetzt: fn(topic, payload_str) → publiziert via MQTT
-        self._publish: Optional[Callable[[str, str], None]] = None
+        # Set by main.py: fn(state_id, json_value) → sends SetState via gRPC adapter
+        self._setter: Optional[Callable[[str, str], bool]] = None
 
         # Feedback-Callback: fn(device, success, text)
         # device = MQTT-Gerätename des Satelliten, success = bool, text = Antworttext
@@ -104,9 +104,9 @@ class IoBrokerClient:
         """MQTT-Topic-Prefix für State-Updates, z.B. 'javascript/0/virtualDevice'."""
         return self._prefix.replace(".", "/")
 
-    def set_publisher(self, fn: Callable[[str, str], None]):
-        """Registriert die MQTT-Publish-Funktion. Muss vor execute() aufgerufen werden."""
-        self._publish = fn
+    def set_setter(self, fn: Callable[[str, str], bool]):
+        """Register the gRPC state setter: fn(state_id, json_value) → True if adapter is connected."""
+        self._setter = fn
 
     def set_feedback_handler(self, fn: Callable[[str, bool, str], None], timeout: float = 3.0):
         """
@@ -273,25 +273,18 @@ class IoBrokerClient:
     # State setzen
 
     def set_state(self, state_id: str, value) -> bool:
-        """Setzt einen ioBroker-State via MQTT (hannah/set/...). Gibt True bei Erfolg zurück."""
-        if not self._publish:
-            log.error("set_state: kein Publisher registriert (set_publisher() nicht aufgerufen)")
+        """Send a SetState command to ioBroker via the gRPC adapter."""
+        if not self._setter:
+            log.error("set_state: no setter registered (call set_setter() first)")
             return False
-
-        topic = self._state_id_to_topic(state_id)
-        if isinstance(value, bool):
-            payload = "true" if value else "false"
-        elif isinstance(value, float) and value.is_integer():
-            payload = str(int(value))
-        else:
-            payload = str(value)
-
         try:
-            self._publish(topic, payload)
-            log.debug(f"MQTT {topic} = {payload!r}")
-            return True
+            import json
+            payload = json.dumps(value)
+            result = self._setter(state_id, payload)
+            log.debug(f"SetState {state_id} = {payload!r}")
+            return result
         except Exception as e:
-            log.error(f"set_state({state_id}, {value!r}) fehlgeschlagen: {e}")
+            log.error(f"set_state({state_id}, {value!r}) failed: {e}")
             return False
 
     def answer_query(self, intent: "Intent") -> Optional[str]:
@@ -789,22 +782,28 @@ class IoBrokerClient:
 
     def _warm_cache(self):
         """
-        Liest alle bekannten States einmalig via REST API und füllt den Cache.
-        Nötig für nicht-retained MQTT-Topics die erst nach einem State-Wechsel eintreffen.
+        Liest alle bekannten States in einer Bulk-Anfrage via REST API und füllt den Cache.
+        Nötig weil ioBroker MQTT-States nicht retained sind und erst nach Änderung eintreffen.
         """
         total = filled = 0
+        try:
+            all_states = self._get_states_by_filter(f"{self._prefix}*")
+        except Exception as e:
+            log.warning(f"Cache-Vorwärmung fehlgeschlagen (ioBroker nicht erreichbar?): {e}")
+            return
 
         for device in self._devices_by_id.values():
             for canon, state_id in device.states.items():
                 total += 1
-                try:
-                    val = self._get_state_value(state_id)
-                    if val is not None:
-                        device.current[canon] = val
-                        filled += 1
-                        log.debug(f"Cache warm: {device.name}.{canon} = {val!r}")
-                except Exception as e:
-                    log.debug(f"Cache warm fehlgeschlagen für {state_id}: {e}")
+                entry = all_states.get(state_id)
+                if not entry:
+                    continue
+                raw = entry.get("val")
+                if raw is None:
+                    continue
+                device.current[canon] = self._parse_payload(str(raw))
+                filled += 1
+                log.debug(f"Cache warm: {device.name}.{canon} = {device.current[canon]!r}")
 
         log.info(f"Cache-Vorwärmung: {filled}/{total} States geladen.")
 

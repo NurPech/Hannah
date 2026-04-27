@@ -48,7 +48,9 @@ service HannahService {
 
   // --- Car ---
   // Returns the current cached car state (available=false if no data received yet).
-  rpc GetCarState   (Empty)               returns (CarStateResponse);
+  rpc GetCarState      (Empty)            returns (CarStateResponse);
+  // Returns all tracked car states (one per configured car).
+  rpc GetAllCarStates  (Empty)            returns (GetAllCarStatesResponse);
 
   // --- Event stream ---
   // Opens a server-side stream; Hannah pushes events as they occur.
@@ -72,6 +74,13 @@ service HannahService {
 
   // --- Speaker Enrollment ---
   rpc EnrollVoiceprint    (EnrollVoiceprintRequest)            returns (StatusResponse);
+
+  // --- ioBroker Agent ---
+  // Single bidirectional stream between the HannahAgent ioBroker adapter and Hannah Core.
+  // The adapter pushes state updates (device states, presence, text commands);
+  // Hannah pushes device-control commands and on-demand state-subscription requests back.
+  // The adapter initiates the connection; if Hannah restarts, the adapter reconnects.
+  rpc AgentConnect (stream AgentMessage) returns (stream AgentCommand);
 }
 
 // ============================================================
@@ -202,6 +211,10 @@ message CarStateResponse {
   CarStateProto state    = 2;
 }
 
+message GetAllCarStatesResponse {
+  repeated CarStateProto states = 1;
+}
+
 message CarStateProto {
   // position
   float  latitude      = 1;
@@ -223,6 +236,12 @@ message CarStateProto {
 
   // Roomie-ID des Fahrzeughalters (leer = kein Owner-Filter)
   string owner_roomie = 13;
+
+  // Metadaten
+  string display_name = 14;  // z.B. "Leonies Golf"
+  string plate        = 15;  // Nummernschild
+  string vin          = 16;  // Fahrzeug-Identifikationsnummer
+  string home_address = 17;  // Heimadresse für "steht zu Hause"-Erkennung
 }
 
 // ============================================================
@@ -355,4 +374,62 @@ message EnrollVoiceprintRequest {
 message SatelliteRegistration {
   string device_id = 1;  // satellite device name, e.g. "sat-wohnzimmer"
   string room      = 2;  // room name as reported by satellite, e.g. "Wohnzimmer"
+}
+
+// ============================================================
+//  ioBroker Agent messages
+// ============================================================
+
+// Sent by the HannahAgent ioBroker adapter over the AgentConnect stream.
+message AgentMessage {
+  oneof payload {
+    AgentStateUpdate    state_update    = 1;  // any ioBroker state changed
+    AgentResidentUpdate resident_update = 2;  // residents adapter presence changed
+    AgentTextCommand    text_command    = 3;  // text command state changed
+  }
+}
+
+// An ioBroker state change event. ack=true means the device confirmed the value
+// (as opposed to ack=false which is the "desired" value). Hannah uses this to
+// verify that a SetState command was executed successfully.
+message AgentStateUpdate {
+  string state_id = 1;  // full ioBroker state ID, e.g. "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.DeckeSeite.on"
+  string value    = 2;  // JSON-encoded value: "true", "42", "\"text\""
+  bool   ack      = 3;  // true = confirmed by device
+  int64  ts       = 4;  // Unix timestamp in milliseconds
+}
+
+// A change from the ioBroker residents adapter.
+message AgentResidentUpdate {
+  string roomie_id      = 1;
+  int32  presence_state = 2;  // residents adapter presence value (0=absent, 1=home, …)
+  bool   is_guest       = 3;
+}
+
+// The text-command state in ioBroker changed — treat as a SubmitText call.
+message AgentTextCommand {
+  string text = 1;
+}
+
+// Sent by Hannah Core over the AgentConnect stream.
+message AgentCommand {
+  oneof command {
+    AgentSetState  set_state  = 1;  // Hannah wants to control an ioBroker device
+    AgentWatchMore watch_more = 2;  // Hannah needs additional states streamed
+  }
+}
+
+// Hannah instructs the adapter to set an ioBroker state.
+// The adapter calls setForeignState(); the resulting ack=true AgentStateUpdate
+// confirms execution back to Hannah.
+message AgentSetState {
+  string state_id = 1;  // ioBroker state ID to write
+  string value    = 2;  // JSON-encoded value
+}
+
+// Hannah requests additional state IDs to be included in the AgentStateUpdate stream.
+// Used by the trigger engine at runtime when triggers reference arbitrary state IDs
+// (e.g. unless.state: "0_userdata.0.feeded") that aren't covered by enum discovery.
+message AgentWatchMore {
+  repeated string state_ids = 1;
 }

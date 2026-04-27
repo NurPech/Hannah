@@ -177,17 +177,25 @@ class UserRegistry:
     def get_by_roomie(self, roomie_id: str) -> Optional[dict]:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM users WHERE roomie_id = ? AND active = 1", (roomie_id,)
-            ).fetchone()
+            row = conn.execute("""
+                SELECT u.*, GROUP_CONCAT(la.service || ':' || la.account_id) AS linked_accounts
+                FROM users u
+                LEFT JOIN linked_accounts la ON la.user_uuid = u.uuid
+                WHERE u.roomie_id = ? AND u.active = 1
+                GROUP BY u.uuid
+            """, (roomie_id,)).fetchone()
         return _row_to_dict(row) if row else None
 
     def get_by_uuid(self, user_uuid: str) -> Optional[dict]:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM users WHERE uuid = ?", (user_uuid,)
-            ).fetchone()
+            row = conn.execute("""
+                SELECT u.*, GROUP_CONCAT(la.service || ':' || la.account_id) AS linked_accounts
+                FROM users u
+                LEFT JOIN linked_accounts la ON la.user_uuid = u.uuid
+                WHERE u.uuid = ?
+                GROUP BY u.uuid
+            """, (user_uuid,)).fetchone()
         return _row_to_dict(row) if row else None
 
     def get_by_linked_account(self, service: str, account_id: str) -> Optional[dict]:

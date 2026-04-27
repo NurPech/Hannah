@@ -21,6 +21,10 @@ _FILLER = {
     "mach", "die", "das", "den", "der", "hey", "hannah", "und",
 }
 
+# Farbnamen die gleichzeitig gebräuchliche deutsche Wörter/Verben sind.
+# Ohne Gerätekontext (kein Raum, kein Gerät im Satz) werden diese ignoriert.
+_AMBIGUOUS_COLORS: set[str] = {"weiß"}
+
 # Farbnamen (Deutsch) → hex-Wert oder Sonderwert für colorTemp
 _COLORS: dict[str, str] = {
     "rot":       "#FF0000",
@@ -149,13 +153,13 @@ class NLU:
         _, device                            = self._find_device(joined, room_key)
         action              = self._find_action(tokens)
         level               = self._find_level(normalized)
-        color               = self._find_color(joined)
         is_query            = self._is_query(tokens, raw)
         category_filter     = self._find_category(tokens)
-
-        query_state = self._find_query_state(joined) if is_query else None
+        query_state         = self._find_query_state(joined) if is_query else None
 
         no_device_context = device is None and room_key is None and category_filter is None
+        # Mehrdeutige Farbwörter (z.B. "weiß" = Verb) nur werten wenn Gerätekontext vorhanden
+        color               = self._find_color(joined, require_context=no_device_context)
 
         # CarQuery: Auto-Wörter ohne Geräte-/Raumbezug
         norm_tokens = {_normalize(t) for t in tokens}
@@ -177,9 +181,12 @@ class NLU:
         )
 
         # SetPresence: Kommen/Gehen ohne Geräte-/Raumbezug, kein Query
+        # "Ich gehe schlafen" ist kein Presence-Event — Sleep-Wörter als Veto
+        _has_sleep_words = bool({"schlafen", "schlaf", "bett", "nacht", "muede"} & norm_tokens)
         is_presence_away = (
             not is_query
             and no_device_context
+            and not _has_sleep_words
             and bool(self._presence_away & norm_tokens)
         )
         is_presence_home = (
@@ -366,7 +373,7 @@ class NLU:
                 # ("schlafzimmer" als Gerät soll nicht matchen wenn Raum "leonie schlafzimmer" ist)
                 if norm_room and norm_key in norm_room:
                     continue
-                if norm_key in norm_text and len(norm_key) > best_len:
+                if re.search(r'(?<!\w)' + re.escape(norm_key) + r'(?!\w)', norm_text) and len(norm_key) > best_len:
                     best_key, best_dev, best_len = key, dev, len(norm_key)
             if best_dev:
                 return best_key, best_dev
@@ -388,12 +395,15 @@ class NLU:
             return float(match.group(1).replace(",", "."))
         return None
 
-    def _find_color(self, text: str) -> Optional[str]:
+    def _find_color(self, text: str, require_context: bool = False) -> Optional[str]:
         best_val = None
         best_len = 0
+        best_word = None
         for word, hex_val in _COLORS.items():
             if re.search(r'(?<!\w)' + re.escape(word) + r'(?!\w)', text) and len(word) > best_len:
-                best_val, best_len = hex_val, len(word)
+                best_val, best_len, best_word = hex_val, len(word), word
+        if require_context and best_word in _AMBIGUOUS_COLORS:
+            return None
         return best_val
 
     def _find_category(self, tokens: list[str]) -> Optional[str]:

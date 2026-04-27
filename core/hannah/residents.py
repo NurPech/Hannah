@@ -26,11 +26,11 @@ class ResidentsClient:
     """
     Verbindet Hannah mit dem ioBroker Residents-Adapter.
 
-    Lesen  : residents/0/roomie/#       (ioBroker → Hannah, via MQTT-Subscription)
+    Lesen  : residents/0/roomie/#  und  residents/0/guest/#
     Schreiben: hannah/set/residents/0/roomie/{name}/{key}  (Hannah → ioBroker)
 
     Hannah pflegt ihren eigenen Status (hannah_roomie) beim Start/Stop.
-    Auf Änderungen des user_roomie (z.B. "leonie") wird mit Callbacks reagiert.
+    Auf Änderungen des user_roomie (z.B. "leonie") und Gäste wird mit Callbacks reagiert.
     """
 
     def __init__(self, cfg: dict, publish_fn: Callable[[str, str], None]):
@@ -40,6 +40,10 @@ class ResidentsClient:
 
         self.topic_prefix_read  = cfg.get("topic_prefix_read",  "residents/0/roomie")
         self.topic_prefix_write = cfg.get("topic_prefix_write", "hannah/set/residents/0/roomie")
+
+        # Guest-Topic wird aus dem Roomie-Prefix abgeleitet
+        _base = self.topic_prefix_read.rsplit("/", 1)[0]
+        self.guest_topic_prefix = cfg.get("guest_topic_prefix", f"{_base}/guest")
 
         self.hannah_name = cfg.get("hannah_roomie", "hannah")
 
@@ -55,9 +59,11 @@ class ResidentsClient:
         self._state_home = cfg.get("state_home", 1)
         self._state_away = cfg.get("state_away", 0)
 
-        # Callbacks: fn(roomie_name: str)
-        self._on_arrival:   Optional[Callable[[str], None]] = None
-        self._on_departure: Optional[Callable[[str], None]] = None
+        # Callbacks: fn(name: str)
+        self._on_arrival:        Optional[Callable[[str], None]] = None
+        self._on_departure:      Optional[Callable[[str], None]] = None
+        self._on_guest_arrival:  Optional[Callable[[str], None]] = None
+        self._on_guest_departure: Optional[Callable[[str], None]] = None
 
     # ------------------------------------------------------------------
     # Callbacks registrieren
@@ -70,11 +76,24 @@ class ResidentsClient:
         """Wird aufgerufen wenn ein user_roomie von zuhause → weg wechselt."""
         self._on_departure = fn
 
+    def on_guest_arrival(self, fn: Callable[[str], None]):
+        """Wird aufgerufen wenn ein Gast ankommt."""
+        self._on_guest_arrival = fn
+
+    def on_guest_departure(self, fn: Callable[[str], None]):
+        """Wird aufgerufen wenn ein Gast geht."""
+        self._on_guest_departure = fn
+
     # ------------------------------------------------------------------
     # MQTT-Update empfangen (von mqtt_handler weitergeleitet)
 
     def update(self, topic: str, raw_value: str):
-        """Verarbeitet ein eingehendes residents-Topic."""
+        """Verarbeitet ein eingehendes residents-Topic (Roomie oder Gast)."""
+        if topic.startswith(self.guest_topic_prefix + "/"):
+            self._update_guest(topic, raw_value)
+            return
+        if not topic.startswith(self.topic_prefix_read + "/"):
+            return
         suffix = topic[len(self.topic_prefix_read):].strip("/")
         parts = suffix.split("/", 1)
         if len(parts) != 2:
@@ -103,6 +122,37 @@ class ResidentsClient:
                 if self._on_departure:
                     threading.Thread(
                         target=self._on_departure, args=(roomie,), daemon=True
+                    ).start()
+
+    def _update_guest(self, topic: str, raw_value: str):
+        """Verarbeitet Gast-Topics und feuert Arrival/Departure-Callbacks."""
+        suffix = topic[len(self.guest_topic_prefix):].strip("/")
+        parts = suffix.split("/", 1)
+        if len(parts) != 2:
+            return
+        guest, key = parts
+        value = _parse(raw_value)
+
+        with self._lock:
+            old = self._cache.get(f"guest:{guest}", {}).get(key)
+            self._cache.setdefault(f"guest:{guest}", {})[key] = value
+
+        log.debug(f"Residents-Gast: {guest}/{key} = {value!r}")
+
+        if key == self._state_key and old != value:
+            was_home = (old == self._state_home)
+            is_home  = (value == self._state_home)
+            if is_home and not was_home and old is not None:
+                log.info(f"Residents: Gast '{guest}' ist angekommen.")
+                if self._on_guest_arrival:
+                    threading.Thread(
+                        target=self._on_guest_arrival, args=(guest,), daemon=True
+                    ).start()
+            elif not is_home and was_home:
+                log.info(f"Residents: Gast '{guest}' ist gegangen.")
+                if self._on_guest_departure:
+                    threading.Thread(
+                        target=self._on_guest_departure, args=(guest,), daemon=True
                     ).start()
 
     # ------------------------------------------------------------------

@@ -52,14 +52,14 @@ class MQTTHandler:
         # Optionaler Callback für eingehende State-Updates: fn(state_id, raw_payload)
         self._on_state_update: Optional[Callable[[str, str], None]] = None
         self._state_topic_prefix: Optional[str] = None  # z.B. "javascript/0/virtualDevice"
+        self._extra_state_prefixes: list[str] = []      # zusätzliche Prefixe für Trigger-States
 
         # Optionaler Callback für Wetter-Updates: fn(topic, raw_payload)
         self._on_weather_update: Optional[Callable[[str, str], None]] = None
         self._weather_topic_prefix: Optional[str] = None  # z.B. "openweathermap/0/forecast"
 
-        # Optionaler Callback für Residents-Updates: fn(topic, raw_payload)
-        self._on_residents_update: Optional[Callable[[str, str], None]] = None
-        self._residents_topic_prefix: Optional[str] = None  # z.B. "residents/0/roomie"
+        # Residents-Updates: Liste von (prefix, callback) — Roomie + Guest
+        self._residents_handlers: list[tuple[str, Callable[[str, str], None]]] = []
 
         # Auto-Status-Updates: Liste von (prefix, callback) — ein Eintrag pro Auto
         self._car_handlers: list[tuple[str, Callable[[str, str], None]]] = []
@@ -186,13 +186,12 @@ class MQTTHandler:
         self._on_weather_update = callback
 
     def set_residents_handler(self, prefix: str, callback: Callable[[str, str], None]):
-        """
-        Abonniert Residents-Topics und leitet Updates weiter.
-        prefix   : z.B. "residents/0/roomie"
-        callback : fn(topic, raw_value)
-        """
-        self._residents_topic_prefix = prefix
-        self._on_residents_update = callback
+        """Registriert den primären Residents-Handler (Roomies). Ersetzt bestehende Einträge."""
+        self._residents_handlers = [(prefix, callback)]
+
+    def add_residents_handler(self, prefix: str, callback: Callable[[str, str], None]):
+        """Fügt einen weiteren Residents-Handler hinzu (z.B. für Gäste)."""
+        self._residents_handlers.append((prefix, callback))
 
     def add_car_handler(self, prefix: str, callback: Callable[[str, str], None]):
         """
@@ -224,6 +223,20 @@ class MQTTHandler:
         """
         self._state_topic_prefix = prefix
         self._on_state_update = callback
+
+    def add_state_subscription(self, prefix: str) -> None:
+        """
+        Abonniert einen weiteren MQTT-Prefix und leitet Updates an den State-Callback weiter.
+        Kann vor oder nach connect() aufgerufen werden.
+        prefix: ioBroker-Pfad in Slash-Notation, z.B. "0_userdata/0"
+        """
+        mqtt_prefix = prefix.replace(".", "/")
+        if mqtt_prefix in self._extra_state_prefixes:
+            return
+        self._extra_state_prefixes.append(mqtt_prefix)
+        if self._client.is_connected():
+            self._client.subscribe(f"{mqtt_prefix}/#", qos=0)
+            log.info(f"Extra State-Prefix abonniert: '{mqtt_prefix}/#'")
 
     def connect(self):
         host = self._cfg.get("host", "localhost")
@@ -351,13 +364,17 @@ class MQTTHandler:
             client.subscribe(sub, qos=0)
             log.info(f"Abonniere State-Updates: '{sub}'")
 
+        for ep in self._extra_state_prefixes:
+            client.subscribe(f"{ep}/#", qos=0)
+            log.info(f"Abonniere extra State-Prefix: '{ep}/#'")
+
         if self._weather_topic_prefix:
             sub = f"{self._weather_topic_prefix}/#"
             client.subscribe(sub, qos=0)
             log.info(f"Abonniere Wetter-Updates: '{sub}'")
 
-        if self._residents_topic_prefix:
-            sub = f"{self._residents_topic_prefix}/#"
+        for prefix, _ in self._residents_handlers:
+            sub = f"{prefix}/#"
             client.subscribe(sub, qos=0)
             log.info(f"Abonniere Residents-Updates: '{sub}'")
 
@@ -376,10 +393,10 @@ class MQTTHandler:
             return
 
         # Residents-Update aus ioBroker?
-        if self._residents_topic_prefix and topic.startswith(self._residents_topic_prefix + "/"):
-            if self._on_residents_update:
-                self._on_residents_update(topic, msg.payload.decode("utf-8", errors="replace"))
-            return
+        for prefix, callback in self._residents_handlers:
+            if topic.startswith(prefix + "/"):
+                callback(topic, msg.payload.decode("utf-8", errors="replace"))
+                return
 
         # Auto-Status-Update?
         for prefix, callback in self._car_handlers:
@@ -393,6 +410,13 @@ class MQTTHandler:
             if self._on_state_update:
                 self._on_state_update(state_id, msg.payload.decode("utf-8", errors="replace"))
             return
+
+        for ep in self._extra_state_prefixes:
+            if topic.startswith(ep + "/"):
+                state_id = topic.replace("/", ".")
+                if self._on_state_update:
+                    self._on_state_update(state_id, msg.payload.decode("utf-8", errors="replace"))
+                return
 
         # Satellit-Steuerung: volume / mute / dnd
         if topic == self._topic_global_volume:
@@ -432,7 +456,7 @@ class MQTTHandler:
             try:
                 data = json.loads(raw)
                 text     = data.get("text", "").strip()
-                severity = data.get("severity", "notify")
+                severity = "direct" if data.get("type") == "direct" else data.get("severity", "notify")
             except (json.JSONDecodeError, AttributeError):
                 text, severity = raw, "notify"
             if text and self._on_notification:

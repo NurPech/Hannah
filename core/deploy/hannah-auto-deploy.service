@@ -1,0 +1,9 @@
+[Unit]
+Description=Hannah Auto-Deploy
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hannah-core/core/deploy/auto-deploy.sh
+User=root
+Environment=REPO_DIR=/opt/hannah-core
