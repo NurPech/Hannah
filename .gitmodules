@@ -5,4 +5,4 @@
 [submodule "proto"]
 	path = proto
 	url = https://github.com/NurPech/hannah-proto.git
-	branch = v0.2.0
+	branch = v0.3.0

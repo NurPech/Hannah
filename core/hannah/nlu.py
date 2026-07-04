@@ -175,6 +175,17 @@ class NLU:
         self._mute_words: set[str] = set(cfg.get("mute_words", [
             "stumm", "mikrofon",
         ]))
+        # SetVolume: "Lautstärke auf 50" (absolut, kombiniert mit _find_level) oder
+        # "lauter"/"leiser" (relativ) — #63
+        self._volume_words: set[str] = set(cfg.get("volume_words", [
+            "lautstaerke", "laut",
+        ]))
+        self._volume_up_words: set[str] = set(cfg.get("volume_up_words", [
+            "lauter", "aufdrehen", "hochdrehen",
+        ]))
+        self._volume_down_words: set[str] = set(cfg.get("volume_down_words", [
+            "leiser", "runterdrehen", "herunterdrehen",
+        ]))
 
         # DeleteAlarm / QueryAlarms: nur im Wecker-Kontext relevant (#4)
         self._alarm_delete_words: set[str] = set(cfg.get("alarm_delete_words", [
@@ -316,6 +327,19 @@ class NLU:
             and bool(self._mute_words & norm_tokens)
         )
 
+        # SetVolume: absolut ("Lautstärke auf 50") oder relativ ("lauter"/"leiser").
+        # Raum erlaubt (analog Stop/Pause/Resume), aber kein spezifisches ioBroker-Gerät.
+        is_volume_up = bool(self._volume_up_words & norm_tokens)
+        is_volume_down = bool(self._volume_down_words & norm_tokens)
+        is_volume = (
+            not is_car and not is_weather
+            and not is_presence_away and not is_presence_home
+            and not is_dnd and not is_mute_cmd
+            and not is_query and device is None
+            and (is_volume_up or is_volume_down
+                 or (bool(self._volume_words & norm_tokens) and level is not None))
+        )
+
         # DeleteAlarm / QueryAlarms: nur mit Wecker-Kontext (#4). is_delete_alarm hat
         # Vorrang, damit "lösche meinen Wecker für morgen 8 Uhr" nicht wegen des
         # enthaltenen alarm_time als SetAlarm durchgeht.
@@ -341,6 +365,7 @@ class NLU:
             and not is_resume
             and not is_dnd
             and not is_mute_cmd
+            and not is_volume
             and not is_delete_alarm
             and not is_query_alarms
             and (action is None or not _has_action_context)
@@ -379,6 +404,13 @@ class NLU:
             intent_name, value, unit = "SetDND", "off" if _has_off else "on", None
         elif is_mute_cmd:
             intent_name, value, unit = "SetMute", "off" if _has_off else "on", None
+        elif is_volume:
+            if is_volume_up:
+                intent_name, value, unit = "SetVolume", 10, "relative"
+            elif is_volume_down:
+                intent_name, value, unit = "SetVolume", -10, "relative"
+            else:
+                intent_name, value, unit = "SetVolume", level, "%"
         elif timer_seconds is not None:
             intent_name, value, unit = "SetTimer", timer_seconds, None
             intent_label = timer_label
@@ -414,7 +446,7 @@ class NLU:
             intent_name, value, unit = "Unknown", None, None
             log.debug(f"NLU: Kein Intent erkannt für '{raw}'")
 
-        _actionable = intent_name in ("TurnOn", "TurnOff", "SetLevel", "SetColor", "SetTemperature", "SetMode", "SetFanSpeed", "Query")
+        _actionable = intent_name in ("TurnOn", "TurnOff", "SetLevel", "SetColor", "SetTemperature", "SetMode", "SetFanSpeed", "Query", "SetVolume")
         intent = Intent(
             name=intent_name,
             room=room_name,

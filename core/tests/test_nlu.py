@@ -68,6 +68,37 @@ class TestQueryAlarms:
         assert intent.name != "QueryAlarms"
 
 
+class TestSetVolume:
+    """#63 — SetVolume-Intent: absolut ("Lautstärke auf 50") oder relativ ("lauter"/"leiser")."""
+
+    def test_absolute_level(self, nlu):
+        intent = nlu.parse("stell die lautstärke auf 50 prozent")
+
+        assert intent.name == "SetVolume"
+        assert intent.value == 50.0
+        assert intent.unit == "%"
+
+    def test_louder(self, nlu):
+        intent = nlu.parse("mach lauter")
+
+        assert intent.name == "SetVolume"
+        assert intent.value == 10
+        assert intent.unit == "relative"
+
+    def test_quieter(self, nlu):
+        intent = nlu.parse("mach leiser")
+
+        assert intent.name == "SetVolume"
+        assert intent.value == -10
+        assert intent.unit == "relative"
+
+    def test_light_level_unaffected(self, nlu):
+        """Ohne Lautstärke-Kontextwort bleibt eine Prozentangabe SetLevel (z.B. Dimmer)."""
+        intent = nlu.parse("stell das licht auf 50 prozent")
+
+        assert intent.name == "SetLevel"
+
+
 class TestResolveYesNo:
     def test_yes(self):
         assert resolve_yes_no("ja gerne") is True

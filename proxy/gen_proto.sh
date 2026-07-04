@@ -69,5 +69,12 @@ protoc \
   "${GRPC_OPTS[@]}" \
   "${FILES[@]}"
 
+# PROTO_VERSION mitkopieren — der Proxy-Release ist eine einzelne kompilierte
+# Binary (siehe .gitlab-ci.yml upload:proxy:*), hat also zur Laufzeit keinen
+# Zugriff auf das proto/-Submodule. version.go embedded diese lokale Kopie
+# per go:embed (#60) — geht nur innerhalb des Package-Verzeichnisses, daher
+# die Kopie hierher statt eines relativen Pfads zu proto/.
+cp ../proto/PROTO_VERSION proto/hannah/PROTO_VERSION
+
 echo "✓ Proto stubs generated in proto/hannah/"
 ls proto/hannah/

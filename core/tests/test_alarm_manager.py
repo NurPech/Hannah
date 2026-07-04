@@ -5,7 +5,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 import hannah.utils.db as db_module
-from hannah.timers import AlarmManager
+from hannah.alarms import AlarmManager
 from hannah.models.satellite import Satellite
 from hannah.models.user import User
 

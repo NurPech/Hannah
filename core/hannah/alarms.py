@@ -22,43 +22,6 @@ def format_duration(seconds: int) -> str:
     return " und ".join(parts) if parts else "0 Sekunden"
 
 
-class TimerManager:
-    def __init__(self):
-        self._timers: dict[str, threading.Timer] = {}
-        self._lock = threading.Lock()
-
-    def set(self, device: str, seconds: int, on_fire: Callable[[str], None]) -> None:
-        with self._lock:
-            existing = self._timers.pop(device, None)
-            if existing:
-                existing.cancel()
-                log.info(f"[timer] Bestehender Timer für '{device}' ersetzt.")
-            t = threading.Timer(seconds, self._fire, args=(device, on_fire))
-            t.daemon = True
-            t.start()
-            self._timers[device] = t
-        log.info(f"[timer] Timer für '{device}': {seconds}s ({format_duration(seconds)})")
-
-    def cancel(self, device: str) -> bool:
-        with self._lock:
-            t = self._timers.pop(device, None)
-            if t:
-                t.cancel()
-                log.info(f"[timer] Timer für '{device}' abgebrochen.")
-                return True
-            return False
-
-    def active(self, device: str) -> bool:
-        with self._lock:
-            return device in self._timers
-
-    def _fire(self, device: str, on_fire: Callable[[str], None]) -> None:
-        with self._lock:
-            self._timers.pop(device, None)
-        log.info(f"[timer] Timer für '{device}' abgelaufen.")
-        on_fire(device)
-
-
 class AlarmManager:
     """Persistenter, wiederkehrender Wecker-Manager (DB-backed via `Alarm`-Model,
     ersetzt die alte JSON-Datei-Persistenz). Kombiniert CRUD (fürs künftige

@@ -51,7 +51,7 @@ from hannah.settings_manager import SettingsManager
 from hannah.weather import WeatherCache
 from hannah.trigger_engine import TriggerEngine
 from hannah.ble_location import BleLocationEngine, BleTag
-from hannah.timers import AlarmManager, format_duration
+from hannah.alarms import AlarmManager, format_duration
 from hannah.__version__ import VERSION as HANNAH_VERSION
 
 
@@ -409,6 +409,17 @@ def main():
                         alarm_manager.stop_ringing(t)
             for t in targets:
                 udp_server.send_command(t, {"type": cmd_type})
+        elif intent.name == "SetVolume":
+            targets = _resolve_targets(intent.room_id or device)
+            if not targets:
+                _handle_feedback(device, False, "Keinen Satelliten gefunden.")
+            else:
+                level = _apply_volume(targets, intent.value, intent.unit)
+                if intent.unit == "relative":
+                    reply = "Lauter." if intent.value > 0 else "Leiser."
+                else:
+                    reply = f"Lautstärke auf {level} Prozent gesetzt."
+                _handle_feedback(device, True, reply)
         elif intent.name == "SetTimer":
             seconds = int(intent.value)
             label = intent.label or format_duration(seconds)
@@ -612,6 +623,17 @@ def main():
             active = intent.value == "on"
             _apply_global_mute(active)
             answer = "Mikrofone stumm." if active else "Mikrofone wieder aktiv."
+        elif intent.name == "SetVolume":
+            source_device = source if source in {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()} else None
+            targets = _resolve_targets(intent.room_id or source_device or "all")
+            if not targets:
+                answer = "Keinen Satelliten gefunden."
+            else:
+                level = _apply_volume(targets, intent.value, intent.unit)
+                if intent.unit == "relative":
+                    answer = "Lauter." if intent.value > 0 else "Leiser."
+                else:
+                    answer = f"Lautstärke auf {level} Prozent gesetzt."
         elif intent.name == "SetTimer":
             seconds = int(intent.value)
             label = intent.label or format_duration(seconds)
@@ -818,6 +840,21 @@ def main():
             _device_mute[device] = active
             mqtt_handler.publish_mute_set(device, active)
         log.info(f"Globales Mute: {active}")
+
+    def _apply_volume(targets: list[str], value: float, unit: str) -> int:
+        """Setzt die Lautstärke auf den gegebenen Zielen — absolut (unit='%') oder
+        relativ (unit='relative', value als vorzeichenbehaftetes Delta). Gibt den
+        resultierenden Level des ersten Ziels zurück (für die Sprachantwort)."""
+        result = _global_volume
+        for d in targets:
+            current = _device_volume.get(d, _global_volume)
+            new_level = current + int(value) if unit == "relative" else int(value)
+            new_level = max(0, min(100, new_level))
+            _device_volume[d] = new_level
+            mqtt_handler.publish_volume_set(d, new_level)
+            result = new_level
+        log.info(f"Lautstärke {targets}: {result}%")
+        return result
 
     # ── Announcements ─────────────────────────────────────────────────────────
 

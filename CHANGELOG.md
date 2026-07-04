@@ -5,6 +5,18 @@
 -->
 
 
+## 0.53.0
+### Hannah Core
+* Added: `SetVolume` NLU intent — "stell die Lautstärke auf 50"/"lauter"/"leiser" now sets satellite volume (absolute or relative ±10), last remaining piece of the Volume/Mute refactor (v0.13.0, 2026-05-27) (Refs #63)
+* Removed: dead `TimerManager` class in `core/hannah/timers.py` — unused since `SetTimer` moved to the external Timer Service. File renamed to `alarms.py` since only `AlarmManager` (+ `format_duration`) remains (Refs #128)
+* Added: gRPC server interceptor checking the `x-proto-version` metadata on every RPC (unary and streaming) against the local `PROTO_VERSION` (from the `proto` submodule, now bumped to `hannah-proto` v0.3.0). Defaults to log-only (`grpc.enforce_protocol_version: false`); hard-reject mode (`FAILED_PRECONDITION` on mismatch/missing metadata) is opt-in until every external client sends the header (Refs #60)
+
+### Telegram
+* Added: gRPC client interceptor attaching the local `x-proto-version` metadata to every outgoing call to Hannah Core (unary and streaming), so Core's protocol-version check (see above) can verify Telegram is on a compatible proto schema (Refs #60)
+
+### Hannah Proxy
+* Added: gRPC client interceptors attaching the local `x-proto-version` metadata to every outgoing unary and streaming call to Hannah Core. Proxy ships as a single compiled binary with no filesystem access to the `proto` submodule, so the version is embedded at build time via `go:embed` from a local copy in `proto/hannah/` (Refs #60)
+
 ## 0.52.0
 ### Hannah Core
 * Changed: `proto` submodule bumped to `hannah-proto` v0.2.0 — `TimerCreate`/`TimerInfo` now carry a generic `metadata` map instead of fixed `room`/`roomie_id` fields, and `TimerFired` echoes `metadata` back. Hannah Core's own `HannahTimerStore` (SQLite) removed — was a redundant duplicate of what the Timer Service already persists; announcement routing now reads `room`/`roomie_id` straight from the echoed `metadata` instead. `trigger_engine`'s `"trigger:"` label-prefix hack for delay-timers replaced with a proper `metadata["trigger_id"]` key (Refs #127)

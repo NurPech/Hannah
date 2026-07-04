@@ -22,6 +22,7 @@ from hannah.proto import hannah_pb2 as pb
 from hannah.proto import hannah_pb2_grpc as pb_grpc
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
+from hannah.grpc_interceptors import ProtocolVersionInterceptor, read_proto_version
 
 log = logging.getLogger(__name__)
 
@@ -1439,9 +1440,16 @@ class GrpcServer:
         self._port = int(cfg.get("port", 50051))
         self._server: Optional[grpc.Server] = None
         self._servicer = servicer
+        self._version_interceptor = ProtocolVersionInterceptor(
+            expected_version=read_proto_version(),
+            enforce=cfg.get("enforce_protocol_version", False),
+        )
 
     def start(self):
-        self._server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
+        self._server = grpc.server(
+            futures.ThreadPoolExecutor(max_workers=8),
+            interceptors=[self._version_interceptor],
+        )
         pb_grpc.add_HannahServiceServicer_to_server(self._servicer, self._server)
         addr = f"{self._host}:{self._port}"
         self._server.add_insecure_port(addr)
@@ -1452,6 +1460,15 @@ class GrpcServer:
         if self._server:
             self._server.stop(grace=2)
             log.info("gRPC-Server beendet.")
+
+    def set_protocol_version_enforcement(self, enforce: bool) -> None:
+        """Reject-Mode für den Protocol-Version-Check gezielt an-/ausschalten (#60).
+
+        Solange nicht alle 6 externen Clients x-proto-version mitschicken, muss
+        das False bleiben (nur Logging) — sonst lehnt Hannah jeden RPC ab.
+        """
+        self._version_interceptor.enforce = enforce
+        log.info(f"[grpc/version] Protocol-Version-Enforcement: {'AN' if enforce else 'AUS'}")
 
 
 # ------------------------------------------------------------------

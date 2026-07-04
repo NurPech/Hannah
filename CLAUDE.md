@@ -32,7 +32,7 @@ hannah/                          ← Mono-Repo
 │   │   ├── trigger_engine.py    ← Proaktive Trigger
 │   │   ├── routines.py          ← Geplante Routinen (SQLite, hannah.db)
 │   │   ├── room_manager.py      ← Räume/Gruppen/Satellit-Zuordnung (SQLite)
-│   │   ├── timers.py            ← Timer + Wecker (AlarmManager)
+│   │   ├── alarms.py            ← Wecker (AlarmManager)
 │   │   ├── ble_location.py      ← BLE-Indoor-Lokalisierung
 │   │   ├── tool_agent.py        ← LLM-Tool-Calling-Agent (ioBroker-Aktionen)
 │   │   ├── weather.py           ← Wetter (OpenWeatherMap)

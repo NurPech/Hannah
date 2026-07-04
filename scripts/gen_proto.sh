@@ -63,4 +63,12 @@ sed -i -E 's/^import ([a-z0-9_]+) as ([a-z0-9_]+)$/from . import \1 as \2/' \
     "$REPO_ROOT"/core/hannah/proto/*_pb2*.py \
     "$REPO_ROOT"/telegram/hannah_telegram/proto/*_pb2*.py
 
+# PROTO_VERSION mitkopieren — core/hannah bzw. telegram/ werden 1:1 ins
+# jeweilige Release-Tarball gepackt (siehe .gitlab-ci.yml upload:core /
+# upload:telegram), das proto/-Submodule selbst aber nicht. Beide Consumer
+# brauchen die Datei zur Laufzeit für den Protocol-Version-Check (#60).
+echo "→ PROTO_VERSION nach core/hannah/proto/ und telegram/hannah_telegram/proto/"
+cp "$PROTO_DIR/PROTO_VERSION" "$REPO_ROOT/core/hannah/proto/PROTO_VERSION"
+cp "$PROTO_DIR/PROTO_VERSION" "$REPO_ROOT/telegram/hannah_telegram/proto/PROTO_VERSION"
+
 echo "Fertig."

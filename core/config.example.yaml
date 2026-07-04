@@ -49,6 +49,7 @@ mqtt:
 grpc:
   host: "0.0.0.0"   # Bind-Adresse des gRPC-Servers
   port: 50051        # Standard gRPC-Port
+  enforce_protocol_version: false  # #60: Mismatch/fehlende x-proto-version-Metadata ablehnen statt nur loggen — erst aktivieren, wenn ALLE Clients umgestellt sind
 
 asset_server:
   url: "https://hannah-asset.example.com"

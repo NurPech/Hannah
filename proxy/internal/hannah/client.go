@@ -29,6 +29,8 @@ func NewClient(address string) (*Client, error) {
 	conn, err := grpc.NewClient(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(32*1024*1024)),
+		grpc.WithChainUnaryInterceptor(versionUnaryInterceptor),
+		grpc.WithChainStreamInterceptor(versionStreamInterceptor),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("grpc dial %q: %w", address, err)
