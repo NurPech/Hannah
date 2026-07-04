@@ -90,7 +90,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         on_agent_send_residents: Optional[Callable[[Iterable[pb.AgentResident]], None]] = None,
         on_agent_room_snapshot: Optional[Callable[[Iterable[pb.AgentRoom]], None]] = None,
         on_trigger_firmware_update: Optional[Callable[[str], None]] = None,  # (device)
-        on_timer_fired: Optional[Callable[[str, str], None]] = None,          # (timer_id, label)
+        on_timer_fired: Optional[Callable[[str, str, dict], None]] = None,     # (timer_id, label, metadata)
         on_timer_list: Optional[Callable[[list], None]] = None,               # (list[TimerInfo])
         on_timer_connected: Optional[Callable[[], None]] = None,
         on_set_capture: Optional[Callable[[str, bool, str], None]] = None,     # (device_id, enabled, sample_type) — set DND + satellite MQTT
@@ -1142,12 +1142,13 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         return True
 
     def timer_create(self, timer_id: str, label: str, fire_at: int,
-                     room: str, roomie_id: str = "") -> bool:
-        """Send TimerCreate to the Timer Service. Returns False if not connected."""
-        kwargs = dict(timer_id=timer_id, label=label, fire_at=fire_at, room=room)
-        if roomie_id:
-            kwargs["roomie_id"] = roomie_id
-        cmd = pb.TimerCommand(create=pb.TimerCreate(**kwargs))
+                     metadata: Optional[dict] = None) -> bool:
+        """Send TimerCreate to the Timer Service. Returns False if not connected.
+        metadata is opaque to the Timer Service — it's echoed back verbatim on
+        TimerFired/TimerListResponse (e.g. "room", "roomie_id", "trigger_id")."""
+        cmd = pb.TimerCommand(create=pb.TimerCreate(
+            timer_id=timer_id, label=label, fire_at=fire_at, metadata=metadata or {},
+        ))
         with self._timer_lock:
             if self._timer_queue is None:
                 return False
@@ -1300,7 +1301,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                         log.info(f"[grpc] TimerFired: {fired.timer_id!r} ({fired.label!r})")
                         if self._on_timer_fired:
                             try:
-                                self._on_timer_fired(fired.timer_id, fired.label)
+                                self._on_timer_fired(fired.timer_id, fired.label, dict(fired.metadata))
                             except Exception as e:
                                 log.error(f"[grpc] on_timer_fired Fehler: {e}")
                     elif which == "list":

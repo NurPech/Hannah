@@ -100,7 +100,7 @@ class TriggerEngine:
         ask_fn: Callable[[str, str, Callable[[str], None]], None] | None = None,
         match_fn: Callable[[str, str], bool] | None = None,
         set_state_fn: Callable[[str, Any], None] | None = None,
-        schedule_timer_fn: Callable[[str, str, int, str], None] | None = None,  # (timer_id, label, fire_at, room)
+        schedule_timer_fn: Callable[[str, str, int, dict], None] | None = None,  # (timer_id, label, fire_at, metadata)
         cancel_timer_fn: Callable[[str], None] | None = None,                    # (timer_id)
         on_change: Callable[[], None] | None = None,                            # nach Create/Update: WatchMore neu pushen
     ):
@@ -178,15 +178,14 @@ class TriggerEngine:
             state_cache = dict(self._state_cache)
 
         for info in timer_infos:
-            label = info.label
-            if not label.startswith("trigger:"):
+            trigger_id = info.metadata.get("trigger_id")
+            if not trigger_id:
                 continue
-            trigger_id = label[len("trigger:"):]
             timer_id = info.timer_id
 
             trigger = triggers_by_id.get(trigger_id)
             if trigger is None:
-                log.info(f"Reconcile: Timer '{timer_id}' (label={label!r}) — Trigger nicht mehr vorhanden → canceln")
+                log.info(f"Reconcile: Timer '{timer_id}' (trigger_id={trigger_id!r}) — Trigger nicht mehr vorhanden → canceln")
                 if self._cancel_timer_fn:
                     try:
                         self._cancel_timer_fn(timer_id)
@@ -490,10 +489,10 @@ class TriggerEngine:
 
         timer_id = str(_uuid.uuid4())
         fire_at = int(time.time()) + delay_secs
-        label = f"trigger:{tid}"
+        label = f"Trigger: {tid}"
         log.info(f"Trigger '{tid}': Delay-Timer für {delay_secs}s registriert (timer_id={timer_id!r})")
         try:
-            self._schedule_timer_fn(timer_id, label, fire_at, room)
+            self._schedule_timer_fn(timer_id, label, fire_at, {"trigger_id": tid, "room": room})
         except Exception as e:
             log.error(f"Trigger '{tid}': schedule_timer_fn fehlgeschlagen: {e}")
             return

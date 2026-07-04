@@ -39,7 +39,7 @@ if _version_not_supported:
 class HannahServiceStub:
     """============================================================
     Hannah gRPC Service
-    
+
     Allows external services (Telegram bot, web UI, etc.) to:
     - query and manage the user registry
     - submit text commands and receive answers
@@ -393,7 +393,7 @@ class HannahServiceStub:
 class HannahServiceServicer:
     """============================================================
     Hannah gRPC Service
-    
+
     Allows external services (Telegram bot, web UI, etc.) to:
     - query and manage the user registry
     - submit text commands and receive answers
@@ -1209,7 +1209,7 @@ def add_HannahServiceServicer_to_server(servicer, server):
 class HannahService:
     """============================================================
     Hannah gRPC Service
-    
+
     Allows external services (Telegram bot, web UI, etc.) to:
     - query and manage the user registry
     - submit text commands and receive answers

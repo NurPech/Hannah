@@ -51,7 +51,7 @@ from hannah.settings_manager import SettingsManager
 from hannah.weather import WeatherCache
 from hannah.trigger_engine import TriggerEngine
 from hannah.ble_location import BleLocationEngine, BleTag
-from hannah.timers import AlarmManager, HannahTimerStore, format_duration
+from hannah.timers import AlarmManager, format_duration
 from hannah.__version__ import VERSION as HANNAH_VERSION
 
 
@@ -415,8 +415,7 @@ def main():
             timer_id = str(uuid.uuid4())
             fire_at = int(time.time()) + seconds
             room_id = intent.room_id or "all"
-            timer_store.set(timer_id, label, fire_at, room_id)
-            grpc_servicer.timer_create(timer_id, label, fire_at, room_id)
+            grpc_servicer.timer_create(timer_id, label, fire_at, {"room": room_id})
             reply = f"Timer für {format_duration(seconds)} gesetzt."
             if intent.label:
                 reply = f"Timer für {format_duration(seconds)} gesetzt: {intent.label}."
@@ -619,8 +618,7 @@ def main():
             timer_id = str(uuid.uuid4())
             fire_at = int(time.time()) + seconds
             room_id = intent.room_id or "all"
-            timer_store.set(timer_id, label, fire_at, room_id)
-            grpc_servicer.timer_create(timer_id, label, fire_at, room_id)
+            grpc_servicer.timer_create(timer_id, label, fire_at, {"room": room_id})
             answer = f"Timer für {format_duration(seconds)} gesetzt."
             if intent.label:
                 answer = f"Timer für {format_duration(seconds)} gesetzt: {intent.label}."
@@ -880,9 +878,6 @@ def main():
     mqtt_handler.set_play_asset_result_handler(
         lambda device, asset_id, ok: alarm_manager.on_play_result(device, asset_id, ok)
     )
-    timer_store = HannahTimerStore(
-        db_path=cfg.get("timers", {}).get("db", "timers.db"),
-    )
 
     def _on_ble_location_change(tag : BleTag, room, satellite, rssi):
         room_str = room or ""
@@ -1003,12 +998,10 @@ def main():
     def _trigger_set_state(state_id: str, value: object) -> None:
         grpc_servicer.agent_set_state(state_id, value)
 
-    def _schedule_trigger_timer(timer_id: str, label: str, fire_at: int, room: str) -> None:
-        timer_store.set(timer_id, label, fire_at, room)
-        grpc_servicer.timer_create(timer_id, label, fire_at, room)
+    def _schedule_trigger_timer(timer_id: str, label: str, fire_at: int, metadata: dict) -> None:
+        grpc_servicer.timer_create(timer_id, label, fire_at, metadata)
 
     def _cancel_trigger_timer(timer_id: str) -> None:
-        timer_store.remove(timer_id)
         grpc_servicer.timer_cancel(timer_id)
 
     def _on_trigger_change() -> None:
@@ -1261,27 +1254,20 @@ def main():
         text = f"Wecker! {label}." if label else "Wecker! Guten Morgen!"
         _handle_feedback(record["satellite_id"], True, text)
 
-    def _on_timer_fired(timer_id: str, label: str):
-        if label.startswith("trigger:"):
-            trigger_id = label[len("trigger:"):]
-            timer_store.remove(timer_id)
+    def _on_timer_fired(timer_id: str, label: str, metadata: dict):
+        trigger_id = metadata.get("trigger_id")
+        if trigger_id:
             log.info(f"[timer] Delay-Timer gefeuert für Trigger '{trigger_id}'")
             trigger_engine.fire_delayed(trigger_id)
             return
 
-        entry = timer_store.get(timer_id)
-        if not entry:
-            log.warning(f"[timer] TimerFired für unbekannte ID {timer_id!r} ({label!r}) — ignoriert.")
-            return
-        room = entry.get("room", "all")
-        announce_label = entry.get("label") or label
-        timer_store.remove(timer_id)
+        room = metadata.get("room", "all")
         targets = [d for d in _resolve_targets(room) if not _device_dnd.get(d)]
 
         # TTS vorab synthetisieren damit Jingle + TTS nahtlos aufeinanderfolgen
         tts_pcm: Optional[tuple] = None
         if tts.enabled:
-            result = tts.synthesize(f"Dein Timer ist abgelaufen: {announce_label}.")
+            result = tts.synthesize(f"Dein Timer ist abgelaufen: {label}.")
             if result:
                 tts_pcm = _resample_to_16k(*result)
 

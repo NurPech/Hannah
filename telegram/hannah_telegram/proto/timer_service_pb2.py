@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13timer_service.proto\x12\x06hannah\"\xe2\x01\n\x0cTimerCommand\x12%\n\x06\x63reate\x18\x01 \x01(\x0b\x32\x13.hannah.TimerCreateH\x00\x12%\n\x06\x63\x61ncel\x18\x02 \x01(\x0b\x32\x13.hannah.TimerCancelH\x00\x12(\n\x04list\x18\x03 \x01(\x0b\x32\x18.hannah.TimerListRequestH\x00\x12#\n\x05ready\x18\x04 \x01(\x0b\x32\x12.hannah.TimerReadyH\x00\x12*\n\tnot_ready\x18\x05 \x01(\x0b\x32\x15.hannah.TimerNotReadyH\x00\x42\t\n\x07\x63ommand\"\x0c\n\nTimerReady\"/\n\rTimerNotReady\x12\x13\n\x06reason\x18\x01 \x01(\tH\x00\x88\x01\x01\x42\t\n\x07_reason\"s\n\x0bTimerCreate\x12\x10\n\x08timer_id\x18\x01 \x01(\t\x12\r\n\x05label\x18\x02 \x01(\t\x12\x0f\n\x07\x66ire_at\x18\x03 \x01(\x03\x12\x0c\n\x04room\x18\x04 \x01(\t\x12\x16\n\troomie_id\x18\x05 \x01(\tH\x00\x88\x01\x01\x42\x0c\n\n_roomie_id\"\x1f\n\x0bTimerCancel\x12\x10\n\x08timer_id\x18\x01 \x01(\t\"\x12\n\x10TimerListRequest\"\x8a\x01\n\x0cTimerMessage\x12\x1f\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x10.hannah.TimerAckH\x00\x12#\n\x05\x66ired\x18\x02 \x01(\x0b\x32\x12.hannah.TimerFiredH\x00\x12)\n\x04list\x18\x03 \x01(\x0b\x32\x19.hannah.TimerListResponseH\x00\x42\t\n\x07payload\"2\n\x08TimerAck\x12\x0f\n\x07message\x18\x01 \x01(\t\x12\x15\n\ractive_timers\x18\x02 \x01(\x05\"-\n\nTimerFired\x12\x10\n\x08timer_id\x18\x01 \x01(\t\x12\r\n\x05label\x18\x02 \x01(\t\"6\n\x11TimerListResponse\x12!\n\x06timers\x18\x01 \x03(\x0b\x32\x11.hannah.TimerInfo\"q\n\tTimerInfo\x12\x10\n\x08timer_id\x18\x01 \x01(\t\x12\r\n\x05label\x18\x02 \x01(\t\x12\x0f\n\x07\x66ire_at\x18\x03 \x01(\x03\x12\x0c\n\x04room\x18\x04 \x01(\t\x12\x16\n\troomie_id\x18\x05 \x01(\tH\x00\x88\x01\x01\x42\x0c\n\n_roomie_idB=Z;dev.kernstock.net/gessinger/voice/hannah/proxy/proto/hannahb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13timer_service.proto\x12\x06hannah\"\xe2\x01\n\x0cTimerCommand\x12%\n\x06\x63reate\x18\x01 \x01(\x0b\x32\x13.hannah.TimerCreateH\x00\x12%\n\x06\x63\x61ncel\x18\x02 \x01(\x0b\x32\x13.hannah.TimerCancelH\x00\x12(\n\x04list\x18\x03 \x01(\x0b\x32\x18.hannah.TimerListRequestH\x00\x12#\n\x05ready\x18\x04 \x01(\x0b\x32\x12.hannah.TimerReadyH\x00\x12*\n\tnot_ready\x18\x05 \x01(\x0b\x32\x15.hannah.TimerNotReadyH\x00\x42\t\n\x07\x63ommand\"\x0c\n\nTimerReady\"/\n\rTimerNotReady\x12\x13\n\x06reason\x18\x01 \x01(\tH\x00\x88\x01\x01\x42\t\n\x07_reason\"\xc2\x01\n\x0bTimerCreate\x12\x10\n\x08timer_id\x18\x01 \x01(\t\x12\r\n\x05label\x18\x02 \x01(\t\x12\x0f\n\x07\x66ire_at\x18\x03 \x01(\x03\x12\x33\n\x08metadata\x18\x06 \x03(\x0b\x32!.hannah.TimerCreate.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01J\x04\x08\x04\x10\x05J\x04\x08\x05\x10\x06R\x04roomR\troomie_id\"\x1f\n\x0bTimerCancel\x12\x10\n\x08timer_id\x18\x01 \x01(\t\"\x12\n\x10TimerListRequest\"\x8a\x01\n\x0cTimerMessage\x12\x1f\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x10.hannah.TimerAckH\x00\x12#\n\x05\x66ired\x18\x02 \x01(\x0b\x32\x12.hannah.TimerFiredH\x00\x12)\n\x04list\x18\x03 \x01(\x0b\x32\x19.hannah.TimerListResponseH\x00\x42\t\n\x07payload\"2\n\x08TimerAck\x12\x0f\n\x07message\x18\x01 \x01(\t\x12\x15\n\ractive_timers\x18\x02 \x01(\x05\"\x92\x01\n\nTimerFired\x12\x10\n\x08timer_id\x18\x01 \x01(\t\x12\r\n\x05label\x18\x02 \x01(\t\x12\x32\n\x08metadata\x18\x03 \x03(\x0b\x32 .hannah.TimerFired.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"6\n\x11TimerListResponse\x12!\n\x06timers\x18\x01 \x03(\x0b\x32\x11.hannah.TimerInfo\"\xbe\x01\n\tTimerInfo\x12\x10\n\x08timer_id\x18\x01 \x01(\t\x12\r\n\x05label\x18\x02 \x01(\t\x12\x0f\n\x07\x66ire_at\x18\x03 \x01(\x03\x12\x31\n\x08metadata\x18\x06 \x03(\x0b\x32\x1f.hannah.TimerInfo.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01J\x04\x08\x04\x10\x05J\x04\x08\x05\x10\x06R\x04roomR\troomie_idB=Z;dev.kernstock.net/gessinger/voice/hannah/proxy/proto/hannahb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,26 +32,38 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'timer_service_pb2', _global
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z;dev.kernstock.net/gessinger/voice/hannah/proxy/proto/hannah'
+  _globals['_TIMERCREATE_METADATAENTRY']._loaded_options = None
+  _globals['_TIMERCREATE_METADATAENTRY']._serialized_options = b'8\001'
+  _globals['_TIMERFIRED_METADATAENTRY']._loaded_options = None
+  _globals['_TIMERFIRED_METADATAENTRY']._serialized_options = b'8\001'
+  _globals['_TIMERINFO_METADATAENTRY']._loaded_options = None
+  _globals['_TIMERINFO_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_TIMERCOMMAND']._serialized_start=32
   _globals['_TIMERCOMMAND']._serialized_end=258
   _globals['_TIMERREADY']._serialized_start=260
   _globals['_TIMERREADY']._serialized_end=272
   _globals['_TIMERNOTREADY']._serialized_start=274
   _globals['_TIMERNOTREADY']._serialized_end=321
-  _globals['_TIMERCREATE']._serialized_start=323
-  _globals['_TIMERCREATE']._serialized_end=438
-  _globals['_TIMERCANCEL']._serialized_start=440
-  _globals['_TIMERCANCEL']._serialized_end=471
-  _globals['_TIMERLISTREQUEST']._serialized_start=473
-  _globals['_TIMERLISTREQUEST']._serialized_end=491
-  _globals['_TIMERMESSAGE']._serialized_start=494
-  _globals['_TIMERMESSAGE']._serialized_end=632
-  _globals['_TIMERACK']._serialized_start=634
-  _globals['_TIMERACK']._serialized_end=684
-  _globals['_TIMERFIRED']._serialized_start=686
-  _globals['_TIMERFIRED']._serialized_end=731
-  _globals['_TIMERLISTRESPONSE']._serialized_start=733
-  _globals['_TIMERLISTRESPONSE']._serialized_end=787
-  _globals['_TIMERINFO']._serialized_start=789
-  _globals['_TIMERINFO']._serialized_end=902
+  _globals['_TIMERCREATE']._serialized_start=324
+  _globals['_TIMERCREATE']._serialized_end=518
+  _globals['_TIMERCREATE_METADATAENTRY']._serialized_start=442
+  _globals['_TIMERCREATE_METADATAENTRY']._serialized_end=489
+  _globals['_TIMERCANCEL']._serialized_start=520
+  _globals['_TIMERCANCEL']._serialized_end=551
+  _globals['_TIMERLISTREQUEST']._serialized_start=553
+  _globals['_TIMERLISTREQUEST']._serialized_end=571
+  _globals['_TIMERMESSAGE']._serialized_start=574
+  _globals['_TIMERMESSAGE']._serialized_end=712
+  _globals['_TIMERACK']._serialized_start=714
+  _globals['_TIMERACK']._serialized_end=764
+  _globals['_TIMERFIRED']._serialized_start=767
+  _globals['_TIMERFIRED']._serialized_end=913
+  _globals['_TIMERFIRED_METADATAENTRY']._serialized_start=442
+  _globals['_TIMERFIRED_METADATAENTRY']._serialized_end=489
+  _globals['_TIMERLISTRESPONSE']._serialized_start=915
+  _globals['_TIMERLISTRESPONSE']._serialized_end=969
+  _globals['_TIMERINFO']._serialized_start=972
+  _globals['_TIMERINFO']._serialized_end=1162
+  _globals['_TIMERINFO_METADATAENTRY']._serialized_start=442
+  _globals['_TIMERINFO_METADATAENTRY']._serialized_end=489
 # @@protoc_insertion_point(module_scope)

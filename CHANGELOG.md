@@ -5,6 +5,13 @@
 -->
 
 
+## 0.52.0
+### Hannah Core
+* Changed: `proto` submodule bumped to `hannah-proto` v0.2.0 — `TimerCreate`/`TimerInfo` now carry a generic `metadata` map instead of fixed `room`/`roomie_id` fields, and `TimerFired` echoes `metadata` back. Hannah Core's own `HannahTimerStore` (SQLite) removed — was a redundant duplicate of what the Timer Service already persists; announcement routing now reads `room`/`roomie_id` straight from the echoed `metadata` instead. `trigger_engine`'s `"trigger:"` label-prefix hack for delay-timers replaced with a proper `metadata["trigger_id"]` key (Refs #127)
+
+### Telegram
+* Changed: generated proto/gRPC stubs regenerated following the `hannah-proto` v0.2.0 bump (Timer Service `metadata` map). No functional change for Telegram itself — it shares the same generated `hannah_pb2`/`timer_service_pb2` modules as Core but doesn't use the Timer Service RPCs (Refs #127)
+
 ## 0.51.7
 ### Telegram
 * Fixed: `init_commands()`'s default-scope `set_my_commands` call had no error handling — a Telegram flood-control error (`RetryAfter`, e.g. from rapid restarts) crashed the whole service on startup instead of just skipping that one call. Now caught and logged, same pattern already used for the per-chat `set_my_commands` calls just below it
