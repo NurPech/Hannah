@@ -5,6 +5,10 @@
 -->
 
 
+## 0.53.2
+### Satellite Firmware
+* Changed: `audiolib` is now consumed via the ESP-IDF Component Registry (`nurpech/audiolib`, ≥0.2.3) instead of a git submodule — `hannah_audio` declares it in its own `idf_component.yml`, same pattern already used for `espressif/cjson`/`espressif/mqtt`/etc. `EXTRA_COMPONENT_DIRS` and the `audiolib` submodule removed (Refs #130)
+
 ## 0.53.1
 ### Hannah Core
 * Changed: `proto` submodule bumped to `hannah-proto` v0.3.3 (`PROTO_VERSION` 1 → 2) — the only change is the Go package moving to the public `github.com/NurPech/hannah-proto-go`; no message/schema changes. `PROTO_VERSION` copies in `core`, `telegram`, `proxy` updated to match (Refs #60)

@@ -2,7 +2,7 @@ idf_component_register(
     SRCS "hannah_audio.c"
     INCLUDE_DIRS "."
     REQUIRES
-        audiolib
+        nurpech__audiolib
         hannah_config
         driver
         esp_driver_i2s
