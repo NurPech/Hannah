@@ -9,6 +9,7 @@ import logging
 import queue
 import sqlite3
 import threading
+import time
 from concurrent import futures
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
@@ -227,6 +228,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         # Single queue for the connected Timer Service (at most one at a time)
         self._timer_queue: Optional[queue.Queue] = None
         self._timer_lock = threading.Lock()
+        # One-shot queues waiting on the next TimerListResponse — see GetTimers()/_request_timer_list()
+        self._timer_list_waiters: list[queue.Queue] = []
 
         # Captured satellites: device_id → audio queue (SatelliteAudioChunk)
         self._captured_satellites: dict[str, queue.Queue] = {}
@@ -1173,6 +1176,63 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 return False
             self._timer_queue.put(cmd)
         return True
+    
+    def _request_timer_list(self, timeout: float = 5.0) -> Optional[list]:
+        """Sends TimerListRequest and blocks for the matching TimerListResponse.
+
+        Bridges the async TimerConnect stream (Timer Service pushes TimerListResponse
+        whenever it feels like it) to a synchronous unary caller. Returns None if no
+        Timer Service is connected or the response didn't arrive within timeout.
+        """
+        waiter: queue.Queue = queue.Queue(maxsize=1)
+        with self._timer_lock:
+            if self._timer_queue is None:
+                return None
+            self._timer_list_waiters.append(waiter)
+        if not self.timer_list_request():
+            with self._timer_lock:
+                if waiter in self._timer_list_waiters:
+                    self._timer_list_waiters.remove(waiter)
+            return None
+        try:
+            return waiter.get(timeout=timeout)
+        except queue.Empty:
+            with self._timer_lock:
+                if waiter in self._timer_list_waiters:
+                    self._timer_list_waiters.remove(waiter)
+            return None
+
+    # ------------------------------------------------------------------
+    # Timer Admin (unary RPCs, independent of the TimerConnect stream — #97)
+
+    def GetTimers(self, request, _context):
+        """Returns the requesting user's active timers from the Timer Service."""
+        timers = self._request_timer_list()
+        if timers is None:
+            return pb.GetTimersResponse(timers=[])
+        now = int(time.time())
+        result = []
+        for t in timers:
+            if t.metadata.get("user_id") != str(request.user_id):
+                continue
+            result.append(pb.Timer(
+                timer_id=t.timer_id,
+                label=t.label,
+                seconds=max(0, t.fire_at - now),
+                room_id=t.metadata.get("room", ""),
+                user_id=request.user_id,
+            ))
+        return pb.GetTimersResponse(timers=result)
+
+    def DeleteTimer(self, request, _context):
+        """Cancels a timer via the Timer Service.
+
+        requestor_id is accepted but not yet enforced against the timer's owner —
+        ownership policy is still undecided (#97), so any connected caller can
+        currently cancel any timer_id.
+        """
+        ok = self.timer_cancel(request.timer_id)
+        return pb.StatusResponse(ok=ok, message="" if ok else "Timer Service nicht verbunden")
 
     def AgentConnect(self, request_iterator, context):
         """
@@ -1307,11 +1367,16 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                                 log.error(f"[grpc] on_timer_fired Fehler: {e}")
                     elif which == "list":
                         log.debug(f"[grpc] TimerListResponse: {len(msg.list.timers)} Timer")
+                        timers = list(msg.list.timers)
                         if self._on_timer_list:
                             try:
-                                self._on_timer_list(list(msg.list.timers))
+                                self._on_timer_list(timers)
                             except Exception as e:
                                 log.error(f"[grpc] on_timer_list Fehler: {e}")
+                        with self._timer_lock:
+                            waiters, self._timer_list_waiters = self._timer_list_waiters, []
+                        for waiter in waiters:
+                            waiter.put(timers)
                     else:
                         log.warning(f"[grpc] Unbekanntes TimerMessage-Payload: {which!r}")
             except Exception as e:

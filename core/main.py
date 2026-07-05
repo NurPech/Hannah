@@ -250,6 +250,21 @@ def main():
             _hannah_system_user_id = hannah_user.id if hannah_user else 0
         return _hannah_system_user_id
 
+    # Timer-Attribuierung (#97): dieselbe Kette wie bei Alarmen — Sprecher (Voice-ID) →
+    # Satelliten-Owner — aber ohne System-User-Fallback: ein Timer ohne auflösbaren
+    # Besitzer bleibt None (unbekannt/anonym), statt ihn "hannah" zuzuschreiben.
+    def _resolve_timer_user_id(speaker_user_id, device: Optional[str]) -> Optional[int]:
+        if speaker_user_id:
+            try:
+                return int(speaker_user_id)
+            except (TypeError, ValueError):
+                pass
+        if device:
+            owner = satellite_manager.get_satellite_owner(device)
+            if owner:
+                return owner
+        return None
+
     _WEEKDAY_NAMES_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
     def _next_alarm_date(time_str: str) -> datetime.date:
@@ -426,7 +441,11 @@ def main():
             timer_id = str(uuid.uuid4())
             fire_at = int(time.time()) + seconds
             room_id = intent.room_id or "all"
-            grpc_servicer.timer_create(timer_id, label, fire_at, {"room": room_id})
+            metadata = {"room": room_id}
+            user_id = _resolve_timer_user_id("", device)
+            if user_id:
+                metadata["user_id"] = str(user_id)
+            grpc_servicer.timer_create(timer_id, label, fire_at, metadata)
             reply = f"Timer für {format_duration(seconds)} gesetzt."
             if intent.label:
                 reply = f"Timer für {format_duration(seconds)} gesetzt: {intent.label}."
@@ -640,7 +659,12 @@ def main():
             timer_id = str(uuid.uuid4())
             fire_at = int(time.time()) + seconds
             room_id = intent.room_id or "all"
-            grpc_servicer.timer_create(timer_id, label, fire_at, {"room": room_id})
+            source_device = source if source in {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()} else None
+            metadata = {"room": room_id}
+            user_id = _resolve_timer_user_id(speaker_user_id, source_device)
+            if user_id:
+                metadata["user_id"] = str(user_id)
+            grpc_servicer.timer_create(timer_id, label, fire_at, metadata)
             answer = f"Timer für {format_duration(seconds)} gesetzt."
             if intent.label:
                 answer = f"Timer für {format_duration(seconds)} gesetzt: {intent.label}."

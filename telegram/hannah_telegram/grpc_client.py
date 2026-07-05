@@ -7,7 +7,11 @@ from typing import Optional
 import grpc
 import grpc.aio
 
-from hannah_telegram.grpc_interceptors import ProtocolVersionClientInterceptor, read_proto_version
+from hannah_telegram.grpc_interceptors import (
+    PROTO_VERSION_METADATA_KEY,
+    ProtocolVersionClientInterceptor,
+    read_proto_version,
+)
 from hannah_proto import hannah_pb2, hannah_pb2_grpc
 
 log = logging.getLogger(__name__)
@@ -267,8 +271,12 @@ class HannahClient:
         while True:
             try:
                 log.info("Subscribing to Hannah events (filter=%s)", event_types or "all")
+                # grpc.aio's UnaryStreamClientInterceptor doesn't reliably apply metadata
+                # mutations for streaming calls (unlike unary-unary) — pass x-proto-version
+                # explicitly here instead of relying on ProtocolVersionClientInterceptor.
                 stream = self._stub.SubscribeEvents(
-                    hannah_pb2.EventFilter(event_types=event_types)
+                    hannah_pb2.EventFilter(event_types=event_types),
+                    metadata=((PROTO_VERSION_METADATA_KEY, read_proto_version()),),
                 )
                 if on_connected:
                     try:

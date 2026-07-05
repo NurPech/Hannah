@@ -1,6 +1,9 @@
 import json
 import os
+import queue
 import sqlite3
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,7 +14,7 @@ from hannah.user_manager import UserManager
 from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupRoomsRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateRoutineRequest, UpdateRoutineRequest, DeleteRoutineRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupRoomsRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateRoutineRequest, UpdateRoutineRequest, DeleteRoutineRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse
 from hannah.satellite_manager import SatellitePermissionError
 
 def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_rooms=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_routine_records=None,create_routine=None,update_routine=None,delete_routine=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None):
@@ -1025,3 +1028,66 @@ def test_user_to_pb_with_linked_account(tmp_path):
     pb_user = _user_to_pb(fresh)
 
     assert pb_user.linked_accounts["telegram"] == "99999"
+
+def _connect_fake_timer_service(servicer):
+    """Simulates a connected Timer Service by directly wiring the internal queue —
+    bypasses the real TimerConnect stream, which the sync unary bridge below doesn't
+    otherwise interact with."""
+    servicer._timer_queue = queue.Queue()
+
+def _respond_with_timer_list(servicer, timers, delay=0.05):
+    """Simulates the Timer Service pushing back a TimerListResponse after `delay`
+    seconds, exactly like TimerConnect's drain loop would on a real "list" message."""
+    def _respond():
+        time.sleep(delay)
+        with servicer._timer_lock:
+            waiters, servicer._timer_list_waiters = servicer._timer_list_waiters, []
+        for waiter in waiters:
+            waiter.put(timers)
+    threading.Thread(target=_respond, daemon=True).start()
+
+def test_get_timers_without_timer_service_returns_empty():
+    servicer = _make_server()
+    response = servicer.GetTimers(GetTimersRequest(user_id=1), MagicMock())
+    assert list(response.timers) == []
+
+def test_get_timers_filters_by_user_and_computes_remaining_seconds():
+    servicer = _make_server()
+    _connect_fake_timer_service(servicer)
+    now = int(time.time())
+    timers = [
+        TimerInfo(timer_id="a", label="Kaffee", fire_at=now + 600, metadata={"user_id": "1", "room": "kueche"}),
+        TimerInfo(timer_id="b", label="Wäsche", fire_at=now + 60, metadata={"user_id": "2", "room": "keller"}),
+    ]
+    _respond_with_timer_list(servicer, timers)
+
+    response = servicer.GetTimers(GetTimersRequest(user_id=1), MagicMock())
+
+    assert len(response.timers) == 1
+    result = response.timers[0]
+    assert result.timer_id == "a"
+    assert result.room_id == "kueche"
+    assert result.user_id == 1
+    assert 590 <= result.seconds <= 600
+
+def test_get_timers_times_out_without_response():
+    servicer = _make_server()
+    _connect_fake_timer_service(servicer)
+    # No _respond_with_timer_list call — nothing ever answers the list request.
+    timers = servicer._request_timer_list(timeout=0.1)
+    assert timers is None
+
+def test_delete_timer_without_timer_service_returns_not_ok():
+    servicer = _make_server()
+    response = servicer.DeleteTimer(DeleteTimerRequest(timer_id="a", requestor_id=1), MagicMock())
+    assert response.ok is False
+
+def test_delete_timer_pushes_cancel_command():
+    servicer = _make_server()
+    _connect_fake_timer_service(servicer)
+
+    response = servicer.DeleteTimer(DeleteTimerRequest(timer_id="a", requestor_id=1), MagicMock())
+
+    assert response.ok is True
+    cmd = servicer._timer_queue.get_nowait()
+    assert cmd.cancel.timer_id == "a"

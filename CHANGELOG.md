@@ -5,6 +5,15 @@
 -->
 
 
+## 0.54.0
+### Hannah Core
+* Added: `GetTimers`/`DeleteTimer` unary RPCs — query/cancel a user's active timers independent of the `TimerConnect` stream (e.g. for a future "my timers" view), without needing to be the connected Timer Service. Bridges the async `TimerListResponse` push to a synchronous unary call via a one-shot waiter queue (Refs #97)
+* Added: `SetTimer` now attaches `metadata["user_id"]` when creating a timer, same attribution chain already used for alarms (#4) but without the system-user fallback: Voice-ID-resolved speaker → satellite's assigned owner → left unset if neither resolves. Lets `GetTimers` actually filter by user instead of always returning an empty list (Refs #97)
+* Changed: `hannah-proto` bumped to v0.3.7 for the new `Timer`/`GetTimersRequest`/`GetTimersResponse`/`DeleteTimerRequest` messages (`timer_admin.proto`)
+
+### Telegram
+* Fixed: `SubscribeEvents` never actually sent the `x-proto-version` metadata despite `ProtocolVersionClientInterceptor` being wired up — `grpc.aio`'s `UnaryStreamClientInterceptor` doesn't reliably apply metadata mutations for streaming calls, unlike unary-unary (`SubmitText`/`SubmitVoice` were unaffected). Now passed explicitly at the call site instead of relying on the interceptor (Refs #60)
+
 ## 0.53.2
 ### Satellite Firmware
 * Changed: `audiolib` is now consumed via the ESP-IDF Component Registry (`nurpech/audiolib`, ≥0.2.3) instead of a git submodule — `hannah_audio` declares it in its own `idf_component.yml`, same pattern already used for `espressif/cjson`/`espressif/mqtt`/etc. `EXTRA_COMPONENT_DIRS` and the `audiolib` submodule removed (Refs #130)

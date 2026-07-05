@@ -6,5 +6,5 @@ numpy>=1.24.0
 piper-tts>=1.2.0    # TTS-Synthese (optional, deaktivierbar via config)
 miniaudio>=1.58     # Audio-Dekodierung (MP3, WAV, OGG, FLAC) für Bestätigungstöne
 grpcio>=1.81.1      # gRPC-Laufzeit (Server + Client)
-hannah-proto>=0.3.5 # Proto schema — published package instead of the git-submodule/local-codegen pattern (#60)
+hannah-proto>=0.3.7 # Proto schema — published package instead of the git-submodule/local-codegen pattern (#60)
 werkzeug>=3.1.0     # Password-Hashing (generate_password_hash in db.py/user_manager.py/grpc_server.py) — bisher nur transitiv über flask installiert, das mit der alten In-Process-WebUI entfallen ist
