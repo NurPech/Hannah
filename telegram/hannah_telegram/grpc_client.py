@@ -8,7 +8,7 @@ import grpc
 import grpc.aio
 
 from hannah_telegram.grpc_interceptors import ProtocolVersionClientInterceptor, read_proto_version
-from hannah_telegram.proto import hannah_pb2, hannah_pb2_grpc
+from hannah_proto import hannah_pb2, hannah_pb2_grpc
 
 log = logging.getLogger(__name__)
 

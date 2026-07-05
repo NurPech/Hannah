@@ -18,8 +18,8 @@ from werkzeug.security import generate_password_hash
 
 from hannah.satellite_manager import SatelliteManager, SatellitePermissionError
 from hannah.user_manager import UserManager
-from hannah.proto import hannah_pb2 as pb
-from hannah.proto import hannah_pb2_grpc as pb_grpc
+from hannah_proto import hannah_pb2 as pb
+from hannah_proto import hannah_pb2_grpc as pb_grpc
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import ProtocolVersionInterceptor, read_proto_version

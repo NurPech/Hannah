@@ -41,7 +41,7 @@ from telegram.ext import (
 
 if TYPE_CHECKING:
     from hannah_telegram.grpc_client import HannahClient
-    from hannah_telegram.proto import hannah_pb2
+    from hannah_proto import hannah_pb2
 
 log = logging.getLogger(__name__)
 

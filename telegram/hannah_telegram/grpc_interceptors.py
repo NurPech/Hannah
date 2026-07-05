@@ -8,19 +8,17 @@ statisch aus der lokal mitkopierten PROTO_VERSION-Datei gelesen, einmalig
 beim Channel-Aufbau konfiguriert statt pro Call-Site.
 """
 import collections
-import os
 
 import grpc
 import grpc.aio
+from hannah_proto import PROTO_VERSION
 
 PROTO_VERSION_METADATA_KEY = "x-proto-version"
 
 
 def read_proto_version() -> str:
-    """Liest die lokale PROTO_VERSION-Datei (mitkopiert von proto/, siehe gen_proto.sh)."""
-    path = os.path.join(os.path.dirname(__file__), "proto", "PROTO_VERSION")
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read().strip()
+    """hannah_proto.PROTO_VERSION as the string the x-proto-version metadata value needs to be."""
+    return str(PROTO_VERSION)
 
 
 class _ClientCallDetails(

@@ -1,18 +1,19 @@
 """
-Regression test for #125: hannah.proto.__init__ patches every scope-split
-*_pb2 module's public names onto hannah_pb2 (see the comment in that file
-for why). This walks every *_pb2.py file next to __init__.py and asserts
+Regression test for #125: hannah_proto's own __init__ (in the published
+package, since #60 moved Core off the git-submodule/local-codegen pattern)
+patches every scope-split *_pb2 module's public names onto hannah_pb2. This
+walks every *_pb2.py module in the installed hannah_proto package and asserts
 nothing got left out of the patch.
 """
 
 import pkgutil
 
-from hannah import proto
-from hannah.proto import hannah_pb2
+import hannah_proto
+from hannah_proto import hannah_pb2
 
 
 def _scope_pb2_modules():
-    for _, name, _ in pkgutil.iter_modules(proto.__path__):
+    for _, name, _ in pkgutil.iter_modules(hannah_proto.__path__):
         if name.endswith("_pb2") and name != "hannah_pb2":
             yield name
 
@@ -23,7 +24,7 @@ def test_every_scope_module_is_patched_onto_hannah_pb2():
 
     missing = []
     for module_name in scope_modules:
-        module = __import__(f"hannah.proto.{module_name}", fromlist=["_"])
+        module = __import__(f"hannah_proto.{module_name}", fromlist=["_"])
         for name in dir(module):
             if name.startswith("_"):
                 continue

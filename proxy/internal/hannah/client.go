@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	pb "dev.kernstock.net/gessinger/voice/hannah/proxy/proto/hannah"
+	pb "github.com/NurPech/hannah-proto-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

@@ -5,6 +5,19 @@
 -->
 
 
+## 0.53.1
+### Hannah Core
+* Changed: `proto` submodule bumped to `hannah-proto` v0.3.3 (`PROTO_VERSION` 1 → 2) — the only change is the Go package moving to the public `github.com/NurPech/hannah-proto-go`; no message/schema changes. `PROTO_VERSION` copies in `core`, `telegram`, `proxy` updated to match (Refs #60)
+* Changed: `proto` submodule bumped to `hannah-proto` v0.3.4 — npm package tooling switched to `ts-proto` codegen; no `.proto`/schema changes, `PROTO_VERSION` unchanged at 2 (Refs #60)
+* Changed: `proto` submodule bumped to `hannah-proto` v0.3.5 — fixes the pip package's `hannah_pb2` re-export patch (see `hannah-proto`!30/#125); no `.proto`/schema changes, `PROTO_VERSION` unchanged at 2 (Refs #60)
+* Changed: switched from locally generating proto stubs off the `proto` git submodule to depending on the published `hannah-proto` PyPI package. `core/hannah/proto/` (generated stubs) removed; `scripts/gen_proto.sh` removed entirely (Core was its last consumer). Third and last of the three components originally in scope for this migration, see #60
+
+### Telegram
+* Changed: switched from locally generating proto stubs off the `proto` git submodule to depending on the published `hannah-proto` PyPI package. `telegram/hannah_telegram/proto/` (generated stubs) removed; `scripts/gen_proto.sh` no longer generates Telegram stubs. Second component migrated off the git-submodule pattern, see #60
+
+### Hannah Proxy
+* Changed: switched from locally generating proto stubs off the `proto` git submodule to depending on the published `github.com/NurPech/hannah-proto-go` Go module directly. `proxy/proto/hannah/` (generated stubs) and `proxy/gen_proto.sh` removed — first component migrated off the git-submodule pattern, see #60
+
 ## 0.53.0
 ### Hannah Core
 * Added: `SetVolume` NLU intent — "stell die Lautstärke auf 50"/"lauter"/"leiser" now sets satellite volume (absolute or relative ±10), last remaining piece of the Volume/Mute refactor (v0.13.0, 2026-05-27) (Refs #63)

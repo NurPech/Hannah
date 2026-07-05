@@ -1,7 +1,7 @@
-import os
 from unittest.mock import AsyncMock
 
 import grpc.aio
+from hannah_proto import PROTO_VERSION as _PROTO_VERSION
 
 from hannah_telegram.grpc_interceptors import (
     PROTO_VERSION_METADATA_KEY,
@@ -9,7 +9,7 @@ from hannah_telegram.grpc_interceptors import (
     read_proto_version,
 )
 
-EXPECTED_VERSION = "1"
+EXPECTED_VERSION = str(_PROTO_VERSION)
 
 
 class _FakeCallDetails:
@@ -21,11 +21,8 @@ class _FakeCallDetails:
         self.wait_for_ready = None
 
 
-def test_read_proto_version_matches_committed_file():
-    path = os.path.join(os.path.dirname(__file__), "..", "hannah_telegram", "proto", "PROTO_VERSION")
-    with open(path, "r", encoding="utf-8") as f:
-        expected = f.read().strip()
-    assert read_proto_version() == expected
+def test_read_proto_version_matches_package():
+    assert read_proto_version() == EXPECTED_VERSION
 
 
 async def test_intercept_unary_unary_adds_version_metadata():

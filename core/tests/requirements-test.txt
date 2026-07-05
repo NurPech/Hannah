@@ -5,3 +5,4 @@ requests>=2.31.0
 PyYAML>=6.0
 Werkzeug>=3.0.0
 paho-mqtt>=2.0.0
+hannah-proto>=0.3.5

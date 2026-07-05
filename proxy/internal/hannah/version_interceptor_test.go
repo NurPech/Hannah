@@ -4,14 +4,13 @@ import (
 	"context"
 	"testing"
 
-	pb "dev.kernstock.net/gessinger/voice/hannah/proxy/proto/hannah"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
 
-func TestProtoVersion_ReadFromEmbeddedFile(t *testing.T) {
-	if pb.ProtoVersion == "" {
-		t.Fatal("pb.ProtoVersion is empty — embed failed or PROTO_VERSION file missing")
+func TestProtoVersion_NonEmpty(t *testing.T) {
+	if protoVersion == "" {
+		t.Fatal("protoVersion is empty")
 	}
 }
 
@@ -32,8 +31,8 @@ func TestVersionUnaryInterceptor_AttachesMetadata(t *testing.T) {
 		t.Fatal("no outgoing metadata attached")
 	}
 	got := md.Get(ProtoVersionMetadataKey)
-	if len(got) != 1 || got[0] != pb.ProtoVersion {
-		t.Fatalf("expected %s=%q, got %v", ProtoVersionMetadataKey, pb.ProtoVersion, got)
+	if len(got) != 1 || got[0] != protoVersion {
+		t.Fatalf("expected %s=%q, got %v", ProtoVersionMetadataKey, protoVersion, got)
 	}
 }
 
@@ -54,7 +53,7 @@ func TestVersionUnaryInterceptor_PreservesExistingMetadata(t *testing.T) {
 	if got := md.Get("existing"); len(got) != 1 || got[0] != "value" {
 		t.Fatalf("existing metadata was dropped: %v", got)
 	}
-	if got := md.Get(ProtoVersionMetadataKey); len(got) != 1 || got[0] != pb.ProtoVersion {
+	if got := md.Get(ProtoVersionMetadataKey); len(got) != 1 || got[0] != protoVersion {
 		t.Fatalf("version metadata missing: %v", got)
 	}
 }
@@ -76,7 +75,7 @@ func TestVersionStreamInterceptor_AttachesMetadata(t *testing.T) {
 		t.Fatal("no outgoing metadata attached")
 	}
 	got := md.Get(ProtoVersionMetadataKey)
-	if len(got) != 1 || got[0] != pb.ProtoVersion {
-		t.Fatalf("expected %s=%q, got %v", ProtoVersionMetadataKey, pb.ProtoVersion, got)
+	if len(got) != 1 || got[0] != protoVersion {
+		t.Fatalf("expected %s=%q, got %v", ProtoVersionMetadataKey, protoVersion, got)
 	}
 }

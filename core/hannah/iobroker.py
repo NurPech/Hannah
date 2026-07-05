@@ -4,8 +4,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, Optional
-from hannah.proto.hannah_pb2 import AgentDevice as AgentDevice
-from hannah.proto.hannah_pb2 import AgentStateValue as AgentStateValue
+from hannah_proto.hannah_pb2 import AgentDevice as AgentDevice
+from hannah_proto.hannah_pb2 import AgentStateValue as AgentStateValue
 
 if TYPE_CHECKING:
     from .nlu import Intent

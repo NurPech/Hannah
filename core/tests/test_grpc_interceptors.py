@@ -1,7 +1,7 @@
-import os
 from unittest.mock import MagicMock
 
 import grpc
+from hannah_proto import PROTO_VERSION as _PROTO_VERSION
 
 from hannah.grpc_interceptors import (
     PROTO_VERSION_METADATA_KEY,
@@ -9,7 +9,7 @@ from hannah.grpc_interceptors import (
     read_proto_version,
 )
 
-EXPECTED_VERSION = "1"
+EXPECTED_VERSION = str(_PROTO_VERSION)
 
 
 def _handler_call_details(method="/hannah.HannahService/SubmitText", version=EXPECTED_VERSION):
@@ -25,11 +25,8 @@ def _stream_stream_handler():
     return grpc.stream_stream_rpc_method_handler(lambda request_iterator, context: iter(["ok"]))
 
 
-def test_read_proto_version_matches_committed_file():
-    path = os.path.join(os.path.dirname(__file__), "..", "hannah", "proto", "PROTO_VERSION")
-    with open(path, "r", encoding="utf-8") as f:
-        expected = f.read().strip()
-    assert read_proto_version() == expected
+def test_read_proto_version_matches_package():
+    assert read_proto_version() == EXPECTED_VERSION
 
 
 def test_matching_version_passes_through_unchanged():

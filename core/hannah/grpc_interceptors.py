@@ -17,9 +17,9 @@ jeder Mismatch/jedes Fehlen der Metadata mit FAILED_PRECONDITION abgelehnt,
 bevor der eigentliche Handler läuft.
 """
 import logging
-import os
 
 import grpc
+from hannah_proto import PROTO_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -27,10 +27,8 @@ PROTO_VERSION_METADATA_KEY = "x-proto-version"
 
 
 def read_proto_version() -> str:
-    """Liest die lokale PROTO_VERSION-Datei (mitkopiert von proto/, siehe gen_proto.sh)."""
-    path = os.path.join(os.path.dirname(__file__), "proto", "PROTO_VERSION")
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read().strip()
+    """hannah_proto.PROTO_VERSION as the string the x-proto-version metadata value needs to be."""
+    return str(PROTO_VERSION)
 
 
 class ProtocolVersionInterceptor(grpc.ServerInterceptor):
