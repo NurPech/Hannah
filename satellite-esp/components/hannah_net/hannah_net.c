@@ -295,17 +295,37 @@ static void heartbeat_task(void *arg)
             ESP_LOGD(TAG, "Heartbeat.");
         }
 
+        /* GOT_IP/MQTT_CONNECTED feuern nur einmal pro Verbindung, MQTT_DATA nur
+         * bei eingehenden Befehlen — im ruhigen Idle-Betrieb kommt sonst über
+         * lange Strecken kein einziges Lebenszeichen mehr rein. Deshalb hier
+         * zusätzlich aktiv nachfragen: solange der WiFi-Treiber sich noch für
+         * assoziiert hält, zählt das ebenfalls als Lebenszeichen. Das allein
+         * fängt den eigentlichen "Zombie"-Fall (Treiber hält sich fälschlich
+         * für verbunden) zwar nicht ab, aber genau dafür bleiben die anderen,
+         * echten Bestätigungen (IP/MQTT) oben als schärferes Signal bestehen. */
+        if (!s_ap_mode) {
+            wifi_ap_record_t ap_info;
+            if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) net_activity_mark();
+        }
+
         /* Netzwerk-Watchdog: greift aktiv ein, falls seit dem letzten
-         * bestätigten Lebenszeichen (IP-Bezug / MQTT-Connect / -Daten) zu
-         * viel Zeit vergangen ist — deckt den "Zombie"-WLAN-Fall ab, bei dem
-         * WIFI_EVENT_STA_DISCONNECTED nie feuert und die reaktive
-         * Reconnect-Logik in on_wifi_event() daher untätig bleibt. Im
-         * AP-Setup-Modus bewusst inaktiv (kein reguläres STA-Netz erwartet). */
+         * bestätigten Lebenszeichen zu viel Zeit vergangen ist — deckt den
+         * "Zombie"-WLAN-Fall ab, bei dem WIFI_EVENT_STA_DISCONNECTED nie
+         * feuert und die reaktive Reconnect-Logik in on_wifi_event() daher
+         * untätig bleibt. Im AP-Setup-Modus bewusst inaktiv (kein reguläres
+         * STA-Netz erwartet). */
         if (!s_ap_mode && s_last_net_activity_ms > 0) {
             int64_t elapsed_ms = esp_timer_get_time() / 1000 - s_last_net_activity_ms;
             if (elapsed_ms > (int64_t)CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S * 1000) {
                 ESP_LOGE(TAG, "Netzwerk-Watchdog: %lld s ohne Lebenszeichen — Neustart.",
                          elapsed_ms / 1000);
+                /* Erst vom TWDT abmelden — sonst kann der ordentliche Shutdown
+                 * (WiFi/MQTT stoppen, Log-Flush in hannah_webserver via
+                 * esp_register_shutdown_handler()) selbst den Task-Watchdog
+                 * auslösen und landet als harter Panic-Reset statt eines
+                 * sauberen esp_restart(), der den Shutdown-Handler-Chain
+                 * überspringt (persist_log_to_flash() liefe dann nie durch). */
+                esp_task_wdt_delete(NULL);
                 esp_restart();
             }
         }

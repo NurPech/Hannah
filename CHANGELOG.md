@@ -5,6 +5,11 @@
 -->
 
 
+## 0.56.1
+### Satellite Firmware
+* Fixed: v0.56.0's network watchdog (Refs #86) restarted satellites every `CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S` (~2 min) even when perfectly healthy — its liveness signal (IP acquired / MQTT connected/data) only fires once per connection or on incoming commands, so idle satellites with no inbound MQTT traffic never refreshed it. `heartbeat_task` now also marks liveness every cycle whenever `esp_wifi_sta_get_ap_info()` still reports an association, closing the gap for the common idle-but-healthy case (this alone doesn't catch the original "truly zombie" case the watchdog targets, but the IP/MQTT signals still do)
+* Fixed: `/log/last` never had any content — `heartbeat_task` is subscribed to the Task Watchdog Timer, and its own `esp_restart()` call (from the network watchdog) could take longer than the TWDT timeout to complete its orderly shutdown (WiFi/MQTT teardown, the log-flush shutdown handler), causing a hard TWDT panic-reset that skips the shutdown-handler chain entirely instead of a clean restart. Now unsubscribes from the TWDT (`esp_task_wdt_delete(NULL)`) immediately before the intentional restart
+
 ## 0.56.0
 ### Satellite Firmware
 * Added: `hannah_net`'s `heartbeat_task` now runs an active network watchdog — tracks time since the last confirmed network liveness signal (IP acquired, MQTT connected, or MQTT data received) and calls `esp_restart()` once `CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S` (default 120s) is exceeded. Addresses a "zombie" WiFi state where `WIFI_EVENT_STA_DISCONNECTED` never fires, so the existing reactive reconnect logic in `on_wifi_event()` never triggers (Refs #86)
