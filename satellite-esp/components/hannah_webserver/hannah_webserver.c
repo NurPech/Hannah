@@ -751,6 +751,7 @@ void hannah_webserver_start(void)
     config.stack_size        = 8192;
     config.recv_wait_timeout = 60;
     config.send_wait_timeout = 60;
+    config.max_uri_handlers  = 16;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start fehlgeschlagen");
@@ -770,8 +771,12 @@ void hannah_webserver_start(void)
         { .uri = "/log/last",  .method = HTTP_GET,  .handler = log_last_handler     },
         { .uri = "/nvs",       .method = HTTP_POST, .handler = nvs_post_handler     },
     };
-    for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++)
-        httpd_register_uri_handler(s_server, &routes[i]);
+    for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++) {
+        esp_err_t err = httpd_register_uri_handler(s_server, &routes[i]);
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "Route '%s' konnte nicht registriert werden: %s",
+                     routes[i].uri, esp_err_to_name(err));
+    }
 
     /* Log-Ringpuffer aktivieren — ab jetzt werden alle ESP_LOG* Aufrufe gepuffert */
     if (!s_orig_vprintf)

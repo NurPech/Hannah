@@ -5,6 +5,10 @@
 -->
 
 
+## 0.56.2
+### Satellite Firmware
+* Fixed: `hannah_webserver`'s httpd server left `config.max_uri_handlers` at the ESP-IDF default of 8 while registering 11 routes — `httpd_register_uri_handler()` silently failed for the 9th+ route (`/log/clear`, `/nvs`, and as of today `/log/last`), so those endpoints returned a framework-level 404 with no indication anything was wrong. Raised to 16 and registration failures are now logged (Refs #135)
+
 ## 0.56.1
 ### Satellite Firmware
 * Fixed: v0.56.0's network watchdog (Refs #86) restarted satellites every `CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S` (~2 min) even when perfectly healthy — its liveness signal (IP acquired / MQTT connected/data) only fires once per connection or on incoming commands, so idle satellites with no inbound MQTT traffic never refreshed it. `heartbeat_task` now also marks liveness every cycle whenever `esp_wifi_sta_get_ap_info()` still reports an association, closing the gap for the common idle-but-healthy case (this alone doesn't catch the original "truly zombie" case the watchdog targets, but the IP/MQTT signals still do)
