@@ -1371,9 +1371,11 @@ def main():
     def _on_agent_device_snapshot(devices):
         nonlocal _iobroker_ready
         iobroker.handle_device_snapshot(devices)
-        orphaned = room_manager.sync_rooms(iobroker.rooms)
-        for device_id, room_id in orphaned:
-            grpc_servicer.agent_satellite_deleted(device_id, room_id)
+        # Kein sync_rooms() hier: iobroker.rooms enthält nur Räume mit mindestens einem
+        # aktuell passenden virtualDevice-State — Räume ohne virtualDevice (z.B. nur ein
+        # Satellit drin) würden fälschlich als verschwunden behandelt und gelöscht.
+        # Raum-Lebenszyklus läuft ausschließlich über _on_agent_room_snapshot() (siehe
+        # dort), das den vollständigen, geräteunabhängigen enum.rooms.*-Katalog bekommt (#134).
         db_group_rooms = {g["group_id"]: g["display_name"] for g in room_manager.get_groups()}
         nlu._rooms = {**iobroker.rooms, **_group_pseudo_rooms, **db_group_rooms}
         nlu._devices = iobroker.devices

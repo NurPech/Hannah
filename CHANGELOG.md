@@ -5,6 +5,10 @@
 -->
 
 
+## 0.55.2
+### Hannah Core
+* Fixed: `_on_agent_device_snapshot()` no longer calls `sync_rooms()` a second time on a device-derived, incomplete room list — a room with no currently-matching virtualDevice state (e.g. a room with only a satellite in it) was getting deleted (and any assigned satellite orphaned) on every reconnect, undoing the correct sync `_on_agent_room_snapshot()` had just done moments earlier (Refs #134)
+
 ## 0.55.1
 ### Hannah Core
 * Fixed: `handle_device_snapshot()` no longer lets a category-less sibling state (e.g. a power-meter state whose role/function doesn't resolve to anything) blank out a device's already-resolved category from another sibling state (e.g. the `on` state of a socket) — first non-empty category wins, regardless of processing order within the snapshot (Refs #133)
