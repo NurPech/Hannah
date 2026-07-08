@@ -81,5 +81,11 @@ CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
 CONFIG_HANNAH_STATUS_LED_ENABLED=y
 CONFIG_HANNAH_STATUS_LED_GPIO=18
 
+# Task-Watchdog (TWDT) — bislang lief er nur passiv mit (Default-Idle-Task-
+# Überwachung, reiner Log-Warn ohne Konsequenz). Jetzt löst ein Timeout
+# tatsächlich einen Reset aus; heartbeat_task() subscribt sich zusätzlich
+# selbst (siehe hannah_net.c) und hebt dafür das Timeout passend an (Refs #86)
+CONFIG_ESP_TASK_WDT_PANIC=y
+
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

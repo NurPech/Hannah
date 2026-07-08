@@ -10,6 +10,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "driver/gpio.h"
 
 #include "hannah_config.h"
@@ -24,6 +25,27 @@
 #include "hannah_sd.h"
 
 static const char *TAG = "main";
+
+/* Refs #86 Punkt 2 — hilft nachträglich zu verifizieren, ob ein Reset durch
+ * den Netzwerk-Watchdog (hannah_net.c) tatsächlich greift, statt z.B. an
+ * einem Brownout oder Panic zu liegen. Geloggt erst nach hannah_webserver_start(),
+ * damit es im Ringpuffer landet und ohne seriellen Zugang sichtbar ist. */
+static const char *reset_reason_str(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON:   return "Power-On";
+    case ESP_RST_EXT:       return "Externer Reset";
+    case ESP_RST_SW:        return "Software (esp_restart)";
+    case ESP_RST_PANIC:     return "Panic";
+    case ESP_RST_INT_WDT:   return "Interrupt-Watchdog";
+    case ESP_RST_TASK_WDT:  return "Task-Watchdog";
+    case ESP_RST_WDT:       return "Sonstiger Watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep-Sleep-Wakeup";
+    case ESP_RST_BROWNOUT:  return "Brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "Unbekannt";
+    }
+}
 
 static void on_play_asset(const char *asset_id)
 {
@@ -100,6 +122,11 @@ void app_main(void)
 
     /* Webserver — immer aktiv (STA: erreichbar über LAN-IP, AP: 192.168.4.1) */
     hannah_webserver_start();
+
+    /* Reset-Grund — erst jetzt loggen, damit er im Log-Ringpuffer landet
+     * (siehe /log bzw. /log/last) statt nur auf UART zu verschwinden. */
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    ESP_LOGI(TAG, "Reset-Grund: %s (%d)", reset_reason_str(reset_reason), reset_reason);
 
     /* Audio-Pipeline */
     hannah_audio_init();

@@ -5,6 +5,13 @@
 -->
 
 
+## 0.56.0
+### Satellite Firmware
+* Added: `hannah_net`'s `heartbeat_task` now runs an active network watchdog — tracks time since the last confirmed network liveness signal (IP acquired, MQTT connected, or MQTT data received) and calls `esp_restart()` once `CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S` (default 120s) is exceeded. Addresses a "zombie" WiFi state where `WIFI_EVENT_STA_DISCONNECTED` never fires, so the existing reactive reconnect logic in `on_wifi_event()` never triggers (Refs #86)
+* Added: `heartbeat_task` now also subscribes itself to the Task Watchdog Timer (TWDT) and enables `CONFIG_ESP_TASK_WDT_PANIC`, so a hang of the task itself (not just a dead network) now triggers a reset too — previously TWDT only passively watched the idle tasks and only logged, never reset. Since TWDT has a single shared timeout, it's now raised to `CONFIG_HANNAH_HEARTBEAT_INTERVAL_S + 5s` to fit heartbeat's own feed cadence, which also loosens the idle-task hang-detection window from the previous 5s default to the same value (Refs #86)
+* Added: `hannah_webserver` now persists the RAM log ring buffer to flash (`/assets/_hannah_last_log.txt` on the existing SPIFFS partition) via an `esp_register_shutdown_handler()` callback, so it survives any orderly `esp_restart()` (e.g. the new network watchdog above) instead of being lost with the RAM it lived in. Retrievable after reboot via new `GET /log/last`, linked from the `/log` page — no serial connection or PC-at-the-right-moment needed (Refs #86)
+* Added: boot now logs `esp_reset_reason()` (Power-On/Panic/Watchdog/Brownout/…) once the webserver is up, so it lands in the log ring buffer (and thus `/log`/`/log/last`) instead of only going out over a UART nobody has connected. Lets you confirm after the fact whether a given restart actually came from the new network watchdog (Refs #86)
+
 ## 0.55.2
 ### Hannah Core
 * Fixed: `_on_agent_device_snapshot()` no longer calls `sync_rooms()` a second time on a device-derived, incomplete room list — a room with no currently-matching virtualDevice state (e.g. a room with only a satellite in it) was getting deleted (and any assigned satellite orphaned) on every reconnect, undoing the correct sync `_on_agent_room_snapshot()` had just done moments earlier (Refs #134)

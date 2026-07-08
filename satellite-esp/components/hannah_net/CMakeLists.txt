@@ -12,4 +12,5 @@ idf_component_register(
         espressif__cjson
         esp_system
         app_update
+        esp_timer
 )

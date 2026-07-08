@@ -31,6 +31,8 @@
 #include "esp_system.h"
 #include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -65,6 +67,7 @@ static int                     s_proxy_port     = 0;
 static volatile bool           s_ap_mode        = false;
 static volatile bool           s_ap_pending_exit = false;  /* Recovery erfolgreich, wartet auf letzten AP-Client */
 static bool                    s_sntp_started   = false;
+static volatile int64_t        s_last_net_activity_ms = 0;  /* Netzwerk-Watchdog, siehe net_activity_mark() */
 
 static EventGroupHandle_t        s_wifi_event_group;
 static EventGroupHandle_t        s_net_events  = NULL;
@@ -89,6 +92,15 @@ static hannah_net_play_asset_cb_t         s_play_asset_cb         = NULL;
 static hannah_net_start_listening_cb_t    s_start_listening_cb    = NULL;
 
 /* ── Hilfsfunktionen ─────────────────────────────────────────────────────── */
+
+/* Markiert ein bestätigtes Netzwerk-Lebenszeichen (IP bezogen, MQTT verbunden
+ * oder Daten empfangen) für den Netzwerk-Watchdog in heartbeat_task(). Bewusst
+ * nicht an WIFI_EVENT_STA_DISCONNECTED gekoppelt — im "Zombie"-WLAN-Fall
+ * feuert genau dieses Event nicht mehr, daher braucht es ein aktives Signal. */
+static void net_activity_mark(void)
+{
+    s_last_net_activity_ms = esp_timer_get_time() / 1000;
+}
 
 static void send_control(const char *json_str)
 {
@@ -239,10 +251,41 @@ static void udp_receive_task(void *arg)
 
 /* ── Heartbeat ───────────────────────────────────────────────────────────── */
 
+/* Hängt heartbeat_task an den Task-Watchdog (TWDT) — deckt einen Hang der
+ * Task selbst ab, nicht nur "WLAN tot" (siehe Netzwerk-Watchdog unten). Die
+ * Idle-Tasks sind bereits per CONFIG_ESP_TASK_WDT_INIT mit
+ * CONFIG_ESP_TASK_WDT_TIMEOUT_S (Default 5s) subscribed; da heartbeat_task
+ * nur einmal pro CONFIG_HANNAH_HEARTBEAT_INTERVAL_S (bis zu 300s) füttert,
+ * muss das TWDT-Timeout auf einen Wert über diesem Intervall angehoben
+ * werden — das gilt dann für alle subscribten Tasks (TWDT hat nur ein
+ * gemeinsames Timeout), die Idle-Task-Hang-Erkennung wird also entsprechend
+ * länger, statt bei den Default-5s zu bleiben. */
+static void heartbeat_task_wdt_setup(void)
+{
+    uint32_t idle_mask = 0;
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0
+    idle_mask |= (1 << 0);
+#endif
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1
+    idle_mask |= (1 << 1);
+#endif
+    esp_task_wdt_config_t wdt_cfg = {
+        .timeout_ms     = (CONFIG_HANNAH_HEARTBEAT_INTERVAL_S + 5) * 1000,
+        .idle_core_mask = idle_mask,
+        .trigger_panic  = true,
+    };
+    esp_task_wdt_reconfigure(&wdt_cfg);
+    esp_task_wdt_add(NULL);
+}
+
 static void heartbeat_task(void *arg)
 {
+    heartbeat_task_wdt_setup();
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_HANNAH_HEARTBEAT_INTERVAL_S * 1000));
+        esp_task_wdt_reset();
+
         if (s_proxy_ready) {
             char msg[96];
             snprintf(msg, sizeof(msg),
@@ -250,6 +293,21 @@ static void heartbeat_task(void *arg)
                      hannah_config_get()->device_id);
             send_control(msg);
             ESP_LOGD(TAG, "Heartbeat.");
+        }
+
+        /* Netzwerk-Watchdog: greift aktiv ein, falls seit dem letzten
+         * bestätigten Lebenszeichen (IP-Bezug / MQTT-Connect / -Daten) zu
+         * viel Zeit vergangen ist — deckt den "Zombie"-WLAN-Fall ab, bei dem
+         * WIFI_EVENT_STA_DISCONNECTED nie feuert und die reaktive
+         * Reconnect-Logik in on_wifi_event() daher untätig bleibt. Im
+         * AP-Setup-Modus bewusst inaktiv (kein reguläres STA-Netz erwartet). */
+        if (!s_ap_mode && s_last_net_activity_ms > 0) {
+            int64_t elapsed_ms = esp_timer_get_time() / 1000 - s_last_net_activity_ms;
+            if (elapsed_ms > (int64_t)CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S * 1000) {
+                ESP_LOGE(TAG, "Netzwerk-Watchdog: %lld s ohne Lebenszeichen — Neustart.",
+                         elapsed_ms / 1000);
+                esp_restart();
+            }
         }
     }
 }
@@ -264,6 +322,7 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
     switch (event_id) {
     case MQTT_EVENT_CONNECTED: {
         ESP_LOGI(TAG, "MQTT verbunden.");
+        net_activity_mark();
         esp_ota_mark_app_valid_cancel_rollback();
         esp_mqtt_client_subscribe(s_mqtt_client, "hannah/server", 0);
         char topic[128];
@@ -299,6 +358,7 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         break;
 
     case MQTT_EVENT_DATA: {
+        net_activity_mark();
         char topic[128] = {0};
         int  tlen = event->topic_len < (int)sizeof(topic) - 1
                     ? event->topic_len : (int)sizeof(topic) - 1;
@@ -538,6 +598,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "IP: " IPSTR, IP2STR(&ev->ip_info.ip));
         s_wifi_retry = 0;
+        net_activity_mark();
         if (s_ap_mode) {
             /* Recovery aus dem AP-Setup-Modus: Original-Netz wieder da. AP-Rolle
              * nur sofort abwerfen, wenn niemand mehr am Captive Portal hängt —

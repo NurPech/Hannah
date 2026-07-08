@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <math.h>
 
 #include "esp_log.h"
@@ -91,6 +92,34 @@ static size_t log_snapshot(char *out)
     memcpy(out,        s_log_buf + wp, tail);
     memcpy(out + tail, s_log_buf,      wp);
     return LOG_BUF_SIZE;
+}
+
+/* Auf der von hannah_asset gemounteten SPIFFS-Partition — Log-Datei liegt also
+ * nur mit, sobald deren Mount steht (siehe hannah_asset_init(), läuft früh im
+ * Boot, aber nach hannah_net_init()). Eigener Name statt "<asset_id>.wav",
+ * damit der Asset-Sync sie nicht anfasst. */
+#define CRASH_LOG_PATH "/assets/_hannah_last_log.txt"
+
+/* Als esp_restart()-Shutdown-Handler registriert (siehe hannah_webserver_start()) —
+ * läuft bei jedem geordneten Neustart, u.a. dem Netzwerk-Watchdog in
+ * hannah_net.c. Rettet den sonst rein flüchtigen RAM-Ringpuffer über den
+ * Neustart hinweg, abrufbar danach über GET /log/last. */
+static void persist_log_to_flash(void)
+{
+    char *buf = malloc(LOG_BUF_SIZE);
+    if (!buf) return;
+    size_t len = log_snapshot(buf);
+
+    FILE *f = fopen(CRASH_LOG_PATH, "wb");
+    if (!f) {
+        ESP_LOGW(TAG, "Log-Sicherung vor Neustart fehlgeschlagen (SPIFFS nicht gemountet?)");
+        free(buf);
+        return;
+    }
+    fwrite(buf, 1, len, f);
+    fclose(f);
+    free(buf);
+    ESP_LOGI(TAG, "Log vor Neustart gesichert (%u Bytes) -> %s", (unsigned)len, CRASH_LOG_PATH);
 }
 
 static const char S_FOOT[] = "</body></html>";
@@ -539,6 +568,7 @@ static esp_err_t log_page_handler(httpd_req_t *req)
         "<button class=btn id=pb onclick=\"paused=!paused;"
           "this.textContent=paused?'▶ Fortsetzen':'⏸ Pause'\">⏸ Pause</button>"
         "<button class='btn btn-red' onclick=clearLog()>Löschen</button>"
+        "<a class=btn href=/log/last target=_blank>Log vor letztem Neustart</a>"
         "<div id=log></div>"
         "<script>"
         "let paused=false;"
@@ -580,6 +610,27 @@ static esp_err_t log_clear_handler(httpd_req_t *req)
     s_log_full = false;
     portEXIT_CRITICAL(&s_log_mux);
     httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
+/* Log-Stand von vor dem letzten Neustart (siehe persist_log_to_flash()) —
+ * einzige Möglichkeit, nach einem chicken-and-egg-Neustart (Ringpuffer war
+ * rein im RAM) noch an die Umstände davor zu kommen, ganz ohne seriellen
+ * Zugang oder PC-Anwesenheit im richtigen Moment. */
+static esp_err_t log_last_handler(httpd_req_t *req)
+{
+    FILE *f = fopen(CRASH_LOG_PATH, "rb");
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Kein gesichertes Log vorhanden.");
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, "text/plain");
+    char chunk[512];
+    size_t n;
+    while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0)
+        httpd_resp_send_chunk(req, chunk, n);
+    httpd_resp_send_chunk(req, NULL, 0);
+    fclose(f);
     return ESP_OK;
 }
 
@@ -716,6 +767,7 @@ void hannah_webserver_start(void)
         { .uri = "/log",       .method = HTTP_GET,  .handler = log_page_handler     },
         { .uri = "/log/data",  .method = HTTP_GET,  .handler = log_data_handler     },
         { .uri = "/log/clear", .method = HTTP_POST, .handler = log_clear_handler    },
+        { .uri = "/log/last",  .method = HTTP_GET,  .handler = log_last_handler     },
         { .uri = "/nvs",       .method = HTTP_POST, .handler = nvs_post_handler     },
     };
     for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++)
@@ -724,6 +776,7 @@ void hannah_webserver_start(void)
     /* Log-Ringpuffer aktivieren — ab jetzt werden alle ESP_LOG* Aufrufe gepuffert */
     if (!s_orig_vprintf)
         s_orig_vprintf = esp_log_set_vprintf(log_capture);
+    esp_register_shutdown_handler(persist_log_to_flash);
 
     char ip[24];
     hannah_net_get_ip_str(ip, sizeof(ip));

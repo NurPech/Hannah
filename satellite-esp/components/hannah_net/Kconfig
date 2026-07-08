@@ -60,4 +60,16 @@ menu "Hannah Network"
         help
             Maximale Anzahl WiFi-Reconnects bevor esp_restart() aufgerufen wird.
 
+    config HANNAH_NET_WATCHDOG_TIMEOUT_S
+        int "Netzwerk-Watchdog Timeout (s)"
+        default 120
+        range 30 600
+        help
+            Vergeht seit dem letzten bestätigten Netzwerk-Lebenszeichen
+            (IP-Bezug, MQTT-Connect oder -Datenempfang) mehr Zeit als hier
+            eingestellt, löst der Heartbeat-Task aktiv esp_restart() aus.
+            Fängt einen "Zombie"-WLAN-Zustand ab, bei dem
+            WIFI_EVENT_STA_DISCONNECTED nicht mehr feuert und die reaktive
+            Reconnect-Logik daher nie greift.
+
 endmenu
