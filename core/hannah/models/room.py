@@ -1,4 +1,4 @@
-from hannah.models.base_module import BaseModel
+from pyorm import BaseModel
 
 class Room(BaseModel):
     __table__ = "rooms"

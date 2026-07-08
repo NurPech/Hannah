@@ -1,4 +1,4 @@
-from hannah.models.base_module import BaseModel
+from pyorm import BaseModel
 
 class Satellite(BaseModel):
     __table__ = "satellites"

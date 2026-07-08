@@ -68,6 +68,26 @@ class TestQueryAlarms:
         assert intent.name != "QueryAlarms"
 
 
+class TestFindQueryStatePower:
+    """#121 — "Strom"/"Watt"/"Leistung" müssen auf den Watt-Wert (qs="power") zielen,
+    nicht auf den generischen on/off-Fallback, damit Steckdosen ihre Kategorie-Antwort
+    (Watt) bekommen statt der einfachen an/aus-Antwort."""
+
+    def test_watt(self, nlu):
+        assert nlu._find_query_state("wie viel watt braucht der pc") == "power"
+
+    def test_leistung(self, nlu):
+        assert nlu._find_query_state("wie hoch ist die leistung vom pc") == "power"
+
+    def test_strom_takes_priority_over_on(self, nlu):
+        """'mein' enthält als Substring 'ein', das sonst schon die on/off-Erkennung
+        triggern würde — 'strom' muss vorher greifen."""
+        assert nlu._find_query_state("wie viel strom braucht mein pc") == "power"
+
+    def test_plain_on_off_unaffected(self, nlu):
+        assert nlu._find_query_state("ist der pc an") == "on"
+
+
 class TestSetVolume:
     """#63 — SetVolume-Intent: absolut ("Lautstärke auf 50") oder relativ ("lauter"/"leiser")."""
 

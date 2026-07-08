@@ -540,6 +540,14 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             ok = self._set_satellite_room(request.device_id, request.room_id or None, requestor_id=request.requestor_id)
         except SatellitePermissionError:
             return pb.StatusResponse(ok=False, message="forbidden")
+        if ok:
+            connected = self._get_satellites().get(request.device_id)
+            self.agent_satellite_update(
+                request.device_id,
+                request.room_id or "",
+                connected.get("addr", "") if connected else "",
+                connected is not None,
+            )
         return pb.StatusResponse(ok=ok, message="set" if ok else "not found")
 
     def SetSatelliteDisplayName(self, request, _context):

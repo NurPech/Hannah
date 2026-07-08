@@ -105,7 +105,7 @@ class TriggerEngine:
         on_change: Callable[[], None] | None = None,                            # nach Create/Update: WatchMore neu pushen
     ):
         """
-        db:            Callable → sqlite3.Connection (siehe hannah.utils.db.get_db)
+        db:            Callable → pyorm.Database (siehe hannah.utils.db.get_db)
         announce_fn:   fn(room, text) — ruft process_announcement() auf
         rephrase_fn:   fn(text) → text — LLM-Umformulierung; None = Feature deaktiviert
         ask_fn:        fn(room, question, callback) — stellt eine Frage per TTS und ruft

@@ -40,12 +40,12 @@ def _create_user(db_callable, username, trust_level) -> int:
 
 
 def _insert_room(db_callable, room_id, display_name):
-    with db_callable() as conn:
+    with db_callable().connection as conn:
         conn.execute("INSERT INTO rooms (room_id, display_name) VALUES (?, ?)", (room_id, display_name))
 
 
 def _insert_satellite(mgr, device_id, seed, days_old):
-    with mgr._db() as conn:
+    with mgr._db().connection as conn:
         conn.execute(
             """INSERT INTO satellites (device_id, seed, display_name, created_at)
                VALUES (?, ?, ?, datetime('now', ?))""",
@@ -71,7 +71,7 @@ class TestCleanupStaleSeeds:
         assert manager.get_satellite("new-seed") is not None
 
     def test_paired_satellite_kept_regardless_of_age(self, manager):
-        with manager._db() as conn:
+        with manager._db().connection as conn:
             conn.execute(
                 """INSERT INTO satellites (device_id, seed, display_name, paired_at, created_at)
                    VALUES (?, NULL, ?, datetime('now', '-30 days'), datetime('now', '-30 days'))""",
@@ -109,7 +109,7 @@ class TestRoomAndUserLookup:
     """get_room_satellite_ids/get_user_satellites — Grundlage für #31s Announce-Routing."""
 
     def test_get_room_satellite_ids(self, manager):
-        with manager._db() as conn:
+        with manager._db().connection as conn:
             conn.execute("INSERT INTO rooms (room_id, display_name) VALUES ('wohnzimmer', 'Wohnzimmer')")
         _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
         _insert_satellite(manager, "ku-esp", "seed-2", days_old=0)
@@ -118,7 +118,7 @@ class TestRoomAndUserLookup:
         assert manager.get_room_satellite_ids("wohnzimmer") == ["wz-esp"]
 
     def test_get_room_satellite_ids_empty_room(self, manager):
-        with manager._db() as conn:
+        with manager._db().connection as conn:
             conn.execute("INSERT INTO rooms (room_id, display_name) VALUES ('keller', 'Keller')")
 
         assert manager.get_room_satellite_ids("keller") == []

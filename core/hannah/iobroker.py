@@ -345,11 +345,24 @@ class IoBrokerClient:
         # Mehrere Geräte → Zusammenfassung
         return self._summarize(targets, qs, room_label)
 
+    def _category_query_applies(self, category: str, qs: Optional[str]) -> bool:
+        """Ob die Kategorie-basierte Sensor-Antwort für diese Abfrage greifen soll.
+
+        "socket" hat anders als die übrigen _CATEGORY_STATES-Kategorien zusätzlich
+        einen regulären on/off-Schaltzustand — die Watt-Antwort darf normale
+        an/aus-Abfragen nicht kapern, greift nur wenn explizit nach dem
+        Verbrauch gefragt wurde (qs=="power", #121)."""
+        if category not in self._CATEGORY_STATES:
+            return False
+        if category == "socket":
+            return qs == "power"
+        return True
+
     def _summarize(self, targets: list, qs: Optional[str], room_label: str) -> Optional[str]:
         """Fasst mehrere Geräte in einem Raum zusammen."""
         # Sensor-Kategorien direkt beschreiben (haben kein on/off)
         categories = {dev.category for dev in targets}
-        if len(categories) == 1 and list(categories)[0] in self._CATEGORY_STATES:
+        if len(categories) == 1 and self._category_query_applies(list(categories)[0], qs):
             cat_answer = self._describe_category(list(categories)[0], targets, room_label)
             if cat_answer is not None:
                 return cat_answer
@@ -385,7 +398,7 @@ class IoBrokerClient:
 
         # Kategorie-basierte Sensor-Zusammenfassung
         categories = {dev.category for dev in targets}
-        if len(categories) == 1:
+        if len(categories) == 1 and self._category_query_applies(list(categories)[0], qs):
             cat_answer = self._describe_category(list(categories)[0], targets, room_label)
             if cat_answer is not None:
                 return cat_answer
@@ -400,7 +413,7 @@ class IoBrokerClient:
             return "Ich habe keine Gerätedaten."
 
         # Sensor-Kategorien direkt beschreiben (haben kein on/off)
-        if category_filter and category_filter in self._CATEGORY_STATES:
+        if category_filter and self._category_query_applies(category_filter, qs):
             lines = []
             for dev in sorted(targets, key=lambda d: d.room):
                 desc = self._describe_device(dev, qs)
@@ -476,6 +489,9 @@ class IoBrokerClient:
         ],
         "illuminance_sensor": [
             ("illuminance", "lx", None),
+        ],
+        "socket": [
+            ("power", "Watt", None),
         ],
     }
 
@@ -555,9 +571,10 @@ class IoBrokerClient:
             return f"{name} im {room}: {', '.join(parts)}."
 
         # Kategorie-basierte Sensor-Beschreibung
-        cat_answer = self._describe_category(dev.category, [dev], room)
-        if cat_answer is not None:
-            return cat_answer
+        if self._category_query_applies(dev.category, qs):
+            cat_answer = self._describe_category(dev.category, [dev], room)
+            if cat_answer is not None:
+                return cat_answer
 
         if qs == "level" or (qs is None and "level" in dev.current):
             val = dev.current.get("level")

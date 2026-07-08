@@ -1,8 +1,8 @@
 import os
 import secrets
-import sqlite3
 import logging
 from werkzeug.security import generate_password_hash
+from pyorm import Database
 
 _log = logging.getLogger(__name__)
 
@@ -169,10 +169,11 @@ CREATE TABLE IF NOT EXISTS "user_to_car" (
 def get_db():
     """Frische Connection pro Aufruf — Hannah Core läuft nicht request-scoped wie Flask,
     sondern aus gRPC-Handlern/MQTT-Callbacks/Telegram, daher kein g-Caching."""
-    db = sqlite3.connect(DB_PATH, check_same_thread=False)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
+    # SQLiteDialect.connect() setzt bereits check_same_thread=False + row_factory=Row,
+    # aber keine Pragmas — die bleiben Hannah-spezifisch und werden hier weiterhin explizit gesetzt.
+    db = Database.sqlite(DB_PATH)
+    db.connection.execute("PRAGMA journal_mode=WAL")
+    db.connection.execute("PRAGMA foreign_keys=ON")
     return db
 
 
@@ -186,7 +187,9 @@ def _col_names(db, table):
 
 def init_db():
     db = get_db()
-    db.executescript(SCHEMA)
+    # executescript() ist SQLite-spezifisches Bootstrapping, kein Teil der
+    # dialectorm-Abstraktion — daher bewusst über die rohe Connection statt db.execute().
+    db.connection.executescript(SCHEMA)
 
     # Additive column migrations for tables that already existed before a column was
     # introduced — executescript()'s CREATE TABLE IF NOT EXISTS is a no-op on a table

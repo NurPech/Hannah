@@ -129,6 +129,65 @@ class TestDescribeCategoryHumidity:
         assert "54.3 %" in result
 
 
+class TestSocketPowerQuery:
+    """#121 — "socket" hat als einzige _CATEGORY_STATES-Kategorie zusätzlich einen
+    regulären on/off-Schaltzustand. Die Watt-Antwort darf normale an/aus-Abfragen
+    nicht kapern (Regression: naive Umsetzung ließ z.B. "ist die Steckdose an?"
+    nur noch die Watt-Zahl beantworten), greift nur bei qs=="power"."""
+
+    @pytest.fixture
+    def client(self):
+        return IoBrokerClient({"host": "localhost", "port": 8093})
+
+    def _device(self, **current):
+        return Device(
+            id="javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer",
+            name="PC",
+            key="pc",
+            room="schlafzimmer",
+            room_display_name="Schlafzimmer",
+            floor="OG",
+            category="socket",
+            current=current,
+        )
+
+    def test_describe_category_reports_watt(self, client):
+        dev = self._device(power=42.0)
+        result = client._describe_category("socket", [dev], "Schlafzimmer")
+        assert "42.0 Watt" in result
+
+    def test_category_query_applies_only_for_power(self, client):
+        assert client._category_query_applies("socket", "power") is True
+        assert client._category_query_applies("socket", "on") is False
+        assert client._category_query_applies("socket", None) is False
+
+    def test_other_categories_unaffected_by_guard(self, client):
+        """Kategorien ohne konkurrierenden on/off-Zustand greifen weiter unabhängig von qs."""
+        assert client._category_query_applies("temperature_sensor", None) is True
+        assert client._category_query_applies("temperature_sensor", "on") is True
+        assert client._category_query_applies("does_not_exist", "power") is False
+
+    def test_describe_device_power_query_returns_watt(self, client):
+        dev = self._device(on=True, power=42.0)
+        result = client._describe_device(dev, "power")
+        assert "42.0 Watt" in result
+
+    def test_describe_device_on_query_returns_status_not_watt(self, client):
+        """Regression-Guard: 'ist die Steckdose an?' (qs='on') darf nicht in die
+        Watt-Kategorie-Antwort abbiegen."""
+        dev = self._device(on=True, power=42.0)
+        result = client._describe_device(dev, "on")
+        assert "an" in result
+        assert "Watt" not in result
+
+    def test_describe_device_default_still_mentions_power(self, client):
+        """Der bestehende on/off-Fallback hängt Watt weiterhin optional in Klammern an."""
+        dev = self._device(on=True, power=42.0)
+        result = client._describe_device(dev, None)
+        assert "an" in result
+        assert "42.0 W" in result or "42 W" in result
+
+
 class TestHandleStateUpdate:
     """Regression: live updates go through state_names reverse-lookup, the initial
     gRPC snapshot does not — a suffix missing from state_names freezes that field

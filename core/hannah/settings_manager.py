@@ -40,6 +40,7 @@ DEFAULT_NLU_SETTINGS: dict = {
         "luftfeuchtigkeit": "humidity_sensor", "luftfeuchte": "humidity_sensor",
         "feuchtigkeit": "humidity_sensor", "feuchte": "humidity_sensor",
         "helligkeit": "illuminance_sensor", "lux": "illuminance_sensor",
+        "watt": "socket", "leistung": "socket",
     },
     "query_words": ["ist", "sind", "wie", "was", "welche", "wieviel", "status"],
     "temperature_units": ["grad", "°c", "°", "celsius"],
@@ -50,6 +51,7 @@ DEFAULT_IOBROKER_STATE_NAMES: dict = {
     "on": "on", "level": "level", "color": "color", "colorTemp": "colorTemp",
     "current": "current", "expected": "expected", "illuminance": "illuminance",
     "open": "open", "iaq": "iaq", "co2_equiv": "co2_equiv", "voc_equiv": "voc_equiv",
+    "power": "power",
 }
 
 

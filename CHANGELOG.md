@@ -5,6 +5,12 @@
 -->
 
 
+## 0.55.0
+### Hannah Core
+* Changed: `core/hannah/models/` no longer carries its own hand-rolled mini-ORM (`base_module.py`/`query.py`) — replaced by the published `dialectorm-m1kad0` package (import name `pyorm`), the same code extracted and generalized into a standalone, dialect-aware (SQLite/Postgres/MySQL) library. Pure internal swap, no behavior change (Refs #132)
+* Fixed: `SetSatelliteRoom` now pushes an `AgentSatelliteUpdate` to all connected adapters right away, instead of adapters only learning about a room reassignment on the affected satellite's next connect/disconnect event (Refs #109)
+* Added: "Wie viel Strom/Watt/Leistung braucht mein PC?" — sockets now have a Watt-based category answer (`_CATEGORY_STATES["socket"]`), gated to the new `power` query intent so it doesn't hijack plain on/off status queries. Requires a `power` entry in the instance's `iobroker.state_names` setting to actually receive the value (new installs get it seeded by default now) (Refs #121)
+
 ## 0.54.0
 ### Hannah Core
 * Added: `GetTimers`/`DeleteTimer` unary RPCs — query/cancel a user's active timers independent of the `TimerConnect` stream (e.g. for a future "my timers" view), without needing to be the connected Timer Service. Bridges the async `TimerListResponse` push to a synchronous unary call via a one-shot waiter queue (Refs #97)

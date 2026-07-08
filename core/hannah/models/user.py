@@ -1,5 +1,5 @@
 from hannah.utils import EventEmitterMixin
-from hannah.models.base_module import BaseModel
+from pyorm import BaseModel
 
 class User(BaseModel, EventEmitterMixin):
     __table__ = "users"

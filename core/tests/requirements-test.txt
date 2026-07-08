@@ -6,3 +6,4 @@ PyYAML>=6.0
 Werkzeug>=3.0.0
 paho-mqtt>=2.0.0
 hannah-proto>=0.3.7
+dialectorm-m1kad0>=0.1.1

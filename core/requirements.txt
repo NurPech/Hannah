@@ -8,3 +8,4 @@ miniaudio>=1.58     # Audio-Dekodierung (MP3, WAV, OGG, FLAC) für Bestätigungs
 grpcio>=1.81.1      # gRPC-Laufzeit (Server + Client)
 hannah-proto>=0.3.7 # Proto schema — published package instead of the git-submodule/local-codegen pattern (#60)
 werkzeug>=3.1.0     # Password-Hashing (generate_password_hash in db.py/user_manager.py/grpc_server.py) — bisher nur transitiv über flask installiert, das mit der alten In-Process-WebUI entfallen ist
+dialectorm-m1kad0>=0.1.1 # Mini-ORM (import name: pyorm) — published package instead of the in-repo hannah/models/base_module.py copy (#132)

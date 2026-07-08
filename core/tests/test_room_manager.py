@@ -26,7 +26,7 @@ def satellites(manager):
 
 
 def _insert_satellite(mgr, device_id, seed, days_old):
-    with mgr._db() as conn:
+    with mgr._db().connection as conn:
         conn.execute(
             """INSERT INTO satellites (device_id, seed, display_name, created_at)
                VALUES (?, ?, ?, datetime('now', ?))""",

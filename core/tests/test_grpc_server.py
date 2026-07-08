@@ -299,7 +299,10 @@ class TestSatelliteRpcs:
     def test_set_satellite_room_ok(self):
         set_satellite_room = MagicMock(return_value=True)
         upsert = MagicMock()
-        servicer = _make_server(set_satellite_room=set_satellite_room, upsert_satellite=upsert)
+        servicer = _make_server(
+            set_satellite_room=set_satellite_room, upsert_satellite=upsert,
+            get_satellites=lambda: {"wz-sat": {"room": "wohnzimmer", "addr": "10.0.0.5:7775"}},
+        )
 
         response = servicer.SetSatelliteRoom(SetSatelliteRoomRequest(device_id="wz-sat", room_id="wohnzimmer", requestor_id=1), None)
 
@@ -307,9 +310,34 @@ class TestSatelliteRpcs:
         set_satellite_room.assert_called_once_with("wz-sat", "wohnzimmer", requestor_id=1)
         assert response.ok is True
 
+    def test_set_satellite_room_pushes_agent_update_when_connected(self):
+        """#109: eine Raumänderung muss sofort an verbundene Adapter gepusht werden,
+        nicht erst beim nächsten Connect/Disconnect-Event des Satelliten."""
+        set_satellite_room = MagicMock(return_value=True)
+        servicer = _make_server(
+            set_satellite_room=set_satellite_room,
+            get_satellites=lambda: {"wz-sat": {"room": "wohnzimmer", "addr": "10.0.0.5:7775"}},
+        )
+        servicer.agent_satellite_update = MagicMock()
+
+        servicer.SetSatelliteRoom(SetSatelliteRoomRequest(device_id="wz-sat", room_id="wohnzimmer", requestor_id=1), None)
+
+        servicer.agent_satellite_update.assert_called_once_with("wz-sat", "wohnzimmer", "10.0.0.5:7775", True)
+
+    def test_set_satellite_room_pushes_agent_update_when_disconnected(self):
+        """Der betroffene Satellit muss nicht live verbunden sein, damit der Adapter
+        die Raumänderung mitbekommt (#109 Schritt 2)."""
+        set_satellite_room = MagicMock(return_value=True)
+        servicer = _make_server(set_satellite_room=set_satellite_room, get_satellites=lambda: {})
+        servicer.agent_satellite_update = MagicMock()
+
+        servicer.SetSatelliteRoom(SetSatelliteRoomRequest(device_id="wz-sat", room_id="wohnzimmer", requestor_id=1), None)
+
+        servicer.agent_satellite_update.assert_called_once_with("wz-sat", "wohnzimmer", "", False)
+
     def test_set_satellite_room_unassign(self):
         set_satellite_room = MagicMock(return_value=True)
-        servicer = _make_server(set_satellite_room=set_satellite_room)
+        servicer = _make_server(set_satellite_room=set_satellite_room, get_satellites=lambda: {})
 
         servicer.SetSatelliteRoom(SetSatelliteRoomRequest(device_id="wz-sat", room_id="", requestor_id=1), None)
 

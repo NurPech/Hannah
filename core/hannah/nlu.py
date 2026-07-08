@@ -759,7 +759,7 @@ class NLU:
     def _find_query_state(self, text: str) -> Optional[str]:
         """
         Leitet ab welcher State abgefragt wird.
-        Gibt "on", "level", "color" zurück oder None (= allgemein / kategorie-basiert).
+        Gibt "on", "level", "color", "power" zurück oder None (= allgemein / kategorie-basiert).
         Sensor-Kategorien (Temperaturen, Fenster, Helligkeit) werden über category_filter
         aufgelöst, nicht über query_state.
         """
@@ -767,6 +767,11 @@ class NLU:
             return "level"
         if any(w in text for w in ("farbe", "color", "farbig")):
             return "color"
+        # "power" hat Vorrang vor "on": Steckdosen sind gleichzeitig an/aus-schaltbar
+        # und haben einen Watt-Wert — "wie viel Strom braucht..." soll den Watt-Wert
+        # liefern, nicht nur den Schaltzustand (#121).
+        if any(w in text for w in ("watt", "leistung", "strom", "verbrauch")):
+            return "power"
         if any(w in text for w in ("an", "aus", "ein", "status", "zustand")):
             return "on"
         return None

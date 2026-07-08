@@ -48,7 +48,7 @@ class AlarmManager:
         fallback_text: str = "Wecker! Wecker!",
     ):
         """
-        db: liefert eine sqlite3-Connection, z.B. hannah.utils.db.get_db.
+        db: liefert eine pyorm.Database, z.B. hannah.utils.db.get_db.
         on_fire(record): Callback beim Auslösen (TTS-Ansage o.ä.) — bekommt den
             vollen Alarm-Record (dict), nicht nur die ID.
         play_asset_fn/set_volume_fn: mqtt_handler.publish_play_asset/publish_volume_set.
