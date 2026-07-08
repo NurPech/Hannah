@@ -5,6 +5,10 @@
 -->
 
 
+## 0.55.1
+### Hannah Core
+* Fixed: `handle_device_snapshot()` no longer lets a category-less sibling state (e.g. a power-meter state whose role/function doesn't resolve to anything) blank out a device's already-resolved category from another sibling state (e.g. the `on` state of a socket) — first non-empty category wins, regardless of processing order within the snapshot (Refs #133)
+
 ## 0.55.0
 ### Hannah Core
 * Changed: `core/hannah/models/` no longer carries its own hand-rolled mini-ORM (`base_module.py`/`query.py`) — replaced by the published `dialectorm-m1kad0` package (import name `pyorm`), the same code extracted and generalized into a standalone, dialect-aware (SQLite/Postgres/MySQL) library. Pure internal swap, no behavior change (Refs #132)

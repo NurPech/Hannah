@@ -1,5 +1,6 @@
 import pytest
 from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient, Device
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue
 
 
 class TestCamelToWords:
@@ -186,6 +187,58 @@ class TestSocketPowerQuery:
         result = client._describe_device(dev, None)
         assert "an" in result
         assert "42.0 W" in result or "42 W" in result
+
+
+class TestHandleDeviceSnapshotCategoryMerge:
+    """#133 — ein Geschwister-State ohne erkennbare Kategorie (z.B. ein power-Meter-State
+    ohne passende Role/Funktion, resolveType() liefert '') darf die Kategorie eines
+    bereits erkannten Geschwister-States (z.B. der 'on'-State eines Steckdosen-Geräts,
+    resolveType() liefert 'socket') nicht überschreiben — erster nicht-leerer Wert gewinnt,
+    unabhängig von der Verarbeitungsreihenfolge im Snapshot."""
+
+    def _device_msg(self, state: str, device_type: str) -> AgentDevice:
+        return AgentDevice(
+            state_id=f"javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer.{state}",
+            room="schlafzimmer",
+            device="Computer",
+            device_type=device_type,
+            value=AgentStateValue(value="false", ack=True),
+            room_names={"de": "Schlafzimmer"},
+        )
+
+    def test_category_less_state_does_not_blank_out_a_resolved_sibling(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        # power (kategorielos) zuerst, on (socket) danach
+        client.handle_device_snapshot([
+            self._device_msg("power", ""),
+            self._device_msg("on", "socket"),
+        ])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer"]
+        assert dev.category == "socket"
+
+    def test_resolved_category_survives_regardless_of_order(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        # on (socket) zuerst, power (kategorielos) danach
+        client.handle_device_snapshot([
+            self._device_msg("on", "socket"),
+            self._device_msg("power", ""),
+        ])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer"]
+        assert dev.category == "socket"
+
+    def test_first_non_empty_category_wins_on_conflict(self):
+        """Kein Flip-Flop bei widersprüchlichen nicht-leeren Kategorien zwischen
+        Geschwister-States — der erste nicht-leere Wert bleibt bestehen."""
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("on", "socket"),
+            self._device_msg("power", "temperature_sensor"),
+        ])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer"]
+        assert dev.category == "socket"
 
 
 class TestHandleStateUpdate:

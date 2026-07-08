@@ -182,6 +182,12 @@ class IoBrokerClient:
                     )
 
                 dev = new_device_map[device_id]
+                # Ein Sibling-State ohne erkennbare Kategorie (z.B. ein Power-Meter-State
+                # ohne passende Role/Funktion) darf die Kategorie eines bereits erkannten
+                # Geschwister-States (z.B. der "on"-State eines Steckdosen-Geräts) nicht
+                # überschreiben — erster nicht-leerer Wert gewinnt (#133).
+                if not dev.category and device.device_type:
+                    dev.category = device.device_type
                 state_suffix = parts[-1]
                 dev.states[state_suffix] = device.state_id
                 dev.current[state_suffix] = self._parse_payload(device.value.value)
