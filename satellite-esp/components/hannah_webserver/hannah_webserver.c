@@ -637,10 +637,12 @@ static esp_err_t log_last_handler(httpd_req_t *req)
 /* ── Handler: POST /nvs (Refs #36) ───────────────────────────────────────── */
 
 /* Nur diese Keys sind über /nvs schreibbar. Alles andere wird abgelehnt —
- * insbesondere nvs_token selbst, das bleibt /settings vorbehalten. */
+ * insbesondere nvs_token selbst, das bleibt /settings vorbehalten. seed ist
+ * bewusst ausgeschlossen: der Wireless-Pfad zielt nur auf bereits gepairte,
+ * verbundene Satelliten, Re-Pairing bleibt Sache des WebSerial-Flashs (Refs #136). */
 static const char *NVS_ALLOWED_KEYS[] = {
     "wifi_ssid", "wifi_pass", "mqtt_broker", "mqtt_port",
-    "ota_channel", "seed", "ww_threshold",
+    "ota_channel", "ota_token", "asset_token", "ww_threshold",
 };
 
 static esp_err_t nvs_post_handler(httpd_req_t *req)
@@ -722,8 +724,10 @@ static esp_err_t nvs_post_handler(httpd_req_t *req)
     }
     if ((v = cJSON_GetObjectItemCaseSensitive(root, "ota_channel")) && cJSON_IsString(v))
         strncpy(new_cfg.ota_channel, v->valuestring, sizeof(new_cfg.ota_channel) - 1);
-    if ((v = cJSON_GetObjectItemCaseSensitive(root, "seed")) && cJSON_IsString(v))
-        strncpy(new_cfg.seed, v->valuestring, sizeof(new_cfg.seed) - 1);
+    if ((v = cJSON_GetObjectItemCaseSensitive(root, "ota_token")) && cJSON_IsString(v))
+        strncpy(new_cfg.ota_token, v->valuestring, sizeof(new_cfg.ota_token) - 1);
+    if ((v = cJSON_GetObjectItemCaseSensitive(root, "asset_token")) && cJSON_IsString(v))
+        strncpy(new_cfg.asset_token, v->valuestring, sizeof(new_cfg.asset_token) - 1);
     if ((v = cJSON_GetObjectItemCaseSensitive(root, "ww_threshold")) && cJSON_IsNumber(v)) {
         int t = v->valueint;
         if (t >= 0 && t <= 100) new_cfg.wakeword_threshold = (uint8_t)t;

@@ -5,6 +5,10 @@
 -->
 
 
+## 0.57.0
+### Satellite Firmware
+* Changed: `POST /nvs` whitelist (`NVS_ALLOWED_KEYS`) reworked for the adapter's upcoming wireless NVS write feature — `seed` dropped (the wireless path only ever targets already-paired, connected satellites, so re-pairing over this channel was never a real use case), `ota_token`/`asset_token` added (without them, secret rotation without physical access was impossible, since both were only writable via a full NVS partition flash) (Refs #136)
+
 ## 0.56.2
 ### Satellite Firmware
 * Fixed: `hannah_webserver`'s httpd server left `config.max_uri_handlers` at the ESP-IDF default of 8 while registering 11 routes — `httpd_register_uri_handler()` silently failed for the 9th+ route (`/log/clear`, `/nvs`, and as of today `/log/last`), so those endpoints returned a framework-level 404 with no indication anything was wrong. Raised to 16 and registration failures are now logged (Refs #135)
