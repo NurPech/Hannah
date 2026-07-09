@@ -53,6 +53,28 @@ class _Subscriber:
 
 
 # ------------------------------------------------------------------
+# Automation subscriber (one per connected AutomationConnect call)
+
+class _AutomationSub:
+    def __init__(self):
+        # Set once the register message arrives; unset connections receive nothing.
+        self.automation: Optional[str] = None
+        self._queue: queue.Queue = queue.Queue()
+
+    def put(self, command: pb.AutomationCommand):
+        self._queue.put(command)
+
+    def close(self):
+        self._queue.put(None)  # sentinel — ends the generator
+
+    def get(self, timeout: float = 1.0) -> Optional[pb.AutomationCommand]:
+        try:
+            return self._queue.get(timeout=timeout)
+        except queue.Empty:
+            return queue.Empty  # sentinel-like, caller checks
+
+
+# ------------------------------------------------------------------
 # Servicer
 
 class HannahServicer(pb_grpc.HannahServiceServicer):
@@ -136,6 +158,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         update_car: Optional[Callable[..., bool]] = None,                        # (id, topic_prefix, home_address, owner_user_ids) → bool
         delete_car: Optional[Callable[[int], bool]] = None,                      # (id) → bool
         get_residents: Optional[Callable[[], list]] = None,                      # () → [Resident]
+        on_automation_register: Optional[Callable[[str], list]] = None,          # (automation) → [user_id] currently enabled
     ):
         self._user_manager          = user_manager
         self._satellite_manager     = satellite_manager
@@ -208,6 +231,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._update_car                = update_car or (lambda *_: False)
         self._delete_car                = delete_car or (lambda *_: False)
         self._get_residents             = get_residents or (lambda: [])
+        self._on_automation_register    = on_automation_register or (lambda _automation: [])
 
         self._subscribers: list[_Subscriber] = []
         self._subs_lock = threading.Lock()
@@ -234,6 +258,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         # Captured satellites: device_id → audio queue (SatelliteAudioChunk)
         self._captured_satellites: dict[str, queue.Queue] = {}
         self._capture_lock = threading.Lock()
+
+        # Per-connection subs for active AutomationConnect streams
+        self._automation_subs: list[_AutomationSub] = []
+        self._automation_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public: proxy helpers (called from main.py)
@@ -392,6 +420,21 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         user.save()
         msg = "aktualisiert"
         return pb.StatusResponse(ok=True, message=msg)
+
+    def SetAutomation(self, request, context):
+        user: User = self._user_manager.get_user_by_id(request.user_id)
+        if not user:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details("User nicht gefunden.")
+            return pb.StatusResponse(ok=False, message="User nicht gefunden.")
+
+        if request.enabled:
+            user.enable_automation(request.automation)
+        else:
+            user.disable_automation(request.automation)
+
+        self.push_automation_update(request.user_id, request.automation, request.enabled)
+        return pb.StatusResponse(ok=True, message="aktualisiert")
 
     def Login(self, request, context):
         user: User = self._user_manager.login_user(request.username, request.password)
@@ -1335,6 +1378,70 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     self._agent_queues.remove(q)
             log.info("[grpc] ioBroker-Adapter disconnected")
 
+    # ------------------------------------------------------------------
+    # Automations
+
+    def push_automation_update(self, user_id: int, automation: str, enabled: bool):
+        """Fan-out an alle AutomationConnect-Verbindungen, die sich für genau diese
+        Automation registriert haben (nicht an alle — jede Verbindung sieht nur ihre eigene)."""
+        cmd = pb.AutomationCommand(
+            state_changed=pb.AutomationStateChanged(user_id=user_id, enabled=enabled)
+        )
+        with self._automation_lock:
+            for sub in self._automation_subs:
+                if sub.automation == automation:
+                    sub.put(cmd)
+
+    def AutomationConnect(self, request_iterator, context):
+        """
+        Bidirektionaler Stream: Automation-Service → AutomationMessage, Hannah → AutomationCommand.
+
+        Der Service meldet sich einmalig mit AutomationRegister{automation}; danach bekommt
+        er einen Snapshot aller User, für die diese Automation gerade aktiviert ist, gefolgt
+        von Live-Deltas (AutomationStateChanged), sobald sich das über SetAutomation/Sprache
+        ändert. Bewusst kein Fan-out an alle Verbindungen wie bei AgentConnect — jede
+        Verbindung ist auf genau eine Automation gefiltert (siehe push_automation_update).
+        """
+        sub = _AutomationSub()
+        with self._automation_lock:
+            self._automation_subs.append(sub)
+
+        def _drain():
+            try:
+                for msg in request_iterator:
+                    which = msg.WhichOneof("payload")
+                    if which == "register":
+                        sub.automation = msg.register.automation
+                        log.info(f"[grpc] Automation-Service registriert: {sub.automation!r}")
+                        user_ids = self._on_automation_register(sub.automation)
+                        sub.put(pb.AutomationCommand(
+                            snapshot=pb.AutomationSnapshot(user_ids=user_ids)
+                        ))
+                    else:
+                        log.warning(f"[grpc] Unrecognized AutomationMessage payload: {which}")
+            except Exception as e:
+                log.debug(f"[grpc] Automation drain ended: {e}")
+            finally:
+                sub.close()
+
+        drain_thread = threading.Thread(target=_drain, daemon=True, name="automation-drain")
+        drain_thread.start()
+
+        try:
+            while context.is_active():
+                cmd = sub.get(timeout=1.0)
+                if cmd is None:
+                    break
+                if cmd is queue.Empty:
+                    continue
+                yield cmd
+        finally:
+            drain_thread.join(timeout=2)
+            with self._automation_lock:
+                if sub in self._automation_subs:
+                    self._automation_subs.remove(sub)
+            log.info(f"[grpc] Automation-Service getrennt: {sub.automation!r}")
+
     def TimerConnect(self, request_iterator, context):
         """
         Bidirektionaler Stream: Timer Service → TimerMessage, Hannah → TimerCommand.
@@ -1598,6 +1705,7 @@ def _user_to_pb(u: User) -> pb.User:
         linked_accounts={acc.provider: acc.external_id for acc in u.linked_accounts},
         email=u.email or "",
         type=u.type or "",
+        enabled_automations=list(u.enabled_automations),
     )
 
 

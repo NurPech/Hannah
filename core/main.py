@@ -166,6 +166,9 @@ def main():
     stt = STT(cfg.get("stt", {}))
     _group_pseudo_rooms = {k: k.capitalize() for k in cfg.get("groups", {})}
     nlu_cfg = settings_manager.get_settings_dict("nlu") or cfg.get("nlu", {})
+    # Wortliste "automations" entkoppelt gesprochene Phrase ("Autoresponder") vom internen
+    # Automation-Key ("telegram_autoresponder") — gleiches Muster wie category_words.
+    nlu_cfg["automation_words"] = settings_manager.get_settings_dict("automations")
     nlu = NLU(nlu_cfg, {**iobroker.rooms, **_group_pseudo_rooms}, iobroker.devices)
     tts = TTS(cfg.get("tts", {}))
 
@@ -642,6 +645,16 @@ def main():
             active = intent.value == "on"
             _apply_global_mute(active)
             answer = "Mikrofone stumm." if active else "Mikrofone wieder aktiv."
+        elif intent.name == "SetAutomation":
+            automation = intent.value.get("automation")
+            enabled = intent.value.get("enabled", True)
+            user = _user_manager.get_user_by_id(speaker_user_id) if speaker_user_id else None
+            if not user:
+                answer = "Ich weiß nicht, wer du bist — das kann ich so nicht einstellen."
+            else:
+                user.enable_automation(automation) if enabled else user.disable_automation(automation)
+                grpc_servicer.push_automation_update(user.id, automation, enabled)
+                answer = "Automation aktiviert." if enabled else "Automation deaktiviert."
         elif intent.name == "SetVolume":
             source_device = source if source in {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()} else None
             targets = _resolve_targets(intent.room_id or source_device or "all")
@@ -1489,6 +1502,9 @@ def main():
         # `residents` ist erst weiter unten definiert (ResidentsClient) — Lambda löst das
         # Forward-Reference-Problem (gleiches Muster wie get_satellites oben mit grpc_servicer).
         get_residents=lambda: residents.all_residents(),
+        on_automation_register=lambda automation: [
+            u.id for u in _user_manager.get_users_with_automation_enabled(automation)
+        ],
     )
 
     iobroker.set_setter(grpc_servicer.agent_set_state)

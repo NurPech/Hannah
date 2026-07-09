@@ -195,6 +195,12 @@ class UserManager:
         self._wired_mood.discard(user.id)
         return True
 
+    def get_users_with_automation_enabled(self, automation: str) -> list[User]:
+        """Alle aktiven User, für die eine bestimmte Automation gerade aktiviert ist —
+        Grundlage für den Snapshot, den ein Automation-Service beim Registrieren
+        über AutomationConnect bekommt."""
+        return [u for u in self.users() if u.has_automation(automation)]
+
     def get_user_by_linked_account(self, provider, external_id) -> User:
         """Gibt den Benutzer mit der angegebenen external ID zurück."""
         user = User.select(self._db()).join(

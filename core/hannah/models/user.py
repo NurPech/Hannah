@@ -5,12 +5,13 @@ class User(BaseModel, EventEmitterMixin):
     __table__ = "users"
     __primary_key__ = "id"
     __slots__ = (
-        "id", "username", "display_name","email", "password_hash", "trust_level", "mood_level", "system_messages","is_active", "type", "_db", "_cached_linked_accounts", "_presence"
+        "id", "username", "display_name","email", "password_hash", "trust_level", "mood_level", "system_messages","is_active", "type", "_db", "_cached_linked_accounts", "_cached_enabled_automations", "_presence"
     )
 
     def after_init(self):
         """Wird vom BaseModel am Ende von __init__ aufgerufen."""
         self._cached_linked_accounts = None
+        self._cached_enabled_automations = None
         self._presence = False
 
     @property
@@ -79,6 +80,42 @@ class User(BaseModel, EventEmitterMixin):
         if la:
             la.delete()
             self.clear_linked_accounts_cache()
+
+    @property
+    def enabled_automations(self):
+        """Gibt die Keys aller für diesen User aktivierten Automations zurück (z.B. 'telegram_autoresponder')."""
+        if not self._db or not self.id:
+            return []
+
+        if self._cached_enabled_automations is None:
+            from hannah.models.user_automation import UserAutomation
+            rows = UserAutomation.select(self._db).where("user_id = ?", self.id).all()
+            self._cached_enabled_automations = [r.automation for r in rows]
+
+        return self._cached_enabled_automations
+
+    def has_automation(self, automation):
+        """Prüft, ob eine bestimmte Automation für diesen User aktiviert ist."""
+        return automation in self.enabled_automations
+
+    def clear_enabled_automations_cache(self):
+        """Leert den internen Cache, damit beim nächsten Zugriff frisch geladen wird."""
+        self._cached_enabled_automations = None
+
+    def enable_automation(self, automation):
+        """Aktiviert eine Automation für diesen User (idempotent)."""
+        from hannah.models.user_automation import UserAutomation
+        if not self.has_automation(automation):
+            UserAutomation.create(self._db, user_id=self.id, automation=automation)
+            self.clear_enabled_automations_cache()
+
+    def disable_automation(self, automation):
+        """Deaktiviert eine Automation für diesen User (idempotent)."""
+        from hannah.models.user_automation import UserAutomation
+        row = UserAutomation.get(self._db, user_id=self.id, automation=automation)
+        if row:
+            row.delete()
+            self.clear_enabled_automations_cache()
 
     @property
     def satellites(self):

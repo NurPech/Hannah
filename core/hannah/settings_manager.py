@@ -47,6 +47,13 @@ DEFAULT_NLU_SETTINGS: dict = {
     "percentage_units": ["prozent", "%"],
 }
 
+# Wortlisten pro Automation-Key — entkoppelt die gesprochene Phrase vom internen Key
+# (z.B. "telegram_autoresponder"), der nie direkt als Sprachbefehl gedacht ist. Über die
+# Admin-UI erweiterbar (GetSettings/UpdateConfig sind bereits kategorie-generisch, #138).
+DEFAULT_AUTOMATION_WORDS: dict = {
+    "telegram_autoresponder": ["autoresponder", "automatische antworten", "automatischen antworten"],
+}
+
 DEFAULT_IOBROKER_STATE_NAMES: dict = {
     "on": "on", "level": "level", "color": "color", "colorTemp": "colorTemp",
     "current": "current", "expected": "expected", "illuminance": "illuminance",
@@ -118,6 +125,10 @@ class SettingsManager:
         if not self.get_settings_dict("iobroker"):
             cat = self.ensure_category("iobroker")
             self.create_setting(cat, "state_names", DEFAULT_IOBROKER_STATE_NAMES)
+        if not self.get_settings_dict("automations"):
+            cat = self.ensure_category("automations")
+            for name, value in DEFAULT_AUTOMATION_WORDS.items():
+                self.create_setting(cat, name, value)
         if not self.get_settings_dict("llm"):
             cat = self.ensure_category("llm")
             self.create_setting(cat, "system_prompt", "")

@@ -4,6 +4,7 @@ import pytest
 
 import hannah.utils.db as db_module
 from hannah.settings_manager import (
+    DEFAULT_AUTOMATION_WORDS,
     DEFAULT_IOBROKER_STATE_NAMES,
     DEFAULT_NLU_SETTINGS,
     SettingsManager,
@@ -109,5 +110,6 @@ class TestSeedDefaults:
         manager.seed_defaults()
 
         assert manager.get_settings_dict("nlu") == DEFAULT_NLU_SETTINGS
-        # + iobroker.state_names + llm.system_prompt
-        assert len(manager.get_settings()) == len(DEFAULT_NLU_SETTINGS) + 2
+        assert manager.get_settings_dict("automations") == DEFAULT_AUTOMATION_WORDS
+        # + iobroker.state_names + llm.system_prompt + automations
+        assert len(manager.get_settings()) == len(DEFAULT_NLU_SETTINGS) + len(DEFAULT_AUTOMATION_WORDS) + 2

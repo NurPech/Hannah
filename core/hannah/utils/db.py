@@ -163,6 +163,13 @@ CREATE TABLE IF NOT EXISTS "user_to_car" (
 	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE,
 	FOREIGN KEY("car_id") REFERENCES "cars"("id") ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS "user_automations" (
+	"user_id"	INTEGER NOT NULL,
+	"automation"	TEXT NOT NULL,
+	PRIMARY KEY("user_id","automation"),
+	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE
+);
 """
 
 

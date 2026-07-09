@@ -175,6 +175,10 @@ class NLU:
         self._mute_words: set[str] = set(cfg.get("mute_words", [
             "stumm", "mikrofon",
         ]))
+        # SetAutomation: entkoppelt gesprochene Phrase vom internen Automation-Key,
+        # z.B. {"telegram_autoresponder": ["autoresponder", "automatische antworten"]} —
+        # der Key selbst (z.B. "telegram_autoresponder") ist nie als Sprachphrase gedacht.
+        self._automation_words: dict[str, list[str]] = cfg.get("automation_words", {})
         # SetVolume: "Lautstärke auf 50" (absolut, kombiniert mit _find_level) oder
         # "lauter"/"leiser" (relativ) — #63
         self._volume_words: set[str] = set(cfg.get("volume_words", [
@@ -327,6 +331,16 @@ class NLU:
             and bool(self._mute_words & norm_tokens)
         )
 
+        # SetAutomation: ohne Geräte-/Raumbezug, kein Query — gleiches Muster wie SetDND/SetMute
+        _automation_key = self._find_automation(joined) if no_device_context and not is_query else None
+        is_automation = (
+            not is_car and not is_weather
+            and not is_presence_away and not is_presence_home
+            and not is_dnd and not is_mute_cmd
+            and no_device_context and not is_query
+            and _automation_key is not None
+        )
+
         # SetVolume: absolut ("Lautstärke auf 50") oder relativ ("lauter"/"leiser").
         # Raum erlaubt (analog Stop/Pause/Resume), aber kein spezifisches ioBroker-Gerät.
         is_volume_up = bool(self._volume_up_words & norm_tokens)
@@ -334,7 +348,7 @@ class NLU:
         is_volume = (
             not is_car and not is_weather
             and not is_presence_away and not is_presence_home
-            and not is_dnd and not is_mute_cmd
+            and not is_dnd and not is_mute_cmd and not is_automation
             and not is_query and device is None
             and (is_volume_up or is_volume_down
                  or (bool(self._volume_words & norm_tokens) and level is not None))
@@ -365,6 +379,7 @@ class NLU:
             and not is_resume
             and not is_dnd
             and not is_mute_cmd
+            and not is_automation
             and not is_volume
             and not is_delete_alarm
             and not is_query_alarms
@@ -404,6 +419,8 @@ class NLU:
             intent_name, value, unit = "SetDND", "off" if _has_off else "on", None
         elif is_mute_cmd:
             intent_name, value, unit = "SetMute", "off" if _has_off else "on", None
+        elif is_automation:
+            intent_name, value, unit = "SetAutomation", {"automation": _automation_key, "enabled": not _has_off}, None
         elif is_volume:
             if is_volume_up:
                 intent_name, value, unit = "SetVolume", 10, "relative"
@@ -545,6 +562,16 @@ class NLU:
                 return "on"
             if t in self._turn_off:
                 return "off"
+        return None
+
+    def _find_automation(self, joined: str) -> Optional[str]:
+        """Sucht eine konfigurierte Automation-Phrase als Substring im normalisierten Satz —
+        Substring statt Token-Set, weil Phrasen wie 'automatische antworten' mehrwortig sind."""
+        norm_joined = _normalize(joined)
+        for automation, words in self._automation_words.items():
+            for w in words:
+                if _normalize(w) in norm_joined:
+                    return automation
         return None
 
     def _find_temperature(self, text: str) -> Optional[float]:

@@ -5,6 +5,10 @@
 -->
 
 
+## 0.58.0
+### Hannah Core
+* Added: per-user enable/disable for external "automation" services (e.g. the Telegram auto-responder) — new `user_automations` table, `SetAutomation` RPC, `AutomationConnect` gRPC stream for the external service to register and receive live updates, and a new "Autoresponder" voice intent (`SetAutomation` in `nlu.py`, decoupled from the internal automation key via a new `automations` settings wordlist) (Refs #138)
+
 ## 0.57.0
 ### Satellite Firmware
 * Changed: `POST /nvs` whitelist (`NVS_ALLOWED_KEYS`) reworked for the adapter's upcoming wireless NVS write feature — `seed` dropped (the wireless path only ever targets already-paired, connected satellites, so re-pairing over this channel was never a real use case), `ota_token`/`asset_token` added (without them, secret rotation without physical access was impossible, since both were only writable via a full NVS partition flash) (Refs #136)
