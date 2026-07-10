@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .llm import LLMClient
     from .iobroker import IoBrokerClient
+    from .user_manager import UserManager
 
 log = logging.getLogger(__name__)
 
@@ -160,15 +161,63 @@ class ToolAgent:
     Hannah-interne Tools werden direkt dispatcht; das LLM kennt ioBroker nicht.
     """
 
-    def __init__(self, llm: "LLMClient", iobroker: "IoBrokerClient") -> None:
+    def __init__(
+        self,
+        llm: "LLMClient",
+        iobroker: "IoBrokerClient",
+        user_manager: "UserManager | None" = None,
+        automations: dict[str, list[str]] | None = None,
+        push_automation_update=None,  # (user_id: int, automation: str, enabled: bool) -> None
+    ) -> None:
         self._llm = llm
         self._iobroker = iobroker
+        self._user_manager = user_manager
+        self._automations = automations or {}
+        self._push_automation_update = push_automation_update or (lambda *_: None)
+        self._tools = list(_TOOLS)
+        if self._automations:
+            self._tools.append(self._build_automation_tool())
+
+    def _build_automation_tool(self) -> dict:
+        """Baut das set_automation-Tool mit den tatsächlich bekannten Automation-Keys +
+        Beispielphrasen aus der Settings-Kategorie "automations" — das LLM sieht so, welche
+        Automationen es überhaupt gibt und wie sie umgangssprachlich heißen, im Gegensatz
+        zur NLU, die nur exakte Wortlisten-Substrings matcht (kein Fallback aufeinander nötig,
+        beide Pfade nutzen dieselbe Quelle)."""
+        known = "; ".join(
+            f"{key} (z.B. {', '.join(words)})" for key, words in self._automations.items()
+        )
+        return {
+            "type": "function",
+            "function": {
+                "name": "set_automation",
+                "description": (
+                    "Aktiviert oder deaktiviert eine externe Automation (z.B. einen Auto-Responder) "
+                    "für den aktuellen Nutzer. Bekannte Automationen: " + known
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "automation": {
+                            "type": "string",
+                            "description": "Interner Automation-Key aus der Beschreibung, z.B. 'telegram_autoresponder' — nicht die gesprochene Phrase selbst.",
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "true = aktivieren, false = deaktivieren",
+                        },
+                    },
+                    "required": ["automation", "enabled"],
+                },
+            },
+        }
 
     def run(
         self,
         text: str,
         system_prompt: str = "",
         history: list[dict] | None = None,
+        user_id: str = "",
     ) -> str:
         """
         Startet den Tool-Loop für `text`.
@@ -199,7 +248,7 @@ class ToolAgent:
         for i in range(_MAX_ITERATIONS):
             payload_chars = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
             log.info("[tool_agent] Iteration %d/%d — payload %d msgs / ~%d chars", i + 1, _MAX_ITERATIONS, len(messages), payload_chars)
-            response = self._llm.chat_with_tools(messages, _TOOLS)
+            response = self._llm.chat_with_tools(messages, self._tools)
             log.info("[tool_agent] finish_reason=%s tool_calls=%d", response.get("finish_reason"), len(response.get("tool_calls") or []))
             tool_calls: list[dict] = response.get("tool_calls") or []
 
@@ -230,7 +279,7 @@ class ToolAgent:
                     log.warning("[tool_agent] Duplikat-Aufruf blockiert: %s(%s)", func_name, args)
                 else:
                     called.add(call_key)
-                    result = self._dispatch(func_name, args, spoken)
+                    result = self._dispatch(func_name, args, spoken, user_id)
                 result_chars = len(result) if isinstance(result, str) else len(json.dumps(result, ensure_ascii=False))
                 log.info("[tool_agent] %s(%s) → %d chars", func_name, args, result_chars)
                 log.debug("[tool_agent] %s result: %s", func_name, result)
@@ -254,7 +303,7 @@ class ToolAgent:
     # ------------------------------------------------------------------
     # Tool-Dispatch
 
-    def _dispatch(self, name: str, args: dict, spoken: list[str]) -> object:
+    def _dispatch(self, name: str, args: dict, spoken: list[str], user_id: str = "") -> object:
         if name == "get_all_devices":
             return self._get_all_devices()
         if name == "get_active_devices":
@@ -267,6 +316,8 @@ class ToolAgent:
             return self._get_device_state(args.get("device_id", ""))
         if name == "set_device_state":
             return self._set_device_state(args.get("state_id", ""), args.get("value"))
+        if name == "set_automation":
+            return self._set_automation(args.get("automation", ""), bool(args.get("enabled", True)), user_id)
         if name == "speak":
             text = str(args.get("text", ""))
             spoken.append(text)
@@ -340,6 +391,18 @@ class ToolAgent:
     def _set_device_state(self, state_id: str, value: object) -> dict:
         ok = self._iobroker.set_state(state_id, value)
         return {"ok": ok}
+
+    def _set_automation(self, automation: str, enabled: bool, user_id: str) -> dict:
+        if not user_id:
+            return {"error": "Kein Nutzer erkannt, kann Automation nicht umschalten."}
+        if automation not in self._automations:
+            return {"error": f"Unbekannte Automation: {automation!r}. Bekannt: {list(self._automations)}"}
+        user = self._user_manager.get_user_by_id(user_id) if self._user_manager else None
+        if not user:
+            return {"error": "Nutzer nicht gefunden."}
+        user.enable_automation(automation) if enabled else user.disable_automation(automation)
+        self._push_automation_update(user.id, automation, enabled)
+        return {"ok": True}
 
     @staticmethod
     def _is_active(dev) -> bool:

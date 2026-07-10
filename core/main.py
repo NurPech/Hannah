@@ -167,8 +167,11 @@ def main():
     _group_pseudo_rooms = {k: k.capitalize() for k in cfg.get("groups", {})}
     nlu_cfg = settings_manager.get_settings_dict("nlu") or cfg.get("nlu", {})
     # Wortliste "automations" entkoppelt gesprochene Phrase ("Autoresponder") vom internen
-    # Automation-Key ("telegram_autoresponder") — gleiches Muster wie category_words.
-    nlu_cfg["automation_words"] = settings_manager.get_settings_dict("automations")
+    # Automation-Key ("telegram_autoresponder") — gleiches Muster wie category_words. Auch an
+    # ToolAgent gereicht (unten), damit der LLM-Pfad (Smalltalk-Lock/Unknown) dieselbe Quelle
+    # kennt, statt nur über die NLU-Wortliste erreichbar zu sein (#138 Nachfassrunde).
+    automation_words = settings_manager.get_settings_dict("automations")
+    nlu_cfg["automation_words"] = automation_words
     nlu = NLU(nlu_cfg, {**iobroker.rooms, **_group_pseudo_rooms}, iobroker.devices)
     tts = TTS(cfg.get("tts", {}))
 
@@ -176,7 +179,12 @@ def main():
     llm_system_prompt: str = settings_manager.get_settings_dict("llm").get(
         "system_prompt"
     ) or cfg.get("llm", {}).get("system_prompt", "")
-    tool_agent = ToolAgent(llm, iobroker)
+    tool_agent = ToolAgent(
+        llm, iobroker, user_manager=_user_manager, automations=automation_words,
+        # grpc_servicer ist erst weiter unten definiert — Lambda löst das Forward-Reference-
+        # Problem (gleiches Muster wie get_satellites/get_residents oben).
+        push_automation_update=lambda user_id, automation, enabled: grpc_servicer.push_automation_update(user_id, automation, enabled),
+    )
 
     mem_cfg = cfg.get("memory", {})
     memory = LongTermMemory(
@@ -730,7 +738,7 @@ def main():
         elif intent.name == "Smalltalk":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
-            answer = tool_agent.run(text, system_prompt=sp, history=history)
+            answer = tool_agent.run(text, system_prompt=sp, history=history, user_id=speaker_user_id)
             if answer:
                 conv_ctx.add_llm_exchange(_source, text, answer)
                 conv_ctx.set_smalltalk_active(_source, True)
@@ -742,7 +750,7 @@ def main():
         elif intent.name == "Unknown":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
-            answer = tool_agent.run(text, system_prompt=sp, history=history)
+            answer = tool_agent.run(text, system_prompt=sp, history=history, user_id=speaker_user_id)
             if answer:
                 conv_ctx.add_llm_exchange(_source, text, answer)
             else:

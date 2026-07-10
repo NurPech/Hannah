@@ -5,6 +5,11 @@
 -->
 
 
+## 0.58.1
+### Hannah Core
+* Added: `set_automation` LLM tool (`tool_agent.py`) — the LLM-driven fallback path (smalltalk-lock, unrecognized intents) now also knows about enabled automations and can enable/disable them for the current user, independent of the deterministic NLU wordlist match. `ToolAgent` now threads `user_id` through `run()`/`_dispatch()` for this (Refs #138)
+* Changed: `automations` settings wordlist for `telegram_autoresponder` extended with more phrasing variants ("automatische Antwort" singular, "automatisch antworten") (Refs #138)
+
 ## 0.58.0
 ### Hannah Core
 * Added: per-user enable/disable for external "automation" services (e.g. the Telegram auto-responder) — new `user_automations` table, `SetAutomation` RPC, `AutomationConnect` gRPC stream for the external service to register and receive live updates, and a new "Autoresponder" voice intent (`SetAutomation` in `nlu.py`, decoupled from the internal automation key via a new `automations` settings wordlist) (Refs #138)

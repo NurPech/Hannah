@@ -264,6 +264,66 @@ class TestToolDispatch:
         assert ToolAgent._is_active(dev) is False
 
 
+class TestSetAutomationDispatch:
+    def setup_method(self):
+        self.iobroker = _make_iobroker()
+        self.user_manager = MagicMock()
+        self.push = MagicMock()
+        self.agent = ToolAgent(
+            MagicMock(), self.iobroker,
+            user_manager=self.user_manager,
+            automations={"telegram_autoresponder": ["autoresponder"]},
+            push_automation_update=self.push,
+        )
+
+    def test_enables_automation_and_pushes_update(self):
+        user = MagicMock(id=3)
+        self.user_manager.get_user_by_id.return_value = user
+
+        result = self.agent._set_automation("telegram_autoresponder", True, "3")
+
+        assert result == {"ok": True}
+        user.enable_automation.assert_called_once_with("telegram_autoresponder")
+        user.disable_automation.assert_not_called()
+        self.push.assert_called_once_with(3, "telegram_autoresponder", True)
+
+    def test_disables_automation_and_pushes_update(self):
+        user = MagicMock(id=3)
+        self.user_manager.get_user_by_id.return_value = user
+
+        result = self.agent._set_automation("telegram_autoresponder", False, "3")
+
+        assert result == {"ok": True}
+        user.disable_automation.assert_called_once_with("telegram_autoresponder")
+        self.push.assert_called_once_with(3, "telegram_autoresponder", False)
+
+    def test_unknown_automation_returns_error(self):
+        result = self.agent._set_automation("teams_autoresponder", True, "3")
+
+        assert "error" in result
+        self.user_manager.get_user_by_id.assert_not_called()
+
+    def test_no_user_id_returns_error(self):
+        result = self.agent._set_automation("telegram_autoresponder", True, "")
+
+        assert "error" in result
+        self.user_manager.get_user_by_id.assert_not_called()
+
+    def test_unknown_user_returns_error(self):
+        self.user_manager.get_user_by_id.return_value = None
+
+        result = self.agent._set_automation("telegram_autoresponder", True, "99")
+
+        assert "error" in result
+
+    def test_tool_registered_only_when_automations_configured(self):
+        without = ToolAgent(MagicMock(), self.iobroker)
+        with_automations = self.agent
+
+        assert not any(t["function"]["name"] == "set_automation" for t in without._tools)
+        assert any(t["function"]["name"] == "set_automation" for t in with_automations._tools)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # LLMClient default chat_with_tools
 

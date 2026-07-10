@@ -51,7 +51,10 @@ DEFAULT_NLU_SETTINGS: dict = {
 # (z.B. "telegram_autoresponder"), der nie direkt als Sprachbefehl gedacht ist. Über die
 # Admin-UI erweiterbar (GetSettings/UpdateConfig sind bereits kategorie-generisch, #138).
 DEFAULT_AUTOMATION_WORDS: dict = {
-    "telegram_autoresponder": ["autoresponder", "automatische antworten", "automatischen antworten"],
+    "telegram_autoresponder": [
+        "autoresponder", "automatische antwort", "automatische antworten",
+        "automatischen antworten", "automatisch antworten", "automatisch geantwortet",
+    ],
 }
 
 DEFAULT_IOBROKER_STATE_NAMES: dict = {
