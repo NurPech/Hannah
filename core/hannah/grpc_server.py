@@ -29,6 +29,11 @@ log = logging.getLogger(__name__)
 
 _KNOWN_PROVIDERS = {"residents", "telegram", "microsoft"}
 
+# Proxy retries RegisterProxy every 5s (proxy/internal/hannah/client.go) — grace
+# period must exceed that so a quick reconnect doesn't flip UDP/discovery back
+# and forth (#140).
+_PROXY_REVERT_GRACE_SECONDS = 10
+
 # ------------------------------------------------------------------
 # Event subscriber (one per connected SubscribeEvents call)
 
@@ -236,6 +241,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         # Per-connection command queues for active proxy streams
         self._proxy_queues: list[queue.Queue] = []
         self._proxy_lock = threading.Lock()
+        self._proxy_revert_timer: Optional[threading.Timer] = None
 
         # Per-connection command queues for active agent streams
         self._agent_queues: list[queue.Queue] = []
@@ -864,6 +870,11 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         with self._proxy_lock:
             self._proxy_queues.append(q)
             is_first = len(self._proxy_queues) == 1
+            # A proxy reconnected within the grace period — cancel the pending
+            # UDP/discovery revert so it never fires.
+            if self._proxy_revert_timer is not None:
+                self._proxy_revert_timer.cancel()
+                self._proxy_revert_timer = None
 
         if is_first:
             log.info("[grpc] Erster Proxy verbunden — UDP-Server wird deaktiviert")
@@ -921,17 +932,36 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 if q in self._proxy_queues:
                     self._proxy_queues.remove(q)
                 no_more = len(self._proxy_queues) == 0
+                if no_more:
+                    self._proxy_revert_timer = threading.Timer(
+                        _PROXY_REVERT_GRACE_SECONDS, self._revert_proxy_state
+                    )
+                    self._proxy_revert_timer.daemon = True
+                    self._proxy_revert_timer.start()
             if no_more:
-                log.info("[grpc] Kein Proxy mehr verbunden — UDP-Server + Discovery werden wiederhergestellt")
-                self._enable_udp()
-                self._on_proxy_discovery(None, 0)  # None → Restore Hannah's own address
-            if no_more and self._on_satellite_change:
-                with self._proxy_sat_lock:
-                    self._proxy_satellites.clear()
-                threading.Thread(
-                    target=self._on_satellite_change, args=({},), daemon=True
-                ).start()
+                log.info(
+                    f"[grpc] Kein Proxy mehr verbunden — UDP-Server + Discovery werden in "
+                    f"{_PROXY_REVERT_GRACE_SECONDS}s wiederhergestellt, falls kein Proxy zurückkehrt"
+                )
             log.info(f"[grpc] Proxy '{proxy_id}' getrennt")
+
+    def _revert_proxy_state(self):
+        """Fired after the grace period once no proxy has reconnected — restores
+        Hannah's own UDP server + MQTT discovery (#140)."""
+        with self._proxy_lock:
+            still_none = len(self._proxy_queues) == 0
+            self._proxy_revert_timer = None
+        if not still_none:
+            return
+        log.info("[grpc] Grace-Period abgelaufen, kein Proxy zurück — UDP-Server + Discovery werden wiederhergestellt")
+        self._enable_udp()
+        self._on_proxy_discovery(None, 0)  # None → Restore Hannah's own address
+        if self._on_satellite_change:
+            with self._proxy_sat_lock:
+                self._proxy_satellites.clear()
+            threading.Thread(
+                target=self._on_satellite_change, args=({},), daemon=True
+            ).start()
 
     def SubmitSatelliteAudio(self, request, context):
         if self._handle_satellite_audio is None:

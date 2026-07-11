@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/NurPech/hannah-proto-go"
@@ -90,14 +91,30 @@ func (c *Client) NotifySatelliteGone(ctx context.Context, deviceID string) error
 // Use this to start the proxy's own UDP server — by then Hannah has freed the port.
 // On reconnect onReady is called again; make it idempotent.
 //
+// onLost is called every time the stream ends (error or clean shutdown) before the
+// next reconnect attempt. Use this to stop/unbind the satellite-facing UDP server —
+// without it, satellites keep talking to a proxy that has nowhere to forward to (#140).
+// Make it idempotent, same as onReady.
+//
 // Blocks until ctx is cancelled. Reconnects automatically with a 5s backoff.
-func (c *Client) RunProxy(ctx context.Context, proxyID, udpHost string, udpPort int32, onPlayAudio PlayAudioFunc, onReady func()) {
+func (c *Client) RunProxy(ctx context.Context, proxyID, udpHost string, udpPort int32, onPlayAudio PlayAudioFunc, onReady func(), onLost func()) {
+	everConnected := false
 	for {
-		err := c.runProxyOnce(ctx, proxyID, udpHost, udpPort, onPlayAudio, onReady)
+		connected, err := c.runProxyOnce(ctx, proxyID, udpHost, udpPort, onPlayAudio, onReady)
+		if connected {
+			everConnected = true
+		}
+		if onLost != nil {
+			onLost()
+		}
 		if ctx.Err() != nil {
 			return // clean shutdown
 		}
-		slog.Warn("RegisterProxy stream lost, reconnecting in 5s", "err", err)
+		if everConnected {
+			slog.Warn("RegisterProxy stream lost, reconnecting in 5s", "err", err)
+		} else {
+			slog.Warn("RegisterProxy: initial connection to Hannah Core failed, retrying in 5s", "err", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -106,10 +123,15 @@ func (c *Client) RunProxy(ctx context.Context, proxyID, udpHost string, udpPort 
 	}
 }
 
-func (c *Client) runProxyOnce(ctx context.Context, proxyID, udpHost string, udpPort int32, onPlayAudio PlayAudioFunc, onReady func()) error {
+// runProxyOnce runs a single RegisterProxy session. The returned bool is true if
+// Hannah Core ever ACKed the connection during this session (distinguishes "never
+// connected" from "connected, then dropped" for logging in RunProxy).
+func (c *Client) runProxyOnce(ctx context.Context, proxyID, udpHost string, udpPort int32, onPlayAudio PlayAudioFunc, onReady func()) (bool, error) {
+	var gotAck atomic.Bool
+
 	stream, err := c.stub.RegisterProxy(ctx)
 	if err != nil {
-		return fmt.Errorf("open RegisterProxy stream: %w", err)
+		return false, fmt.Errorf("open RegisterProxy stream: %w", err)
 	}
 
 	// Identify ourselves and advertise our UDP address immediately
@@ -118,7 +140,7 @@ func (c *Client) runProxyOnce(ctx context.Context, proxyID, udpHost string, udpP
 		UdpHost: udpHost,
 		UdpPort: udpPort,
 	}); err != nil {
-		return fmt.Errorf("send initial heartbeat: %w", err)
+		return false, fmt.Errorf("send initial heartbeat: %w", err)
 	}
 	slog.Info("RegisterProxy stream opened", "proxy_id", proxyID, "udp_host", udpHost, "udp_port", udpPort)
 
@@ -138,6 +160,7 @@ func (c *Client) runProxyOnce(ctx context.Context, proxyID, udpHost string, udpP
 			}
 			switch v := cmd.Command.(type) {
 			case *pb.ProxyCommand_Ack:
+				gotAck.Store(true)
 				slog.Info("registered with Hannah Core",
 					"udp_disabled", v.Ack.UdpDisabled,
 					"message", v.Ack.Message)
@@ -165,16 +188,16 @@ func (c *Client) runProxyOnce(ctx context.Context, proxyID, udpHost string, udpP
 		select {
 		case <-ctx.Done():
 			stream.CloseSend() //nolint:errcheck
-			return nil
+			return gotAck.Load(), nil
 		case err := <-recvErr:
-			return fmt.Errorf("recv: %w", err)
+			return gotAck.Load(), fmt.Errorf("recv: %w", err)
 		case <-ticker.C:
 			if err := stream.Send(&pb.ProxyHeartbeat{
 				ProxyId: proxyID,
 				UdpHost: udpHost,
 				UdpPort: udpPort,
 			}); err != nil {
-				return fmt.Errorf("send heartbeat: %w", err)
+				return gotAck.Load(), fmt.Errorf("send heartbeat: %w", err)
 			}
 		}
 	}

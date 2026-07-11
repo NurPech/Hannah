@@ -5,6 +5,14 @@
 -->
 
 
+## 0.60.2
+### Hannah Core
+* Fixed: `RegisterProxy` no longer reverts UDP server + MQTT discovery to Hannah's own address the instant the proxy's gRPC stream ends — a 10s grace period now lets a quick proxy reconnect cancel the revert, preventing satellites behind the proxy from being repointed to an address they can't reach during a brief outage (Refs #140)
+
+### Hannah Proxy
+* Fixed: satellite-facing UDP server now stops when the `RegisterProxy` connection to Hannah Core is lost or never established, instead of silently accepting satellite traffic with no path to forward it to (Refs #140)
+* Changed: reconnect log line now distinguishes "initial connection failed" from "lost an established connection" (Refs #140)
+
 ## 0.60.1
 ### Hannah Proxy
 * Fixed: `hannah-proto-go` bumped to 0.5.1 — 0.5.0 had a stale `ProtoVersion` (2 instead of 3) baked into the generated Go module, causing the proxy to fail Hannah Core's protocol-version check after upgrading to 0.5.0

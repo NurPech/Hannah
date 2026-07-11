@@ -181,6 +181,13 @@ func main() {
 				}
 			}
 		},
+		func() {
+			// Lost (or never got) the gRPC connection to Hannah Core — stop accepting
+			// satellite UDP traffic instead of silently blackholing it (#140). Restarted
+			// by the onReady callback above once the connection comes back.
+			slog.Warn("Hannah Core unreachable — stopping satellite UDP server")
+			udpServer.Close()
+		},
 	)
 
 	slog.Info("proxy running — Ctrl+C to stop")
