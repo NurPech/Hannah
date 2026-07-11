@@ -1,6 +1,6 @@
 import pytest
 from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient, Device
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
 
 
 class TestCamelToWords:
@@ -239,6 +239,54 @@ class TestHandleDeviceSnapshotCategoryMerge:
 
         dev = client._devices_by_id["javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer"]
         assert dev.category == "socket"
+
+
+class TestHandleDeviceSnapshotStateTypes:
+    """#117 — state_type/enum_values aus AgentDevice landen pro canon-key auf dem Device
+    und werden von get_devices_snapshot() unverändert durchgereicht."""
+
+    def _device_msg(self, state: str, state_type: "StateType.V", enum_values: dict[str, str] | None = None) -> AgentDevice:
+        return AgentDevice(
+            state_id=f"javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe.{state}",
+            room="schlafzimmer",
+            device="Deckenlampe",
+            device_type="light",
+            value=AgentStateValue(value="true", ack=True),
+            room_names={"de": "Schlafzimmer"},
+            state_type=state_type,
+            enum_values=EnumValues(values=enum_values) if enum_values else None,
+        )
+
+    def test_boolean_state_type_is_cached_without_enum_values(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([self._device_msg("on", StateType.BOOLEAN)])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe"]
+        assert dev.state_types["on"] == StateType.BOOLEAN
+        assert "on" not in dev.enum_values
+
+    def test_enum_state_type_carries_its_values(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("mode", StateType.ENUM, {"0": "Aus", "1": "An", "2": "Auto"}),
+        ])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe"]
+        assert dev.state_types["mode"] == StateType.ENUM
+        assert dev.enum_values["mode"] == {"0": "Aus", "1": "An", "2": "Auto"}
+
+    def test_get_devices_snapshot_includes_state_types_and_enum_values(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("on", StateType.BOOLEAN),
+            self._device_msg("mode", StateType.ENUM, {"0": "Aus", "1": "An"}),
+        ])
+
+        [room] = client.get_devices_snapshot()
+        [device] = room["devices"]
+        assert device["state_types"]["on"] == StateType.BOOLEAN
+        assert device["state_types"]["mode"] == StateType.ENUM
+        assert device["state_enum_values"] == {"mode": {"0": "Aus", "1": "An"}}
 
 
 class TestHandleStateUpdate:

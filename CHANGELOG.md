@@ -5,6 +5,10 @@
 -->
 
 
+## 0.59.0
+### Hannah Core
+* Added: `IoBrokerClient`/`GetDevices` now carry a `state_type` (`BOOLEAN`/`NUMERIC`/`ENUM`/`COLOR`/`TEXT`) and, for `ENUM`/`COLOR` states, the allowed values per device state — sourced from the adapter's `state_type`/`enum_values` on `AgentDevice` (`hannah-proto` #117). Prep work for the WebUI trigger editor's dropdown-based condition UI (Refs #117)
+
 ## 0.58.1
 ### Hannah Core
 * Added: `set_automation` LLM tool (`tool_agent.py`) — the LLM-driven fallback path (smalltalk-lock, unrecognized intents) now also knows about enabled automations and can enable/disable them for the current user, independent of the deterministic NLU wordlist match. `ToolAgent` now threads `user_id` through `run()`/`_dispatch()` for this (Refs #138)

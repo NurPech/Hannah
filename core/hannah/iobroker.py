@@ -73,6 +73,8 @@ class Device:
     category: str          # Licht
     states: dict = field(default_factory=dict)         # canon-key → state_id
     current: dict = field(default_factory=dict)        # canon-key → aktueller Wert (Cache)
+    state_types: dict = field(default_factory=dict)    # canon-key → StateType (proto-Enum-Int, siehe hannah_proto.shared_pb2)
+    enum_values: dict = field(default_factory=dict)    # canon-key → {rohwert: label}, nur bei ENUM/COLOR
 
 
 class IoBrokerClient:
@@ -191,6 +193,9 @@ class IoBrokerClient:
                 state_suffix = parts[-1]
                 dev.states[state_suffix] = device.state_id
                 dev.current[state_suffix] = self._parse_payload(device.value.value)
+                dev.state_types[state_suffix] = device.state_type
+                if device.enum_values.values:
+                    dev.enum_values[state_suffix] = dict(device.enum_values.values)
 
                 log.debug(f"Neues Gerät: {device_id} → {new_device_map[device_id]}")
             except Exception as e:
@@ -728,6 +733,8 @@ class IoBrokerClient:
                     "category": dev.category,
                     "states":   list(dev.states.keys()),
                     "current":  {k: str(v) for k, v in dev.current.items()},
+                    "state_types":       dict(dev.state_types),
+                    "state_enum_values": {k: dict(v) for k, v in dev.enum_values.items()},
                 })
             result.append({
                 "key":     room_key,

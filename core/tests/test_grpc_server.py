@@ -14,10 +14,10 @@ from hannah.user_manager import UserManager
 from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupRoomsRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateRoutineRequest, UpdateRoutineRequest, DeleteRoutineRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupRoomsRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateRoutineRequest, UpdateRoutineRequest, DeleteRoutineRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType
 from hannah.satellite_manager import SatellitePermissionError
 
-def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_rooms=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_routine_records=None,create_routine=None,update_routine=None,delete_routine=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None):
+def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_rooms=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_routine_records=None,create_routine=None,update_routine=None,delete_routine=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
     return HannahServicer(
         user_manager=user_manager or MagicMock(),
         satellite_manager=satellite_manager or MagicMock(),
@@ -27,6 +27,7 @@ def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handl
         notificate=notificate or MagicMock(),
         get_satellites=get_satellites or MagicMock(),
         get_car_state=get_car_state or MagicMock(),
+        get_devices=get_devices,
         on_agent_device_snapshot=on_agent_device_snapshot,
         on_agent_send_residents = on_agent_send_residents,
         on_agent_room_snapshot=on_agent_room_snapshot,
@@ -85,6 +86,44 @@ def test_device_snapshot_dispatched():
     ]
     servicer._on_agent_device_snapshot(devices)
     assert "wohnzimmer" in client.rooms
+
+def test_get_devices_includes_state_types_and_enum_values():
+    """#117 — GetDevices reicht state_type/enum_values aus dem IoBrokerClient-Cache
+    unverändert bis in die DeviceInfo-Response durch."""
+    client = IoBrokerClient({"host": "localhost", "port": 8093})
+    servicer = _make_server(get_devices=client.get_devices_snapshot)
+
+    devices = [
+        AgentDevice(
+            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on",
+            room="wohnzimmer",
+            device="Decke",
+            device_type="light",
+            value=AgentStateValue(value="true", ack=True),
+            room_names={"de": "Wohnzimmer"},
+            state_type=StateType.BOOLEAN,
+        ),
+        AgentDevice(
+            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.mode",
+            room="wohnzimmer",
+            device="Decke",
+            device_type="light",
+            value=AgentStateValue(value="1", ack=True),
+            room_names={"de": "Wohnzimmer"},
+            state_type=StateType.ENUM,
+            enum_values=EnumValues(values={"0": "Aus", "1": "An"}),
+        ),
+    ]
+    client.handle_device_snapshot(devices)
+
+    response = servicer.GetDevices(None, None)
+
+    [room] = response.rooms
+    [device] = room.devices
+    assert device.state_types["on"] == StateType.BOOLEAN
+    assert device.state_types["mode"] == StateType.ENUM
+    assert dict(device.state_enum_values["mode"].values) == {"0": "Aus", "1": "An"}
+    assert "on" not in device.state_enum_values
 
 def test_room_snapshot_dispatched():
     sync_rooms = MagicMock()
