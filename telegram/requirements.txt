@@ -8,7 +8,7 @@ protobuf>=4.25.0
 # Proto schema — published package instead of the git-submodule/local-codegen
 # pattern (#60); pins the runtime proto/gRPC-version coupling that used to be
 # handled by matching grpcio-tools' version locally
-hannah-proto>=0.3.5
+hannah-proto>=0.5.0
 
 # Config
 pyyaml>=6.0

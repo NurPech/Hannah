@@ -89,17 +89,6 @@ CREATE TABLE IF NOT EXISTS "triggers" (
 	PRIMARY KEY("id")
 );
 
-CREATE TABLE IF NOT EXISTS "routines" (
-	"id"	INTEGER NOT NULL,
-	"name"	TEXT NOT NULL,
-	"triggers"	TEXT NOT NULL,
-	"actions"	TEXT NOT NULL,
-	"reply"	TEXT,
-	"created_at"	TEXT NOT NULL DEFAULT (datetime('now')),
-	PRIMARY KEY("id" AUTOINCREMENT),
-	UNIQUE("name")
-);
-
 CREATE TABLE IF NOT EXISTS "alarms" (
 	"id"	INTEGER NOT NULL,
 	"satellite_id"	TEXT NOT NULL,

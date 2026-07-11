@@ -32,7 +32,6 @@ from hannah import config as config_mod
 from hannah.car_tracker import CarManager, CarTracker
 from hannah.car_registry import CarRegistry
 from hannah.ble_tags import BleTagManager
-from hannah.routines import RoutineManager
 from hannah.grpc_server import GrpcServer, HannahServicer, make_car_parked_event, make_firmware_event, make_resident_event, make_system_notification_event, pb
 from hannah.iobroker import IoBrokerClient
 from hannah.mqtt_handler import MQTTHandler
@@ -235,8 +234,6 @@ def main():
     )
     car_manager = CarManager([CarTracker(c) for c in _car_cfgs])
 
-    routine_manager = RoutineManager(get_db)
-
     audio_cfg = cfg.get("audio", {})
 
     # ------------------------------------------------------------------
@@ -350,16 +347,10 @@ def main():
 
         log.info(f"[{device}] Text: '{text}'")
 
-        # Routine-Check vor NLU
-        routine = routine_manager.match(text)
-        if routine:
-            for action in routine.actions:
-                if action.say:
-                    process_announcement(action.room, action.say)
-                else:
-                    mqtt_handler.publish_raw(action.topic, action.value)
-            if routine.reply:
-                _handle_feedback(device, True, routine.reply)
+        # Phrase-Trigger-Check vor NLU (#139, Nachfolger des alten Routine-Checks)
+        phrase_reply = trigger_engine.match_phrase(text)
+        if phrase_reply is not None:
+            _handle_feedback(device, True, phrase_reply)
             return
 
         # Offene Rückfrage auflösen
@@ -563,14 +554,9 @@ def main():
         """
         _source = source or speaker_user_id or "anon"
 
-        routine = routine_manager.match(text)
-        if routine:
-            for action in routine.actions:
-                if action.say:
-                    process_announcement(action.room, action.say)
-                else:
-                    mqtt_handler.publish_raw(action.topic, action.value)
-            return routine.reply or "Routine ausgeführt.", "Routine"
+        phrase_reply = trigger_engine.match_phrase(text)
+        if phrase_reply is not None:
+            return phrase_reply, "Trigger"
 
         # Smalltalk-Modus: LLM-Classifier vor NLU schalten
         if conv_ctx.is_smalltalk_active(_source):
@@ -1484,10 +1470,6 @@ def main():
         set_satellite_room=satellite_manager.set_satellite_room,
         set_satellite_display_name=satellite_manager.set_satellite_display_name,
         set_satellite_owner=satellite_manager.set_satellite_owner,
-        get_routine_records=routine_manager.get_routine_records,
-        create_routine=routine_manager.create_routine,
-        update_routine=routine_manager.update_routine,
-        delete_routine=routine_manager.delete_routine,
         get_trigger_records=trigger_engine.get_trigger_records,
         create_trigger=trigger_engine.create_trigger,
         update_trigger=trigger_engine.update_trigger,

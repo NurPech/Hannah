@@ -134,10 +134,6 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         set_satellite_room: Optional[Callable[[str, Optional[str]], bool]] = None,         # (device_id, room_id) → bool
         set_satellite_display_name: Optional[Callable[[str, str], bool]] = None,          # (device_id, display_name) → bool
         set_satellite_owner: Optional[Callable[[str, Optional[int]], bool]] = None,        # (device_id, user_id) → bool, #31
-        get_routine_records: Optional[Callable[[], list]] = None,                # () → [{id, name, triggers, actions, reply}]
-        create_routine: Optional[Callable[..., Optional[dict]]] = None,          # (name, triggers, actions, reply) → dict | None
-        update_routine: Optional[Callable[..., bool]] = None,                    # (id, name, triggers, actions, reply) → bool
-        delete_routine: Optional[Callable[[int], bool]] = None,                  # (id) → bool
         get_trigger_records: Optional[Callable[[], list]] = None,                # () → [{id, when, cancel_when, on_response, say, ask, rephrase, room, cooldown, delay}]
         create_trigger: Optional[Callable[..., bool]] = None,                    # (id, when, cancel_when, on_response, say, ask, rephrase, room, cooldown, delay) → bool
         update_trigger: Optional[Callable[..., bool]] = None,                    # gleiche Signatur wie create_trigger → bool
@@ -207,10 +203,6 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._set_satellite_room       = set_satellite_room or (lambda *_: False)
         self._set_satellite_display_name = set_satellite_display_name or (lambda *_: False)
         self._set_satellite_owner      = set_satellite_owner or (lambda *_: False)
-        self._get_routine_records       = get_routine_records or (lambda: [])
-        self._create_routine            = create_routine or (lambda *_: None)
-        self._update_routine            = update_routine or (lambda *_: False)
-        self._delete_routine            = delete_routine or (lambda *_: False)
         self._get_trigger_records       = get_trigger_records or (lambda: [])
         self._create_trigger            = create_trigger or (lambda *_: False)
         self._update_trigger            = update_trigger or (lambda *_: False)
@@ -658,32 +650,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         return pb.StatusResponse(ok=True, message="set")
 
     # ------------------------------------------------------------------
-    # Routines/Triggers (Admin-UI, #27 Phase 4)
-
-    def GetRoutines(self, _request, _context):
-        return pb.GetRoutinesResponse(routines=[_routine_to_pb(r) for r in self._get_routine_records()])
-
-    def CreateRoutine(self, request, _context):
-        try:
-            actions = json.loads(request.actions_json) if request.actions_json else []
-        except json.JSONDecodeError as e:
-            return pb.CreateRoutineResponse(ok=False, message=f"invalid actions_json: {e}")
-        result = self._create_routine(request.name, list(request.triggers), actions, request.reply)
-        if result is None:
-            return pb.CreateRoutineResponse(ok=False, message="name existiert bereits")
-        return pb.CreateRoutineResponse(ok=True, id=result["id"], message="created")
-
-    def UpdateRoutine(self, request, _context):
-        try:
-            actions = json.loads(request.actions_json) if request.actions_json else []
-        except json.JSONDecodeError as e:
-            return pb.StatusResponse(ok=False, message=f"invalid actions_json: {e}")
-        ok = self._update_routine(request.id, request.name, list(request.triggers), actions, request.reply)
-        return pb.StatusResponse(ok=ok, message="updated" if ok else "not found")
-
-    def DeleteRoutine(self, request, _context):
-        ok = self._delete_routine(request.id)
-        return pb.StatusResponse(ok=ok, message="deleted" if ok else "not found")
+    # Triggers (Admin-UI, #27 Phase 4; absorbierte vormals separate Routinen, #139)
 
     def GetTriggers(self, _request, _context):
         return pb.GetTriggersResponse(triggers=[_trigger_to_pb(t) for t in self._get_trigger_records()])
@@ -1720,16 +1687,6 @@ def _resident_to_pb(r) -> pb.Resident:
         display_name=r.display_name or "",
         type=type(r).__name__.lower(),
         home=r.is_home(),
-    )
-
-
-def _routine_to_pb(r: dict) -> pb.Routine:
-    return pb.Routine(
-        id=r["id"],
-        name=r["name"],
-        triggers=r.get("triggers") or [],
-        actions_json=json.dumps(r.get("actions") or []),
-        reply=r.get("reply") or "",
     )
 
 

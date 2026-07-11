@@ -5,6 +5,19 @@
 -->
 
 
+## 0.60.0
+### Hannah Core
+* **Breaking:** Routines are removed as a standalone concept — `RoutineManager`, the `routines` table, the `Routine` model, and the `GetRoutines`/`CreateRoutine`/`UpdateRoutine`/`DeleteRoutine` RPCs are gone. The WebUI routine editor (separate repo) stops working until it's updated there
+* Added: Triggers get a new `when.phrase` condition type (`TriggerEngine.match_phrase()`) — covers the former Routines functionality (voice phrase → actions, checked synchronously before NLU, no cooldown), now as part of the unified Trigger system instead of a separate data model (Refs #139)
+* Added: `core/deploy/migrate_routines_to_triggers.py` — one-off, manually run migration script that converts existing `routines` rows into equivalent `when.phrase` triggers (translates the old `{topic,value}` MQTT-publish actions into `{set_state}`, since the `hannah/set/devices/...` topic scheme is a 1:1 rename of the `javascript.0.virtualDevice.*` ioBroker path and is no longer used ioBroker-side)
+* Changed: `hannah-proto` bumped to 0.5.0 (no functional difference — Core never called the removed Routine RPCs through the generic client)
+
+### Hannah Proxy
+* Changed: `hannah-proto-go` bumped to 0.5.0. No functional difference
+
+### Telegram
+* Changed: `hannah-proto` bumped to 0.5.0. No functional difference
+
 ## 0.59.0
 ### Hannah Core
 * Added: `IoBrokerClient`/`GetDevices` now carry a `state_type` (`BOOLEAN`/`NUMERIC`/`ENUM`/`COLOR`/`TEXT`) and, for `ENUM`/`COLOR` states, the allowed values per device state — sourced from the adapter's `state_type`/`enum_values` on `AgentDevice` (`hannah-proto` #117). Prep work for the WebUI trigger editor's dropdown-based condition UI (Refs #117)

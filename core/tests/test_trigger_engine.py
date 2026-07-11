@@ -164,3 +164,82 @@ class TestUnlessUnchanged:
         engine.on_state_update("s1", "false")
         engine.on_state_update("s1", "true")
         assert engine.announced == [("all", "Bedingt")]
+
+
+class TestPhraseTrigger:
+    """#139 — when.phrase ersetzt die alte RoutineManager.match()-Funktionalität:
+    synchroner Substring-Match, Actions als Seiteneffekt, say als direkte Antwort."""
+
+    def test_substring_match_returns_say_as_reply(self, engine):
+        _create(engine, "t1", {"phrase": "gute nacht"}, say="Gute Nacht.")
+
+        assert engine.match_phrase("sag mal gute nacht zu mir") == "Gute Nacht."
+
+    def test_no_match_returns_none(self, engine):
+        _create(engine, "t1", {"phrase": "gute nacht"}, say="Gute Nacht.")
+
+        assert engine.match_phrase("wie ist das Wetter") is None
+
+    def test_or_list_fires_on_either_phrase(self, engine):
+        ok = engine.create_trigger(
+            "t1", [{"phrase": "nachtlicht"}, {"phrase": "nacht licht"}], None, [], [],
+            "Nachtlicht aktiviert.", "", False, "all", 0, "",
+        )
+        assert ok
+
+        assert engine.match_phrase("mach das nacht licht an") == "Nachtlicht aktiviert."
+
+    def test_fires_every_time_no_cooldown(self, engine):
+        _create(engine, "t1", {"phrase": "regenbogen"}, say="Regenbogen-Modus aktiviert.")
+
+        first = engine.match_phrase("regenbogen")
+        second = engine.match_phrase("regenbogen")
+
+        assert first == second == "Regenbogen-Modus aktiviert."
+
+    def test_actions_executed_as_side_effect(self, engine):
+        _create(engine, "t1", {"phrase": "gute nacht"}, say="Gute Nacht.", actions=[
+            {"set_state": {"id": "javascript.0.virtualDevice.Licht.EG.Flur.on", "value": False}},
+        ])
+
+        reply = engine.match_phrase("gute nacht")
+
+        assert reply == "Gute Nacht."
+        assert engine.states_set == [("javascript.0.virtualDevice.Licht.EG.Flur.on", False)]
+
+    def test_also_condition_must_match(self, engine):
+        when = {"phrase": "gute nacht", "also": {"state": "0_userdata.0.zuhause", "value": True}}
+        _create(engine, "t1", when, say="Gute Nacht.")
+
+        assert engine.match_phrase("gute nacht") is None  # State unbekannt -> also nicht erfüllt
+
+        engine.on_state_update("0_userdata.0.zuhause", "true")
+        assert engine.match_phrase("gute nacht") == "Gute Nacht."
+
+    def test_unless_condition_blocks(self, engine):
+        _create(engine, "t1", {"phrase": "gute nacht"}, say="Gute Nacht.",
+                unless={"state": "0_userdata.0.abwesend", "value": True})
+        engine.on_state_update("0_userdata.0.abwesend", "true")
+
+        assert engine.match_phrase("gute nacht") is None
+
+    def test_no_say_returns_default_ok(self, engine):
+        _create(engine, "t1", {"phrase": "nachtlicht"}, say="", actions=[
+            {"set_state": {"id": "x.y", "value": True}},
+        ])
+
+        assert engine.match_phrase("nachtlicht") == "Ok."
+
+    def test_rephrase_applied_to_say(self, tmp_path):
+        import hannah.utils.db as db_module
+        db_module.DB_PATH = str(tmp_path / "h2.db")
+        db_module.init_db()
+        eng = TriggerEngine(
+            db_module.get_db,
+            announce_fn=lambda room, text: None,
+            rephrase_fn=lambda text: f"[rephrased] {text}",
+        )
+        eng.create_trigger("t1", {"phrase": "gute nacht"}, None, [], [], "Gute Nacht.",
+                            "", True, "all", 0, "")
+
+        assert eng.match_phrase("gute nacht") == "[rephrased] Gute Nacht."

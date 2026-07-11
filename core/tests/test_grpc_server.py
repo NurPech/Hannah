@@ -14,10 +14,10 @@ from hannah.user_manager import UserManager
 from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupRoomsRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateRoutineRequest, UpdateRoutineRequest, DeleteRoutineRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupRoomsRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType
 from hannah.satellite_manager import SatellitePermissionError
 
-def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_rooms=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_routine_records=None,create_routine=None,update_routine=None,delete_routine=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
+def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_rooms=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
     return HannahServicer(
         user_manager=user_manager or MagicMock(),
         satellite_manager=satellite_manager or MagicMock(),
@@ -44,10 +44,6 @@ def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handl
         set_satellite_room=set_satellite_room,
         set_satellite_display_name=set_satellite_display_name,
         set_satellite_owner=set_satellite_owner,
-        get_routine_records=get_routine_records,
-        create_routine=create_routine,
-        update_routine=update_routine,
-        delete_routine=delete_routine,
         get_trigger_records=get_trigger_records,
         create_trigger=create_trigger,
         update_trigger=update_trigger,
@@ -647,68 +643,6 @@ class TestUserManagementRpcs:
         assert r.display_name == "Leonie"
         assert r.type == "roomie"
         assert r.home is True
-
-class TestRoutineRpcs:
-    """#27 Phase 4 — Verdrahtung auf RoutineManager.get_routine_records/create_routine/
-    update_routine/delete_routine."""
-
-    def test_get_routines(self):
-        get_routine_records = MagicMock(return_value=[{
-            "id": 1, "name": "gute_nacht", "triggers": ["gute nacht"],
-            "actions": [{"say": "Schlaf gut!", "room": "all"}], "reply": "",
-        }])
-        servicer = _make_server(get_routine_records=get_routine_records)
-
-        response = servicer.GetRoutines(None, None)
-
-        assert len(response.routines) == 1
-        r = response.routines[0]
-        assert r.id == 1
-        assert r.name == "gute_nacht"
-        assert list(r.triggers) == ["gute nacht"]
-        assert json.loads(r.actions_json) == [{"say": "Schlaf gut!", "room": "all"}]
-
-    def test_create_routine_ok(self):
-        create_routine = MagicMock(return_value={"id": 5, "name": "gute_nacht", "triggers": [], "actions": [], "reply": ""})
-        servicer = _make_server(create_routine=create_routine)
-
-        response = servicer.CreateRoutine(CreateRoutineRequest(
-            name="gute_nacht", triggers=["gute nacht"], actions_json=json.dumps([{"say": "Schlaf gut!"}]), reply="",
-        ), None)
-
-        create_routine.assert_called_once_with("gute_nacht", ["gute nacht"], [{"say": "Schlaf gut!"}], "")
-        assert response.ok is True
-        assert response.id == 5
-
-    def test_create_routine_duplicate_name(self):
-        servicer = _make_server(create_routine=MagicMock(return_value=None))
-
-        response = servicer.CreateRoutine(CreateRoutineRequest(name="gute_nacht"), None)
-
-        assert response.ok is False
-
-    def test_create_routine_invalid_json(self):
-        servicer = _make_server(create_routine=MagicMock())
-
-        response = servicer.CreateRoutine(CreateRoutineRequest(name="x", actions_json="{not json"), None)
-
-        assert response.ok is False
-
-    def test_update_routine_not_found(self):
-        servicer = _make_server(update_routine=MagicMock(return_value=False))
-
-        response = servicer.UpdateRoutine(UpdateRoutineRequest(id=99, name="x"), None)
-
-        assert response.ok is False
-
-    def test_delete_routine_ok(self):
-        delete_routine = MagicMock(return_value=True)
-        servicer = _make_server(delete_routine=delete_routine)
-
-        response = servicer.DeleteRoutine(DeleteRoutineRequest(id=5), None)
-
-        delete_routine.assert_called_once_with(5)
-        assert response.ok is True
 
 class TestTriggerRpcs:
     """#27 Phase 4 — Verdrahtung auf TriggerEngine.get_trigger_records/create_trigger/

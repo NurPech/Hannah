@@ -56,13 +56,18 @@ Frühere triggers.yaml-Form, zur Illustration der when/cancel_when/on_response-S
 Schlüsselfelder im Überblick:
   when                      — Dict (eine Bedingung) ODER Liste von Dicts (OR-verknüpft —
                               irgendeine reicht). Jedes Dict wie gewohnt: state/value,
-                              above/below, time/days, plus optional also/unless.
+                              above/below, time/days, phrase, plus optional also/unless.
   when.state / when.value   — State-Übergang auf exakten Wert
   when.above / when.below   — numerischer Schwellwert
   when.also                 — Dict (eine Bedingung) ODER Liste (UND, Alt-Verhalten) ODER
                               {"op": "and"|"or", "conditions": [...]} (neu, explizit wählbar)
   when.unless               — Sperrbedingung (State oder UND-Liste davon) — bleibt AND-only
   when.time / when.days     — Uhrzeit-Trigger (HH:MM, Wochentage: mon–sun)
+  when.phrase                — Sprachphrase (Substring-Match auf normalisierten Text, vor NLU
+                              geprüft, siehe match_phrase()). Synchron statt async: feuert nicht
+                              über die Engine, sondern liefert die Antwort direkt als Rückgabewert
+                              von match_phrase(). Kein Cooldown (#139 — Nachfolger der alten
+                              "Routinen", die nie gedrosselt wurden), kein for/ask/on_response.
   for                       — Wartezeit vor Ausführung (Timer Service, SQLite-persistent)
   cancel_when               — bricht den Delay-Timer ab wenn Bedingung eintritt
   cooldown                  — Mindestabstand zwischen zwei Auslösungen (Standard: 3600s)
@@ -89,6 +94,14 @@ from typing import Any, Callable, Optional
 from hannah.models.trigger import Trigger
 
 log = logging.getLogger(__name__)
+
+_UMLAUT_MAP = {"ae": "ä", "oe": "ö", "ue": "ü", "Ae": "Ä", "Oe": "Ö", "Ue": "Ü"}
+
+
+def _normalize(s: str) -> str:
+    """Normalisiert Text für den Phrase-Match: lowercase, ae/oe/ue -> Umlaute."""
+    s = s.lower()
+    return re.sub(r"[AaOoUu]e", lambda m: _UMLAUT_MAP.get(m.group(), m.group()), s)
 
 
 class TriggerEngine:
@@ -318,6 +331,46 @@ class TriggerEngine:
                     continue
                 self._fire(trigger)
                 break
+
+    def match_phrase(self, text: str) -> Optional[str]:
+        """
+        Prüft, ob text eine when.phrase-Bedingung trifft — vom Sprach-/Text-Pfad synchron
+        aufgerufen, VOR NLU (Nachfolger von RoutineManager.match(), #139).
+
+        Bei Treffer werden die Trigger-Actions sofort ausgeführt (Seiteneffekte: Announce/
+        set_state in anderen Räumen) und 'say' wird — anders als beim async _fire()-Pfad —
+        nicht announced, sondern direkt als Antworttext zurückgegeben. Kein Cooldown: ein
+        bewusst gesprochener Befehl soll jedes Mal wirken, nicht gedrosselt werden.
+        """
+        norm = _normalize(text)
+        with self._lock:
+            triggers = list(self._triggers)
+
+        for trigger in triggers:
+            for cond in self._as_or_list(trigger.get("when", {})):
+                phrase = cond.get("phrase")
+                if not phrase or phrase not in norm:
+                    continue
+                if not self._also_condition_matches(cond.get("also")):
+                    continue
+                if not self._unless_condition_matches(cond.get("unless")):
+                    continue
+
+                tid = trigger.get("id", "?")
+                log.info(f"Trigger '{tid}' per Phrase getriggert: '{phrase}'")
+
+                for action in (trigger.get("actions") or []):
+                    self._execute_trigger_action_entry(action, tid, trigger.get("room", "all"),
+                                                          bool(trigger.get("rephrase")))
+
+                say = trigger.get("say", "").strip()
+                if say and trigger.get("rephrase") and self._rephrase_fn:
+                    try:
+                        say = self._rephrase_fn(say) or say
+                    except Exception as e:
+                        log.warning(f"Trigger '{tid}': LLM-Rephrase fehlgeschlagen, nutze Original: {e}")
+                return say or "Ok."
+        return None
 
     # ------------------------------------------------------------------
     # Tick-Loop für Zeit-Trigger
