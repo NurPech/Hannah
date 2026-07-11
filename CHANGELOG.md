@@ -5,6 +5,10 @@
 -->
 
 
+## 0.60.1
+### Hannah Proxy
+* Fixed: `hannah-proto-go` bumped to 0.5.1 — 0.5.0 had a stale `ProtoVersion` (2 instead of 3) baked into the generated Go module, causing the proxy to fail Hannah Core's protocol-version check after upgrading to 0.5.0
+
 ## 0.60.0
 ### Hannah Core
 * **Breaking:** Routines are removed as a standalone concept — `RoutineManager`, the `routines` table, the `Routine` model, and the `GetRoutines`/`CreateRoutine`/`UpdateRoutine`/`DeleteRoutine` RPCs are gone. The WebUI routine editor (separate repo) stops working until it's updated there
