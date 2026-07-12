@@ -18,6 +18,7 @@ def engine(tmp_path):
         db_module.get_db,
         announce_fn=lambda room, text: eng.announced.append((room, text)),
         set_state_fn=lambda state_id, value: eng.states_set.append((state_id, value)),
+        state_cache_path=os.path.join(str(tmp_path), "state_cache.json"),
     )
     eng.announced = []
     eng.states_set = []
@@ -238,8 +239,105 @@ class TestPhraseTrigger:
             db_module.get_db,
             announce_fn=lambda room, text: None,
             rephrase_fn=lambda text: f"[rephrased] {text}",
+            state_cache_path=str(tmp_path / "state_cache2.json"),
         )
         eng.create_trigger("t1", {"phrase": "gute nacht"}, None, [], [], "Gute Nacht.",
                             "", True, "all", 0, "")
 
         assert eng.match_phrase("gute nacht") == "[rephrased] Gute Nacht."
+
+
+class TestPersistentStateCache:
+    """State-Cache überlebt einen TriggerEngine-Neustart (#141) — kein falsches
+    Feuern, wenn der erste beobachtete Wert nach dem Neustart unverändert ist."""
+
+    def _make_engine(self, tmp_path, cache_path):
+        db_module.DB_PATH = str(tmp_path / "h.db")
+        db_module.init_db()
+        eng = TriggerEngine(
+            db_module.get_db,
+            announce_fn=lambda room, text: eng.announced.append((room, text)),
+            state_cache_path=cache_path,
+        )
+        eng.announced = []
+        return eng
+
+    def test_restart_with_unchanged_value_does_not_fire(self, tmp_path):
+        cache_path = str(tmp_path / "cache.json")
+        eng1 = self._make_engine(tmp_path, cache_path)
+        _create(eng1, "t1", {"state": "s1", "value": False}, say="Licht aus!")
+        eng1.on_state_update("s1", "true")   # Ausgangszustand: an
+        eng1.on_state_update("s1", "false")  # echte Transition -> aus, feuert
+        assert eng1.announced == [("all", "Licht aus!")]
+
+        # "Neustart": neue Engine-Instanz gegen dieselbe Cache-Datei
+        eng2 = self._make_engine(tmp_path, cache_path)
+        eng2.create_trigger("t1", {"state": "s1", "value": False}, None, [], [], "Licht aus!",
+                             "", False, "all", 0, "")
+        eng2.on_state_update("s1", "false")  # unverändert -> darf NICHT feuern
+
+        assert eng2.announced == []
+
+    def test_restart_with_real_change_still_fires(self, tmp_path):
+        cache_path = str(tmp_path / "cache.json")
+        eng1 = self._make_engine(tmp_path, cache_path)
+        _create(eng1, "t1", {"state": "s1", "value": False}, say="Licht aus!")
+        eng1.on_state_update("s1", "true")  # Ausgangszustand: an, persistiert
+
+        eng2 = self._make_engine(tmp_path, cache_path)
+        eng2.create_trigger("t1", {"state": "s1", "value": False}, None, [], [], "Licht aus!",
+                             "", False, "all", 0, "")
+        eng2.on_state_update("s1", "false")  # echte Transition an->aus, muss feuern
+
+        assert eng2.announced == [("all", "Licht aus!")]
+
+    def test_missing_cache_file_is_not_an_error(self, tmp_path):
+        eng = self._make_engine(tmp_path, str(tmp_path / "does_not_exist.json"))
+        assert eng._state_cache == {}
+
+
+class TestSeedFromSnapshot:
+    """seed_from_snapshot() aktualisiert den Cache still, ohne Trigger zu feuern (#141)."""
+
+    def test_seed_does_not_fire_trigger(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": False}, say="Licht aus!")
+
+        engine.seed_from_snapshot({"s1": "false"})
+
+        assert engine.announced == []
+        with engine._lock:
+            assert engine._state_cache["s1"] is False
+
+    def test_subsequent_unchanged_update_after_seed_does_not_fire(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": False}, say="Licht aus!")
+
+        engine.seed_from_snapshot({"s1": "false"})
+        engine.on_state_update("s1", "false")  # unverändert ggü. Snapshot -> darf nicht feuern
+
+        assert engine.announced == []
+
+    def test_subsequent_real_change_after_seed_fires(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": False}, say="Licht aus!")
+
+        engine.seed_from_snapshot({"s1": "true"})  # Ausgangszustand laut Snapshot: an
+        engine.on_state_update("s1", "false")  # echte Transition an->aus, muss feuern
+
+        assert engine.announced == [("all", "Licht aus!")]
+
+    def test_empty_snapshot_is_noop(self, engine):
+        engine.seed_from_snapshot({})
+        assert engine._state_cache == {}
+
+    def test_seed_persists_to_disk(self, tmp_path):
+        db_module.DB_PATH = str(tmp_path / "h.db")
+        db_module.init_db()
+        cache_path = str(tmp_path / "cache.json")
+        eng = TriggerEngine(db_module.get_db, announce_fn=lambda room, text: None,
+                             state_cache_path=cache_path)
+
+        eng.seed_from_snapshot({"s1": "true", "s2": "42"})
+
+        import json
+        with open(cache_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data == {"s1": True, "s2": 42}

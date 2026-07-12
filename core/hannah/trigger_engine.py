@@ -82,7 +82,9 @@ Schlüsselfelder im Überblick:
 Reload: triggers-Tabelle wird einmal pro Minute (Tick-Loop) und beim Start neu abgefragt —
 SQL-Query ist immer aktuell, kein Hot-Reload-Mechanismus mehr nötig.
 """
+import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -96,6 +98,11 @@ from hannah.models.trigger import Trigger
 log = logging.getLogger(__name__)
 
 _UMLAUT_MAP = {"ae": "ä", "oe": "ö", "ue": "ü", "Ae": "Ä", "Oe": "Ö", "Ue": "Ü"}
+
+# Persistenter State-Cache (siehe TriggerEngine._load_state_cache/_save_state_cache) —
+# überlebt Core-Neustarts, damit when.state-Transitionen und also/unless-Bedingungen
+# nicht jedes Mal von Null anfangen (#141).
+STATE_CACHE_PATH = os.environ.get("TRIGGER_STATE_CACHE_PATH", "trigger_state_cache.json")
 
 
 def _normalize(s: str) -> str:
@@ -116,6 +123,7 @@ class TriggerEngine:
         schedule_timer_fn: Callable[[str, str, int, dict], None] | None = None,  # (timer_id, label, fire_at, metadata)
         cancel_timer_fn: Callable[[str], None] | None = None,                    # (timer_id)
         on_change: Callable[[], None] | None = None,                            # nach Create/Update: WatchMore neu pushen
+        state_cache_path: str | None = None,
     ):
         """
         db:            Callable → pyorm.Database (siehe hannah.utils.db.get_db)
@@ -129,6 +137,7 @@ class TriggerEngine:
                        Menge referenzierter State-IDs erneut per WatchMore an den Adapter pushen,
                        sonst würde ein frisch angelegter State-Trigger erst beim nächsten
                        Adapter-Reconnect live werden
+        state_cache_path: Pfad der persistenten State-Cache-Datei; None = STATE_CACHE_PATH (#141)
         """
         self._db = db
         self._announce = announce_fn
@@ -140,11 +149,14 @@ class TriggerEngine:
         self._cancel_timer_fn = cancel_timer_fn
         self._on_change = on_change
         self._triggers: list[dict] = []
+        self._state_cache_path = state_cache_path or STATE_CACHE_PATH
 
-        # State-Cache: {state_id: parsed_value} — wird von on_state_update befüllt
+        # State-Cache: {state_id: parsed_value} — von on_state_update/seed_from_snapshot
+        # befüllt, dient zugleich als "vorheriger Wert" für die Transition-Erkennung
+        # (siehe on_state_update) und wird persistiert, damit er einen Core-Neustart
+        # überlebt (#141) — sonst gilt nach jedem Neustart der erste beobachtete Wert
+        # jedes States fälschlich als Transition.
         self._state_cache: dict[str, object] = {}
-        # Vorherige Werte für Transition-Erkennung: {state_id: value}
-        self._prev_state: dict[str, object] = {}
         # Cooldown-Tracking: {trigger_id: last_fired_timestamp}
         self._last_fired: dict[str, float] = {}
         # Zeit-Trigger: {trigger_id: last_fired_date} — einmal pro Tag
@@ -153,6 +165,7 @@ class TriggerEngine:
         self._delay_timers: dict[str, str] = {}
 
         self._lock = threading.Lock()
+        self._load_state_cache()
         self._load()
 
         t = threading.Thread(target=self._tick_loop, daemon=True, name="trigger-engine")
@@ -305,12 +318,13 @@ class TriggerEngine:
         """Vom mqtt_handler aufgerufen wenn sich ein ioBroker-State ändert."""
         value = self._parse(raw)
         with self._lock:
-            prev = self._prev_state.get(state_id)
+            prev = self._state_cache.get(state_id)
             self._state_cache[state_id] = value
-            self._prev_state[state_id] = value
             if prev == value:
                 return  # kein Übergang, nichts prüfen
             triggers = list(self._triggers)
+            cache_copy = dict(self._state_cache)
+        self._save_state_cache(cache_copy)
 
         for trigger in triggers:
             tid = trigger.get("id", "")
@@ -691,6 +705,59 @@ class TriggerEngine:
             log.info(f"TriggerEngine: {len(triggers)} Trigger aus der Datenbank geladen")
         except Exception as e:
             log.error(f"TriggerEngine: Fehler beim Laden der Trigger aus der Datenbank: {e}")
+
+    def _load_state_cache(self) -> None:
+        """Lädt den persistierten State-Cache beim Start, damit ein Core-Neustart nicht
+        jeden State auf 'unbekannt' zurücksetzt (#141)."""
+        try:
+            with open(self._state_cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            log.warning(f"TriggerEngine: State-Cache '{self._state_cache_path}' konnte nicht geladen werden: {e}")
+            return
+        if not isinstance(data, dict):
+            log.warning(f"TriggerEngine: State-Cache '{self._state_cache_path}' hat unerwartetes Format, ignoriert.")
+            return
+        with self._lock:
+            self._state_cache = data
+        log.info(f"TriggerEngine: {len(data)} States aus persistentem Cache geladen ({self._state_cache_path})")
+
+    def _save_state_cache(self, data: dict) -> None:
+        """Schreibt den State-Cache atomar (write-then-rename) nach jeder echten Änderung
+        oder jedem Snapshot-Abgleich (#141)."""
+        tmp_path = f"{self._state_cache_path}.tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp_path, self._state_cache_path)
+        except Exception as e:
+            log.warning(f"TriggerEngine: State-Cache '{self._state_cache_path}' konnte nicht geschrieben werden: {e}")
+
+    def seed_from_snapshot(self, state_values: dict[str, str]) -> None:
+        """
+        Aktualisiert den State-Cache anhand eines frischen ioBroker-Snapshots — OHNE
+        Trigger zu feuern. Ein Snapshot ist ein Realitätsabgleich, keine Transition
+        (#141): ein Neustart soll nicht jeden Trigger einmal für seinen aktuellen,
+        oft unveränderten Wert auslösen.
+
+        Deckt nur States ab, die im Snapshot enthalten sind (enum-discovered States +
+        Extra-Prefixes) — reine WatchMore-States (z.B. 0_userdata-Flags in einer
+        'unless'-Bedingung) tauchen im Snapshot nie auf und bleiben unangetastet, ihr
+        letzter bekannter Wert kommt ausschließlich aus dem persistenten Cache.
+
+        state_values: {state_id: roher Wert als String (JSON-kodiert, wie von
+                       on_state_update erwartet)}
+        """
+        if not state_values:
+            return
+        with self._lock:
+            for state_id, raw in state_values.items():
+                self._state_cache[state_id] = self._parse(raw)
+            cache_copy = dict(self._state_cache)
+        self._save_state_cache(cache_copy)
+        log.info(f"TriggerEngine: {len(state_values)} States aus ioBroker-Snapshot übernommen (kein Trigger gefeuert)")
 
     # ------------------------------------------------------------------
     # Helpers

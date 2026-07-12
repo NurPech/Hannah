@@ -5,6 +5,10 @@
 -->
 
 
+## 0.60.3
+### Hannah Core
+* Fixed: `TriggerEngine`'s state cache now persists to disk (`TRIGGER_STATE_CACHE_PATH`, default `trigger_state_cache.json`) and survives a Core restart — previously every state looked "unknown" after a restart, so `also`/`unless` conditions and delay-timer reconciliation silently guessed instead of using the real last-known value. A fresh ioBroker device snapshot now also seeds the cache directly, without firing any trigger (a snapshot is a reality-sync, not a state transition) (Refs #141)
+
 ## 0.60.2
 ### Hannah Core
 * Fixed: `RegisterProxy` no longer reverts UDP server + MQTT discovery to Hannah's own address the instant the proxy's gRPC stream ends — a 10s grace period now lets a quick proxy reconnect cancel the revert, preventing satellites behind the proxy from being repointed to an address they can't reach during a brief outage (Refs #140)

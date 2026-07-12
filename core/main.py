@@ -1378,6 +1378,10 @@ def main():
     def _on_agent_device_snapshot(devices):
         nonlocal _iobroker_ready
         iobroker.handle_device_snapshot(devices)
+        # Trigger-State-Cache still nachziehen (kein Feuern) — sonst kennt die
+        # TriggerEngine nach einem Core-Neustart also/unless-States erst nach der
+        # nächsten echten Änderung (#141).
+        trigger_engine.seed_from_snapshot({d.state_id: d.value.value for d in devices})
         # Kein sync_rooms() hier: iobroker.rooms enthält nur Räume mit mindestens einem
         # aktuell passenden virtualDevice-State — Räume ohne virtualDevice (z.B. nur ein
         # Satellit drin) würden fälschlich als verschwunden behandelt und gelöscht.
