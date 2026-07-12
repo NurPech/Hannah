@@ -121,6 +121,40 @@ def test_get_devices_includes_state_types_and_enum_values():
     assert dict(device.state_enum_values["mode"].values) == {"0": "Aus", "1": "An"}
     assert "on" not in device.state_enum_values
 
+def test_get_devices_includes_state_writable():
+    """#144 — GetDevices reicht writable aus dem IoBrokerClient-Cache unverändert
+    bis in die DeviceInfo-Response durch."""
+    client = IoBrokerClient({"host": "localhost", "port": 8093})
+    servicer = _make_server(get_devices=client.get_devices_snapshot)
+
+    devices = [
+        AgentDevice(
+            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on",
+            room="wohnzimmer",
+            device="Decke",
+            device_type="light",
+            value=AgentStateValue(value="true", ack=True),
+            room_names={"de": "Wohnzimmer"},
+            writable=True,
+        ),
+        AgentDevice(
+            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.power",
+            room="wohnzimmer",
+            device="Decke",
+            device_type="light",
+            value=AgentStateValue(value="4.2", ack=True),
+            room_names={"de": "Wohnzimmer"},
+            writable=False,
+        ),
+    ]
+    client.handle_device_snapshot(devices)
+
+    response = servicer.GetDevices(None, None)
+
+    [room] = response.rooms
+    [device] = room.devices
+    assert dict(device.state_writable) == {"on": True, "power": False}
+
 def test_room_snapshot_dispatched():
     sync_rooms = MagicMock()
     servicer = _make_server(on_agent_room_snapshot=sync_rooms)

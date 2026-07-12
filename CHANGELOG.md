@@ -5,6 +5,10 @@
 -->
 
 
+## 0.60.4
+### Hannah Core
+* Added: `GetDevices` now includes a `state_writable` map per device, sourced from the adapter's `AgentDevice.writable` (derived from ioBroker's `common.write`) — lets the WebUI exclude read-only states (e.g. sensors) from control actions (Refs #144)
+
 ## 0.60.3
 ### Hannah Core
 * Fixed: `TriggerEngine`'s state cache now persists to disk (`TRIGGER_STATE_CACHE_PATH`, default `trigger_state_cache.json`) and survives a Core restart — previously every state looked "unknown" after a restart, so `also`/`unless` conditions and delay-timer reconciliation silently guessed instead of using the real last-known value. A fresh ioBroker device snapshot now also seeds the cache directly, without firing any trigger (a snapshot is a reality-sync, not a state transition) (Refs #141)

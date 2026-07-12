@@ -75,6 +75,7 @@ class Device:
     current: dict = field(default_factory=dict)        # canon-key → aktueller Wert (Cache)
     state_types: dict = field(default_factory=dict)    # canon-key → StateType (proto-Enum-Int, siehe hannah_proto.shared_pb2)
     enum_values: dict = field(default_factory=dict)    # canon-key → {rohwert: label}, nur bei ENUM/COLOR
+    state_writable: dict = field(default_factory=dict) # canon-key → bool, aus ioBroker common.write
 
 
 class IoBrokerClient:
@@ -194,6 +195,7 @@ class IoBrokerClient:
                 dev.states[state_suffix] = device.state_id
                 dev.current[state_suffix] = self._parse_payload(device.value.value)
                 dev.state_types[state_suffix] = device.state_type
+                dev.state_writable[state_suffix] = device.writable
                 if device.enum_values.values:
                     dev.enum_values[state_suffix] = dict(device.enum_values.values)
 
@@ -735,6 +737,7 @@ class IoBrokerClient:
                     "current":  {k: str(v) for k, v in dev.current.items()},
                     "state_types":       dict(dev.state_types),
                     "state_enum_values": {k: dict(v) for k, v in dev.enum_values.items()},
+                    "state_writable":    dict(dev.state_writable),
                 })
             result.append({
                 "key":     room_key,

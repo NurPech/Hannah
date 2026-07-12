@@ -799,6 +799,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     state_enum_values={
                         k: pb.EnumValues(values=v) for k, v in d["state_enum_values"].items()
                     },
+                    state_writable=d["state_writable"],
                 )
                 for d in r["devices"]
             ]

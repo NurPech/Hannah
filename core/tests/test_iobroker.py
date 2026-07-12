@@ -289,6 +289,44 @@ class TestHandleDeviceSnapshotStateTypes:
         assert device["state_enum_values"] == {"mode": {"0": "Aus", "1": "An"}}
 
 
+class TestHandleDeviceSnapshotWritable:
+    """#144 — AgentDevice.writable landet pro canon-key auf dem Device und wird von
+    get_devices_snapshot() unverändert durchgereicht."""
+
+    def _device_msg(self, state: str, writable: bool) -> AgentDevice:
+        return AgentDevice(
+            state_id=f"javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe.{state}",
+            room="schlafzimmer",
+            device="Deckenlampe",
+            device_type="light",
+            value=AgentStateValue(value="true", ack=True),
+            room_names={"de": "Schlafzimmer"},
+            writable=writable,
+        )
+
+    def test_writable_and_read_only_states_are_cached_per_key(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("on", True),
+            self._device_msg("power", False),
+        ])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe"]
+        assert dev.state_writable["on"] is True
+        assert dev.state_writable["power"] is False
+
+    def test_get_devices_snapshot_includes_state_writable(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("on", True),
+            self._device_msg("power", False),
+        ])
+
+        [room] = client.get_devices_snapshot()
+        [device] = room["devices"]
+        assert device["state_writable"] == {"on": True, "power": False}
+
+
 class TestHandleStateUpdate:
     """Regression: live updates go through state_names reverse-lookup, the initial
     gRPC snapshot does not — a suffix missing from state_names freezes that field
