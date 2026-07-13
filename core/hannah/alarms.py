@@ -179,7 +179,8 @@ class AlarmManager:
             dt = datetime.datetime.combine(d, datetime.time(h, m))
             return dt if dt > now else None
         skip = set(record.get("skip_dates") or [])
-        for offset in range(7):  # eine volle Woche deckt jede Wochentag-Kombination ab
+        for offset in range(8):  # +1 Tag: falls heute der einzige passende Wochentag ist und
+            # die Uhrzeit schon vorbei ist, muss derselbe Wochentag nächste Woche (offset 7) greifen
             d = now.date() + datetime.timedelta(days=offset)
             if d.weekday() not in weekdays or d.isoformat() in skip:
                 continue

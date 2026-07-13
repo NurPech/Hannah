@@ -417,6 +417,8 @@ class TriggerEngine:
                     allowed_wds = [self._DAYS_MAP.get(str(d).lower(), -1) for d in allowed_days]
                     if today_wd not in allowed_wds:
                         continue
+                if not self._also_condition_matches(cond.get("also")):
+                    continue
                 if not self._unless_condition_matches(cond.get("unless")):
                     continue
                 matched = True

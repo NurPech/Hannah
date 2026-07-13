@@ -103,6 +103,23 @@ class TestWhenOrList:
         assert engine.announced == [("all", "Zeit")]
 
 
+class TestTimeTriggerAlso:
+    """_check_time_triggers() muss 'also' genauso auswerten wie on_state_update()/match_phrase() (#146)."""
+
+    def test_time_condition_with_also_requires_state_match(self, engine, monkeypatch):
+        _create(engine, "t1", {
+            "time": "10:00", "also": [{"state": "a1", "value": True}],
+        }, say="Zeit und Zustand")
+        monkeypatch.setattr(trigger_engine_module, "datetime", _FixedDatetime(2026, 6, 28, 10, 0))
+
+        engine._check_time_triggers()
+        assert engine.announced == []  # a1 noch nie gesetzt
+
+        engine.on_state_update("a1", "true")
+        engine._check_time_triggers()
+        assert engine.announced == [("all", "Zeit und Zustand")]
+
+
 class TestAlsoOpFormat:
     def test_op_or_fires_if_any_matches(self, engine):
         _create(engine, "t1", {

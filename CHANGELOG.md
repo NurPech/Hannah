@@ -5,6 +5,11 @@
 -->
 
 
+## 0.60.5
+### Hannah Core
+* Fixed: `AlarmManager._compute_next_fire()` now correctly finds the next occurrence of a recurring alarm when today is the only configured weekday and its time has already passed — previously it returned `None` instead of the same weekday one week later (Refs #145)
+* Fixed: `TriggerEngine._check_time_triggers()` now evaluates a condition's `also` field, matching `on_state_update()`/`match_phrase()` — a time-based trigger can now require an additional state match (`also`) directly instead of needing an unguarded second OR-condition that fired regardless of time/day (Refs #146)
+
 ## 0.60.4
 ### Hannah Core
 * Added: `GetDevices` now includes a `state_writable` map per device, sourced from the adapter's `AgentDevice.writable` (derived from ioBroker's `common.write`) — lets the WebUI exclude read-only states (e.g. sensors) from control actions (Refs #144)
