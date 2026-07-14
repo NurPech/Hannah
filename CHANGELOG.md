@@ -5,6 +5,10 @@
 -->
 
 
+## 0.60.6
+### Hannah Core
+* Fixed: a trigger's `when` list with both a time condition and one or more state conditions as flat sibling entries (the format the WebUI's trigger editor actually saves) is now treated as time AND state, not as independent OR alternatives — previously the state condition(s) fired the trigger on every matching state change regardless of the time/day condition (Refs #147)
+
 ## 0.60.5
 ### Hannah Core
 * Fixed: `AlarmManager._compute_next_fire()` now correctly finds the next occurrence of a recurring alarm when today is the only configured weekday and its time has already passed — previously it returned `None` instead of the same weekday one week later (Refs #145)

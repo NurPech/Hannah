@@ -120,6 +120,49 @@ class TestTimeTriggerAlso:
         assert engine.announced == [("all", "Zeit und Zustand")]
 
 
+class TestTimeStateSiblingMerge:
+    """Ein when mit time- und state-Geschwister-Bedingungen (statt explizitem 'also')
+    muss die state-Bedingung(en) automatisch UND-verknüpfen, nicht als unabhängige
+    OR-Alternative behandeln — genau das Format, das die WebUI aktuell erzeugt (#147)."""
+
+    def test_sibling_state_condition_no_longer_fires_independently(self, engine, monkeypatch):
+        _create(engine, "t1", [
+            {"time": "10:00", "days": ["mon", "tue", "wed", "thu", "fri"]},
+            {"state": "cat_feeded", "value": "false"},
+        ], say="Katze füttern")
+        monkeypatch.setattr(trigger_engine_module, "datetime", _FixedDatetime(2026, 6, 29, 10, 0))  # Montag
+
+        # State wird gesetzt, aber es ist nicht 10 Uhr laut Tick-Loop-Check -> darf
+        # nicht mehr unabhängig über on_state_update feuern.
+        engine.on_state_update("cat_feeded", "false")
+        assert engine.announced == []
+
+        engine._check_time_triggers()
+        assert engine.announced == [("all", "Katze füttern")]
+
+    def test_time_check_requires_state_to_match_too(self, engine, monkeypatch):
+        _create(engine, "t1", [
+            {"time": "10:00"},
+            {"state": "cat_feeded", "value": "false"},
+        ], say="Katze füttern")
+        monkeypatch.setattr(trigger_engine_module, "datetime", _FixedDatetime(2026, 6, 29, 10, 0))
+
+        engine._check_time_triggers()
+        assert engine.announced == []  # cat_feeded noch nie gesetzt -> also-Check schlägt fehl
+
+    def test_multiple_state_siblings_stay_or_linked_against_each_other(self, engine, monkeypatch):
+        _create(engine, "t1", [
+            {"time": "10:00"},
+            {"state": "s1", "value": True},
+            {"state": "s2", "value": True},
+        ], say="Zeit oder-States")
+        monkeypatch.setattr(trigger_engine_module, "datetime", _FixedDatetime(2026, 6, 29, 10, 0))
+
+        engine.on_state_update("s1", "true")
+        engine._check_time_triggers()
+        assert engine.announced == [("all", "Zeit oder-States")]
+
+
 class TestAlsoOpFormat:
     def test_op_or_fires_if_any_matches(self, engine):
         _create(engine, "t1", {

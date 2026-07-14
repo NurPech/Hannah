@@ -309,10 +309,34 @@ class TriggerEngine:
     @staticmethod
     def _as_or_list(when: dict | list) -> list[dict]:
         """Normalisiert 'when' auf eine Liste von Bedingungs-Dicts (OR-verknüpft).
-        Alt-Format (einzelnes Dict) wird zur Einer-Liste — Verhalten bleibt identisch."""
-        if isinstance(when, list):
-            return when
-        return [when] if when else []
+        Alt-Format (einzelnes Dict) wird zur Einer-Liste — Verhalten bleibt identisch.
+
+        Enthält 'when' sowohl time- als auch state-Bedingungen, werden die
+        state-Bedingungen (untereinander weiterhin OR-verknüpft über eine
+        {"op": "or", ...}-Gruppe) als 'also' an JEDE time-Bedingung angehängt,
+        statt als eigene, unabhängige OR-Alternative behandelt zu werden — Zeit
+        ist immer UND mit den Zustands-Bedingungen im selben when verknüpft,
+        nie eine unabhängige ODER-Alternative dazu (#147). Andere Typen (z.B.
+        phrase) sind davon nicht betroffen und bleiben normale OR-Alternativen.
+        """
+        conds = when if isinstance(when, list) else ([when] if when else [])
+        time_conds = [c for c in conds if "time" in c]
+        state_conds = [c for c in conds if "time" not in c and "state" in c]
+        if not (time_conds and state_conds):
+            return conds
+
+        state_group = {"op": "or", "conditions": state_conds}
+        merged = []
+        for tc in time_conds:
+            tc = dict(tc)
+            existing_also = tc.get("also")
+            also_list = list(existing_also) if isinstance(existing_also, list) else ([existing_also] if existing_also else [])
+            also_list.append(state_group)
+            tc["also"] = also_list
+            merged.append(tc)
+
+        leftover = [c for c in conds if c not in time_conds and c not in state_conds]
+        return merged + leftover
 
     def on_state_update(self, state_id: str, raw: str) -> None:
         """Vom mqtt_handler aufgerufen wenn sich ein ioBroker-State ändert."""
