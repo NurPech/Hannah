@@ -298,6 +298,16 @@ static void heartbeat_task(void *arg)
             ESP_LOGD(TAG, "Heartbeat.");
         }
 
+        /* Periodisches Heap-Logging — Diagnose für Ressourcenerschöpfungs-
+         * Verdachtsfälle (#150): ein Satellit kann UDP-Heartbeats weiter
+         * verarbeiten (bereits offener Socket, keine neue Allokation nötig),
+         * während OTA (HTTPS/TLS) oder der Webserver (neue eingehende
+         * Verbindung) an einem fragmentierten/erschöpften Heap scheitern.
+         * Landet im Ringpuffer und damit in /log/last. */
+        ESP_LOGI(TAG, "Heap: frei=%lu min_je=%lu",
+                 (unsigned long)esp_get_free_heap_size(),
+                 (unsigned long)esp_get_minimum_free_heap_size());
+
         /* GOT_IP/MQTT_CONNECTED feuern nur einmal pro Verbindung, MQTT_DATA nur
          * bei eingehenden Befehlen — im ruhigen Idle-Betrieb kommt sonst über
          * lange Strecken kein einziges Lebenszeichen mehr rein. Der obige

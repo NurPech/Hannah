@@ -1556,7 +1556,14 @@ def main():
 
     def _on_ota_pending(device: str, version: str):
         log.info(f"OTA-Pending: {device} meldet Version {version}.")
-        grpc_servicer.agent_firmware_event(device, version, update_available=True)
+        # version here is the available/target version, not the satellite's
+        # current one — AgentFirmwareEvent.version must always report the
+        # current version, so send the last known one instead of clobbering
+        # it with the pending target (issue found via a resulting ioBroker
+        # firmware_version showing the not-yet-installed target version).
+        grpc_servicer.agent_firmware_event(
+            device, _satellite_firmware.get(device, version), update_available=True
+        )
         if not residents.is_home():
             mqtt_handler.publish_ota_ok(device)
         else:

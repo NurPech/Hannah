@@ -5,6 +5,13 @@
 -->
 
 
+## 0.60.8
+### Satellite Firmware
+* Added: `hannah_net`'s `heartbeat_task` now logs free/minimum-ever heap size on every tick — diagnostic for suspected resource-exhaustion failures where a satellite keeps processing UDP heartbeats (no new allocation needed) while OTA/webserver (need fresh allocations) stop working (Refs #150)
+
+### Hannah Core
+* Fixed: `_on_ota_pending()` sent the available/target firmware version in `AgentFirmwareEvent.version` — a field that's supposed to always report the satellite's *current* version — instead of the last known current version, causing the adapter to display the not-yet-installed target version as if it were already running. Now sends the last known current version (already tracked from the satellite's own periodic firmware report) alongside `update_available=true` (Refs #151)
+
 ## 0.60.7
 ### Satellite Firmware
 * Fixed: network watchdog (`hannah_net`'s `heartbeat_task`) relied on `esp_wifi_sta_get_ap_info()` as a liveness signal during idle periods — this only queries the WiFi driver's internal association state, which can keep reporting "connected" during the exact "zombie" WiFi state the watchdog was built to catch (Refs #86), so the timeout never elapsed and the satellite stayed offline for days until a manual power cycle. Now uses the `heartbeat_ack` reply Proxy/Core already send for every heartbeat (previously received but silently ignored) as the liveness signal instead — a real, server-confirmed round trip (Refs #149)
