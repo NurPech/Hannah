@@ -240,6 +240,9 @@ static void udp_receive_task(void *arg)
             } else if (strcmp(jtype->valuestring, "reregister") == 0) {
                 ESP_LOGW(TAG, "Re-Registrierung angefordert.");
                 send_register();
+
+            } else if (strcmp(jtype->valuestring, "heartbeat_ack") == 0) {
+                net_activity_mark();
             }
 
             cJSON_Delete(root);
@@ -297,16 +300,14 @@ static void heartbeat_task(void *arg)
 
         /* GOT_IP/MQTT_CONNECTED feuern nur einmal pro Verbindung, MQTT_DATA nur
          * bei eingehenden Befehlen — im ruhigen Idle-Betrieb kommt sonst über
-         * lange Strecken kein einziges Lebenszeichen mehr rein. Deshalb hier
-         * zusätzlich aktiv nachfragen: solange der WiFi-Treiber sich noch für
-         * assoziiert hält, zählt das ebenfalls als Lebenszeichen. Das allein
-         * fängt den eigentlichen "Zombie"-Fall (Treiber hält sich fälschlich
-         * für verbunden) zwar nicht ab, aber genau dafür bleiben die anderen,
-         * echten Bestätigungen (IP/MQTT) oben als schärferes Signal bestehen. */
-        if (!s_ap_mode) {
-            wifi_ap_record_t ap_info;
-            if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) net_activity_mark();
-        }
+         * lange Strecken kein einziges Lebenszeichen mehr rein. Der obige
+         * Heartbeat schließt genau diese Lücke: Proxy/Core bestätigen jeden
+         * Heartbeat mit "heartbeat_ack" (siehe udp_task-Handler oben), was
+         * net_activity_mark() auslöst — eine echte, serverbestätigte
+         * Zustellung statt nur eines lokalen Treiberzustands. (Vorher wurde
+         * hier zusätzlich esp_wifi_sta_get_ap_info() geprüft — verworfen,
+         * weil das nur den WiFi-Treiberzustand abfragt und im "Zombie"-Fall
+         * genau dann fälschlich "verbunden" meldet, wenn es nicht stimmt.) */
 
         /* Netzwerk-Watchdog: greift aktiv ein, falls seit dem letzten
          * bestätigten Lebenszeichen zu viel Zeit vergangen ist — deckt den

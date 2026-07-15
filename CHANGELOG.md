@@ -5,6 +5,11 @@
 -->
 
 
+## 0.60.7
+### Satellite Firmware
+* Fixed: network watchdog (`hannah_net`'s `heartbeat_task`) relied on `esp_wifi_sta_get_ap_info()` as a liveness signal during idle periods — this only queries the WiFi driver's internal association state, which can keep reporting "connected" during the exact "zombie" WiFi state the watchdog was built to catch (Refs #86), so the timeout never elapsed and the satellite stayed offline for days until a manual power cycle. Now uses the `heartbeat_ack` reply Proxy/Core already send for every heartbeat (previously received but silently ignored) as the liveness signal instead — a real, server-confirmed round trip (Refs #149)
+* Changed: `HANNAH_NET_WATCHDOG_TIMEOUT_S` default raised from 120s to 240s, comfortably above the time a normal STA→AP-mode transition (`HANNAH_WIFI_MAX_RETRY` reconnect attempts) takes, so the watchdog doesn't preempt a legitimate reconnect (Refs #149)
+
 ## 0.60.6
 ### Hannah Core
 * Fixed: a trigger's `when` list with both a time condition and one or more state conditions as flat sibling entries (the format the WebUI's trigger editor actually saves) is now treated as time AND state, not as independent OR alternatives — previously the state condition(s) fired the trigger on every matching state change regardless of the time/day condition (Refs #147)
