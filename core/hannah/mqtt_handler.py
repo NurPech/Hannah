@@ -37,6 +37,9 @@ class MQTTHandler:
         self._on_sensor:      Optional[Callable[[str, float, float, float, float, int, float, float], None]] = None
         self._on_play_asset_result: Optional[Callable[[str, str, bool], None]] = None
 
+        self._playback_done_events: dict[str, threading.Event] = {}
+        self._playback_done_lock = threading.Lock()
+
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
@@ -149,6 +152,23 @@ class MQTTHandler:
         log.info(f"PlayAsset '{asset_id}' → hannah/satellite/{device}/play_asset")
 
     # ------------------------------------------------------------------
+    # Playback-Done-Ack (generisch — jede beendete Wiedergabe auf dem
+    # Satelliten, nicht nur TTS/Plink-spezifisch; siehe #155)
+
+    def reset_playback_done(self, device: str):
+        """Vor dem Senden einer Wiedergabe aufrufen, um auf deren Ende zu warten."""
+        with self._playback_done_lock:
+            self._playback_done_events.setdefault(device, threading.Event()).clear()
+
+    def wait_for_playback_done(self, device: str, timeout: float) -> bool:
+        """Blockiert bis der Satellit `playback_done` meldet oder timeout abläuft.
+        False = kein Ack angekommen (z.B. ältere Firmware ohne Publish) — Aufrufer
+        sollte auf eine feste Wartezeit zurückfallen."""
+        with self._playback_done_lock:
+            event = self._playback_done_events.setdefault(device, threading.Event())
+        return event.wait(timeout)
+
+    # ------------------------------------------------------------------
     # Discovery / raw
 
     def publish_discovery(self, udp_host: str, udp_port: int, topic: str = "hannah/server"):
@@ -214,7 +234,8 @@ class MQTTHandler:
         client.subscribe("hannah/satellite/+/ble/report", qos=0)
         client.subscribe("hannah/satellite/+/sensors", qos=0)
         client.subscribe("hannah/satellite/+/play_asset/result", qos=1)
-        log.info("OTA / firmware / BLE / sensors / play_asset-Ergebnis abonniert")
+        client.subscribe("hannah/satellite/+/playback_done", qos=1)
+        log.info("OTA / firmware / BLE / sensors / play_asset-Ergebnis / playback_done abonniert")
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
@@ -261,6 +282,14 @@ class MQTTHandler:
                         self._on_firmware(parts[2], version)
                 except Exception:
                     pass
+            return
+
+        if topic.startswith("hannah/satellite/") and topic.endswith("/playback_done"):
+            parts = topic.split("/")
+            if len(parts) == 4:
+                device = parts[2]
+                with self._playback_done_lock:
+                    self._playback_done_events.setdefault(device, threading.Event()).set()
             return
 
         if topic.startswith("hannah/satellite/") and topic.endswith("/play_asset/result"):

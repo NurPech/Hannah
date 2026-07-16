@@ -174,6 +174,7 @@ Kein TLS auf UDP (zu teuer für ESP32, im LAN akzeptabel).
 | `hannah/satellite/{device}/play_asset` | Core → Satellit: Sound-Asset abspielen |
 | `hannah/satellite/{device}/ota/pending` / `/ok` | OTA-Update-Anfrage/-Freigabe |
 | `hannah/satellite/{device}/firmware` | Satellit → Core: aktuelle Firmware-Version |
+| `hannah/satellite/{device}/playback_done` | Satellit → Core: eine Wiedergabe (TTS/Plink/Asset) ist auf dem Speaker wirklich fertig abgespielt (DMA drained) — generisches Ack, ersetzt geratene feste Sleeps (z.B. `TriggerPlink`, #155) |
 | `hannah/satellite/{device}/ble/watchlist` / `/report` | BLE-Scanner-Konfiguration / Scan-Treffer |
 | `hannah/satellite/{device}/sensors` | Satellit → Core: BME680/BSEC2-Sensordaten |
 

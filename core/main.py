@@ -1367,8 +1367,11 @@ def main():
         from hannah.plink import get_plink_pcm
         plink_wav = cfg.get("plink_wav_path", "")
         pcm, plink_duration = get_plink_pcm(plink_wav)
+        mqtt_handler.reset_playback_done(device_id)
         _send_audio(device_id, pcm, 16000, label="[plink] ")
-        time.sleep(plink_duration + 0.1)
+        if not mqtt_handler.wait_for_playback_done(device_id, timeout=plink_duration + 1.0):
+            log.warning(f"[plink] Kein playback_done von '{device_id}' erhalten (alte Firmware?) — Fallback-Sleep")
+            time.sleep(plink_duration + 0.1)
         mqtt_handler.publish_virtual_ptt(device_id, True)
         log.info(f"[plink] Virtual PTT AN für {record_duration}s → {device_id}")
         time.sleep(record_duration)

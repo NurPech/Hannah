@@ -5,6 +5,14 @@
 -->
 
 
+## 0.60.11
+### Hannah Core
+* Fixed: `TriggerPlink` enabled virtual PTT (recording start) after a guessed fixed sleep following the plink tone, which didn't account for real playback pipeline latency — the plink tone bled into the start of every hey-hannah wakeword sample recorded this way. Now waits for a `playback_done` ack from the satellite instead, falling back to the old guessed sleep if the satellite's firmware doesn't send one yet (Refs #155)
+* Added: `mqtt_handler.reset_playback_done()` / `wait_for_playback_done()` — generic per-device wait for a satellite's `playback_done` MQTT ack (Refs #155)
+
+### Satellite Firmware
+* Added: `speaker_task` publishes `hannah/satellite/{device}/playback_done` once a playback (TTS/plink/asset) is fully drained through I2S — generic ack Core can wait on instead of guessing a fixed delay (Refs #155)
+
 ## 0.60.10
 ### Hannah Core
 * Fixed: `deploy/install.sh` installed to `/opt/hannah-core`, but `hannah.service`'s `WorkingDirectory`/`ExecStart` expect `/opt/hannah/core` — the service would fail to start after a fresh install. Now installs to `/opt/hannah/core`, matching the service unit

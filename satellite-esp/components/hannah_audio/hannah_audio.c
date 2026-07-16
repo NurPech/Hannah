@@ -487,6 +487,9 @@ static void mic_task(void *arg)
 static void speaker_task(void *arg)
 {
     bool was_speaking = false;
+    char playback_done_topic[96];
+    snprintf(playback_done_topic, sizeof(playback_done_topic),
+             "hannah/satellite/%s/playback_done", hannah_config_get()->device_id);
     ESP_LOGI(TAG, "Speaker-Task gestartet.");
     while (1) {
         size_t item_size;
@@ -511,6 +514,10 @@ static void speaker_task(void *arg)
             vRingbufferReturnItem(s_spk_ringbuf, item);
             was_speaking = false;
             s_speaking_active = false;
+            /* Generisches "Wiedergabe fertig"-Signal an Core — DMA ist an dieser
+             * Stelle wirklich drained, nicht nur der Ringbuffer geleert. Core kann
+             * darauf warten statt eine feste Verzögerung zu raten (z.B. TriggerPlink). */
+            hannah_net_mqtt_publish(playback_done_topic, "{}", 1, 0);
             if (!s_sampling_mode)
                 hannah_led_set_state(LED_STATE_IDLE);
             if (s_listen_after_tts && !s_sampling_mode) {
