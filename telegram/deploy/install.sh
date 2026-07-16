@@ -18,7 +18,7 @@ set -euo pipefail
 UPDATE_SERVER_URL="${UPDATE_SERVER_URL:-https://hannah-update.sgessinger.de}"
 UPDATE_SERVER_TOKEN="${UPDATE_SERVER_TOKEN:-}"
 TELEGRAM_CHANNEL="${TELEGRAM_CHANNEL:-telegram-stable}"
-INSTALL_DIR="/opt/hannah-telegram"
+INSTALL_DIR="/opt/hannah/telegram"
 CONFIG_DIR="/etc/hannah-telegram"
 SERVICE_NAME="hannah-telegram"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"

@@ -19,7 +19,7 @@ set -euo pipefail
 UPDATE_SERVER_URL="${UPDATE_SERVER_URL:-https://hannah-update.sgessinger.de}"
 UPDATE_SERVER_TOKEN="${UPDATE_SERVER_TOKEN:-}"
 VOICEID_CHANNEL="${VOICEID_CHANNEL:-voiceid-stable}"
-INSTALL_DIR="/opt/hannah-voiceid"
+INSTALL_DIR="/opt/hannah/voiceid"
 RAM_DISK="/mnt/hannah_mem"
 RAM_DISK_SIZE="128M"
 SERVICE_NAME="hannah-voiceid"

@@ -18,7 +18,7 @@ set -euo pipefail
 UPDATE_SERVER_URL="${UPDATE_SERVER_URL:-https://hannah-update.sgessinger.de}"
 UPDATE_SERVER_TOKEN="${UPDATE_SERVER_TOKEN:-}"
 CORE_CHANNEL="${CORE_CHANNEL:-core-stable}"
-INSTALL_DIR="/opt/hannah-core"
+INSTALL_DIR="/opt/hannah/core"
 CONFIG_DIR="/etc/hannah"
 SERVICE_NAME="hannah"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"

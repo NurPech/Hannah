@@ -5,6 +5,25 @@
 -->
 
 
+## 0.60.10
+### Hannah Core
+* Fixed: `deploy/install.sh` installed to `/opt/hannah-core`, but `hannah.service`'s `WorkingDirectory`/`ExecStart` expect `/opt/hannah/core` — the service would fail to start after a fresh install. Now installs to `/opt/hannah/core`, matching the service unit
+* Fixed: `deploy/install.sh` was tracked in git without the executable bit — `curl | bash` worked regardless, but running the extracted script directly (e.g. `--uninstall`) failed with `Permission denied`
+
+### Hannah Proxy
+* Fixed: `deploy/install.sh` was tracked in git without the executable bit, same fix as Core
+
+### Telegram
+* Fixed: `deploy/install.sh` installed to `/opt/hannah-telegram`, but `hannah-telegram.service` expects `/opt/hannah/telegram` — same fix as Core
+* Fixed: `deploy/install.sh` was tracked in git without the executable bit, same fix as Core
+
+### VoiceID
+* Fixed: `deploy/install.sh` installed to `/opt/hannah-voiceid`, but `hannah-voiceid.service` expects `/opt/hannah/voiceid` — same fix as Core
+* Fixed: `deploy/install.sh` and `deploy/install-macos.sh` were tracked in git without the executable bit, same fix as Core
+
+### AutoDeploy
+* Fixed: `deploy/install.sh` and `deploy/install-macos.sh` were tracked in git without the executable bit, same fix as Core
+
 ## 0.60.9
 ### Hannah Core
 * Fixed: `deploy/install.sh` no longer hard-fails when `UPDATE_SERVER_TOKEN` is unset — the Update Server allows anonymous access to `public_read` channels, so the token is only required for non-public ones (Refs #152)
