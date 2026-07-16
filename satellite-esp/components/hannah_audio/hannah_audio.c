@@ -58,6 +58,9 @@ static const char *TAG = "hannah_audio";
 /* Mic-Warmup: erste Frames nach Boot verwerfen (PDM-Transienten, Fehlauslöser) */
 #define WARMUP_FRAMES 500  /* 500 × 10ms = 5s */
 
+/* Sampling-Mode "noise": Auto-Flush-Intervall (Dauerstrom-Aufnahme) */
+#define NOISE_AUTOFLUSH_FRAMES 5000  /* 5000 × 10ms = 50s */
+
 /* ------------------------------------------------------------------ */
 /* Typen                                                                 */
 
@@ -334,7 +337,7 @@ static void mic_task(void *arg)
                     if (was_ptt && !s_ptt_active)
                         hannah_net_send_audio_end();
                 } else {
-                    /* noise: Dauerstrom, Auto-Flush alle 5s, Pre-Flush bei PTT-Press */
+                    /* noise: Dauerstrom, Auto-Flush alle 50s, Pre-Flush bei PTT-Press */
                     if (!was_ptt && s_ptt_active && s_stream_frames > 0) {
                         hannah_net_send_audio_end();
                         s_stream_frames = 0;
@@ -342,7 +345,7 @@ static void mic_task(void *arg)
                     hannah_net_send_audio_sampling((uint8_t *)mono, mono_samples * 2);
                     s_stream_frames++;
                     bool ptt_flush  = (was_ptt && !s_ptt_active);
-                    bool auto_flush = (s_stream_frames >= 500);  /* 500 × 10ms = 5s */
+                    bool auto_flush = (s_stream_frames >= NOISE_AUTOFLUSH_FRAMES);
                     if (ptt_flush || auto_flush) {
                         hannah_net_send_audio_end();
                         s_stream_frames = 0;
@@ -437,7 +440,7 @@ static void mic_task(void *arg)
                 if (was_ptt && !ptt)
                     hannah_net_send_audio_end();
             } else {
-                /* noise: Dauerstrom, Auto-Flush alle 5s, Pre-Flush bei PTT-Press */
+                /* noise: Dauerstrom, Auto-Flush alle 50s, Pre-Flush bei PTT-Press */
                 if (!was_ptt && ptt && s_stream_frames > 0) {
                     hannah_net_send_audio_end();
                     s_stream_frames = 0;
@@ -445,7 +448,7 @@ static void mic_task(void *arg)
                 hannah_net_send_audio_sampling((uint8_t *)mono, mono_samples * 2);
                 s_stream_frames++;
                 bool ptt_flush  = (was_ptt && !ptt);
-                bool auto_flush = (s_stream_frames >= 500);  /* 500 × 10ms = 5s */
+                bool auto_flush = (s_stream_frames >= NOISE_AUTOFLUSH_FRAMES);
                 if (ptt_flush || auto_flush) {
                     hannah_net_send_audio_end();
                     s_stream_frames = 0;

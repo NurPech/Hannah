@@ -5,6 +5,11 @@
 -->
 
 
+## 0.60.12
+### Satellite Firmware
+* Removed: PCB Rev2 firmware build and its update-server channel (`satellite-esp-rev2`) — Rev2 boards had a dimension error and were only ever used for electrical testing, never deployed; Rev4 is the only hardware in use
+* Changed: `noise` capture sample_type auto-flush interval increased from 5s to 50s (`NOISE_AUTOFLUSH_FRAMES`) — longer ambient/noise sample segments for the Voice Collector (Refs #156)
+
 ## 0.60.11
 ### Hannah Core
 * Fixed: `TriggerPlink` enabled virtual PTT (recording start) after a guessed fixed sleep following the plink tone, which didn't account for real playback pipeline latency — the plink tone bled into the start of every hey-hannah wakeword sample recorded this way. Now waits for a `playback_done` ack from the satellite instead, falling back to the old guessed sleep if the satellite's firmware doesn't send one yet (Refs #155)
