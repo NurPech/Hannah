@@ -11,7 +11,7 @@
 #
 # Env vars:
 #   UPDATE_SERVER_URL    Base URL of the Hannah Update Server
-#   UPDATE_SERVER_TOKEN  Bearer token for the Update Server
+#   UPDATE_SERVER_TOKEN  Bearer token for the Update Server (optional, only required for non-public channels)
 #   AUTODEPLOY_CHANNEL   Channel to install from (default: autodeploy-stable)
 #
 set -euo pipefail
@@ -51,13 +51,12 @@ uninstall() {
 [[ "${1:-}" == "--uninstall" ]] && { uninstall; exit 0; }
 
 # ── Download latest release from Update Server ────────────────────────────────
-if [[ -z "$UPDATE_SERVER_TOKEN" ]]; then
-    err "UPDATE_SERVER_TOKEN is not set."
-fi
+AUTH_HEADER=()
+[[ -n "$UPDATE_SERVER_TOKEN" ]] && AUTH_HEADER=(-H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}")
 
 info "Fetching latest autodeploy release from ${UPDATE_SERVER_URL} (channel: ${AUTODEPLOY_CHANNEL}) ..."
 LATEST_JSON=$(curl -sf \
-    -H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}" \
+    "${AUTH_HEADER[@]}" \
     "${UPDATE_SERVER_URL}/latest?channel=${AUTODEPLOY_CHANNEL}")
 LATEST_VERSION=$(echo "$LATEST_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])")
 info "Latest version: ${LATEST_VERSION}"
@@ -66,7 +65,7 @@ TMPFILE=$(mktemp /tmp/autodeploy-XXXXXX.tar.gz)
 trap 'rm -f "$TMPFILE"' EXIT
 
 curl -sf \
-    -H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}" \
+    "${AUTH_HEADER[@]}" \
     -o "$TMPFILE" \
     "${UPDATE_SERVER_URL}/releases/${LATEST_VERSION}?channel=${AUTODEPLOY_CHANNEL}"
 ok "Downloaded ${LATEST_VERSION}."

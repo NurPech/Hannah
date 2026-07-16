@@ -10,7 +10,7 @@
 #
 # Env vars:
 #   UPDATE_SERVER_URL    Base URL of the Hannah Update Server
-#   UPDATE_SERVER_TOKEN  Bearer token for the Update Server
+#   UPDATE_SERVER_TOKEN  Bearer token for the Update Server (optional, only required for non-public channels)
 #   PROXY_CHANNEL        Channel prefix to install from (default: proxy-stable)
 #                        Architecture suffix (-amd64 / -arm64) is appended automatically.
 #
@@ -35,6 +35,8 @@ need() { command -v "$1" &>/dev/null || err "Required tool not found: $1"; }
 need curl
 need systemctl
 
+[[ $EUID -eq 0 ]] || err "This script must be run as root (try: sudo bash)."
+
 # ── Architecture detection ─────────────────────────────────────────────────────
 detect_arch() {
     case "$(uname -m)" in
@@ -58,16 +60,15 @@ uninstall() {
 [[ "${1:-}" == "--uninstall" ]] && { uninstall; exit 0; }
 
 # ── Resolve channel ───────────────────────────────────────────────────────────
-if [[ -z "$UPDATE_SERVER_TOKEN" ]]; then
-    err "UPDATE_SERVER_TOKEN is not set."
-fi
+AUTH_HEADER=()
+[[ -n "$UPDATE_SERVER_TOKEN" ]] && AUTH_HEADER=(-H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}")
 
 ARCH=$(detect_arch)
 PROXY_CHANNEL="${PROXY_CHANNEL_BASE}-${ARCH}"
 
 info "Fetching latest proxy release from ${UPDATE_SERVER_URL} (channel: ${PROXY_CHANNEL}) ..."
 LATEST_JSON=$(curl -sf \
-    -H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}" \
+    "${AUTH_HEADER[@]}" \
     "${UPDATE_SERVER_URL}/latest?channel=${PROXY_CHANNEL}")
 LATEST_VERSION=$(echo "$LATEST_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])")
 info "Latest version: ${LATEST_VERSION} (${ARCH})"
@@ -78,7 +79,7 @@ TMPDIR=$(mktemp -d /tmp/hannah-proxy-XXXXXX)
 trap 'rm -f "$TMPTAR"; rm -rf "$TMPDIR"' EXIT
 
 curl -sf \
-    -H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}" \
+    "${AUTH_HEADER[@]}" \
     -o "$TMPTAR" \
     "${UPDATE_SERVER_URL}/releases/${LATEST_VERSION}?channel=${PROXY_CHANNEL}"
 

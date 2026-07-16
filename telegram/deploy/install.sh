@@ -9,7 +9,7 @@
 #
 # Env vars:
 #   UPDATE_SERVER_URL    Base URL of the Hannah Update Server
-#   UPDATE_SERVER_TOKEN  Bearer token for the Update Server
+#   UPDATE_SERVER_TOKEN  Bearer token for the Update Server (optional, only required for non-public channels)
 #   TELEGRAM_CHANNEL     Channel to install from (default: telegram-stable)
 #
 set -euo pipefail
@@ -34,6 +34,8 @@ need python3
 need curl
 need systemctl
 
+[[ $EUID -eq 0 ]] || err "This script must be run as root (try: sudo bash)."
+
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 uninstall() {
     info "Stopping and disabling ${SERVICE_NAME} ..."
@@ -48,13 +50,12 @@ uninstall() {
 [[ "${1:-}" == "--uninstall" ]] && { uninstall; exit 0; }
 
 # ── Download latest release from Update Server ────────────────────────────────
-if [[ -z "$UPDATE_SERVER_TOKEN" ]]; then
-    err "UPDATE_SERVER_TOKEN is not set."
-fi
+AUTH_HEADER=()
+[[ -n "$UPDATE_SERVER_TOKEN" ]] && AUTH_HEADER=(-H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}")
 
 info "Fetching latest telegram release from ${UPDATE_SERVER_URL} (channel: ${TELEGRAM_CHANNEL}) ..."
 LATEST_JSON=$(curl -sf \
-    -H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}" \
+    "${AUTH_HEADER[@]}" \
     "${UPDATE_SERVER_URL}/latest?channel=${TELEGRAM_CHANNEL}")
 LATEST_VERSION=$(echo "$LATEST_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])")
 info "Latest version: ${LATEST_VERSION}"
@@ -63,7 +64,7 @@ TMPFILE=$(mktemp /tmp/hannah-telegram-XXXXXX.tar.gz)
 trap 'rm -f "$TMPFILE"' EXIT
 
 curl -sf \
-    -H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}" \
+    "${AUTH_HEADER[@]}" \
     -o "$TMPFILE" \
     "${UPDATE_SERVER_URL}/releases/${LATEST_VERSION}?channel=${TELEGRAM_CHANNEL}"
 ok "Downloaded ${LATEST_VERSION}."

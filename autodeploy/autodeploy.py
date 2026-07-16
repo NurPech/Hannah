@@ -36,7 +36,7 @@ DEFAULT_DEVICE_ID_FILE = "/var/lib/hannah/autodeploy-device-id"
 # ---------------------------------------------------------------------------
 
 def _headers(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}"}
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def get_or_create_device_id(path: Path) -> str:
@@ -227,7 +227,7 @@ def main() -> None:
         sys.exit(1)
 
     base_url: str = config["server_url"].rstrip("/")
-    token: str = config["token"]
+    token: str = config.get("token", "")
     poll_interval: int = config.get("poll_interval", 300)
     components: list[dict] = config["components"]
     device_id: str = get_or_create_device_id(device_id_path)

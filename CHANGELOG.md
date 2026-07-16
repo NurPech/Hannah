@@ -5,6 +5,29 @@
 -->
 
 
+## 0.60.9
+### Hannah Core
+* Fixed: `deploy/install.sh` no longer hard-fails when `UPDATE_SERVER_TOKEN` is unset — the Update Server allows anonymous access to `public_read` channels, so the token is only required for non-public ones (Refs #152)
+* Added: `deploy/install.sh` now checks it's running as root before attempting any privileged operation, instead of failing partway through with a confusing permission error (Refs #153)
+
+### Hannah Proxy
+* Fixed: `deploy/install.sh` no longer hard-fails when `UPDATE_SERVER_TOKEN` is unset, same fix as Core (Refs #152)
+* Added: `deploy/install.sh` now checks it's running as root, same fix as Core (Refs #153)
+
+### Telegram
+* Fixed: `deploy/install.sh` no longer hard-fails when `UPDATE_SERVER_TOKEN` is unset, same fix as Core (Refs #152)
+* Added: `deploy/install.sh` now checks it's running as root, same fix as Core (Refs #153)
+
+### VoiceID
+* Fixed: `deploy/install.sh` no longer hard-fails when `UPDATE_SERVER_TOKEN` is unset, same fix as Core (Refs #152)
+* Added: `deploy/install.sh` now checks it's running as root, same fix as Core (Refs #153)
+* Fixed: `deploy/install-macos.sh` still hard-failed without `UPDATE_SERVER_TOKEN` — missed in the original pass since it only touched the Linux scripts (Refs #153)
+
+### AutoDeploy
+* Fixed: `deploy/install.sh` no longer hard-fails when `UPDATE_SERVER_TOKEN` is unset, same fix as Core. `autodeploy.py` no longer requires a `token` key in its config and skips the `Authorization` header entirely when none is configured (Refs #152)
+* Added: `deploy/install.sh` now checks it's running as root, same fix as Core (Refs #153)
+* Fixed: `deploy/install-macos.sh` still hard-failed without `UPDATE_SERVER_TOKEN` — missed in the original pass since it only touched the Linux scripts (Refs #153)
+
 ## 0.60.8
 ### Satellite Firmware
 * Added: `hannah_net`'s `heartbeat_task` now logs free/minimum-ever heap size on every tick — diagnostic for suspected resource-exhaustion failures where a satellite keeps processing UDP heartbeats (no new allocation needed) while OTA/webserver (need fresh allocations) stop working (Refs #150)
