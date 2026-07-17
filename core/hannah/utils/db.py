@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS "satellites" (
 	"last_seen"	TEXT,
 	"paired_at"	TEXT,
 	"created_at"	TEXT NOT NULL DEFAULT (datetime('now')),
+	"firmware_version"	TEXT,
+	"update_available"	INTEGER NOT NULL DEFAULT 0,
+	"new_version"	TEXT,
 	PRIMARY KEY("device_id"),
 	FOREIGN KEY("room_id") REFERENCES "rooms"("room_id") ON DELETE SET NULL,
     FOREIGN KEY("owner_user_id") REFERENCES "users"("id") ON DELETE SET NULL
@@ -196,6 +199,12 @@ def init_db():
 
     if "owner_user_id" not in _col_names(db, "satellites"):
         db.execute('ALTER TABLE "satellites" ADD COLUMN "owner_user_id" INTEGER REFERENCES "users"("id")')
+        db.commit()
+
+    if "firmware_version" not in _col_names(db, "satellites"):
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "firmware_version" TEXT')
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "update_available" INTEGER NOT NULL DEFAULT 0')
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "new_version" TEXT')
         db.commit()
 
     if "name" not in _col_names(db, "cars"):

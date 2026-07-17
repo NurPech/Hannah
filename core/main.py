@@ -1542,11 +1542,9 @@ def main():
             process_announcement("all", "Es ist Besuch angekommen!")
             grpc_servicer.publish_event(make_resident_event(f"guest:{resident.roomie_id}", resident.roomie_id, "arrived"))
 
-    _satellite_firmware: dict[str, str] = {}
-
     def _on_firmware_version(device: str, version: str):
-        _satellite_firmware[device] = version
         log.info(f"Firmware-Version: {device} = {version}")
+        satellite_manager.set_satellite_firmware(device, version)
         grpc_servicer.publish_event(make_firmware_event(device, version))
         grpc_servicer.agent_firmware_event(device, version)
 
@@ -1564,8 +1562,12 @@ def main():
         # current version, so send the last known one instead of clobbering
         # it with the pending target (issue found via a resulting ioBroker
         # firmware_version showing the not-yet-installed target version).
-        grpc_servicer.agent_firmware_event(
-            device, _satellite_firmware.get(device, version), update_available=True
+        satellite_manager.set_satellite_update_available(device, version)
+        current_sat = satellite_manager.get_satellite(device)
+        current_version = (current_sat.firmware_version if current_sat else "") or version
+        grpc_servicer.agent_firmware_event(device, current_version, update_available=True)
+        grpc_servicer.publish_event(
+            make_firmware_event(device, current_version, update_available=True, new_version=version)
         )
         if not residents.is_home():
             mqtt_handler.publish_ota_ok(device)

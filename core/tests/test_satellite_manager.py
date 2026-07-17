@@ -136,6 +136,65 @@ class TestRoomAndUserLookup:
         assert manager.get_user_satellites(1) == []
 
 
+class TestFirmware:
+    """#157 — Firmware-Version/Update-Verfügbarkeit werden im Satellite-Modell
+    persistiert statt nur im flüchtigen In-Memory-Dict aus main.py."""
+
+    def test_set_firmware_persists_version(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        manager.set_satellite_firmware("wz-esp", "0.60.7")
+
+        sat = manager.get_satellite("wz-esp")
+        assert sat.firmware_version == "0.60.7"
+        assert bool(sat.update_available) is False
+
+    def test_set_firmware_creates_unknown_satellite(self, manager):
+        manager.set_satellite_firmware("new-esp", "0.60.7")
+
+        sat = manager.get_satellite("new-esp")
+        assert sat is not None
+        assert sat.firmware_version == "0.60.7"
+
+    def test_set_update_available(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.set_satellite_firmware("wz-esp", "0.60.6")
+
+        manager.set_satellite_update_available("wz-esp", "0.60.7")
+
+        sat = manager.get_satellite("wz-esp")
+        assert bool(sat.update_available) is True
+        assert sat.new_version == "0.60.7"
+        assert sat.firmware_version == "0.60.6"  # unverändert — nur die Zielversion ist neu
+
+    def test_firmware_report_matching_pending_clears_update_available(self, manager):
+        """Meldet der Satellit nach dem OTA genau die zuvor als new_version gemerkte
+        Version, ist das Update installiert — update_available/new_version räumen sich weg."""
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.set_satellite_firmware("wz-esp", "0.60.6")
+        manager.set_satellite_update_available("wz-esp", "0.60.7")
+
+        manager.set_satellite_firmware("wz-esp", "0.60.7")
+
+        sat = manager.get_satellite("wz-esp")
+        assert sat.firmware_version == "0.60.7"
+        assert bool(sat.update_available) is False
+        assert sat.new_version is None
+
+    def test_firmware_report_not_matching_pending_keeps_update_available(self, manager):
+        """Zwischenzeitlicher Report einer anderen Version (z.B. Boot auf altem Stand
+        nach Hard-Reset) darf ein bestehendes update_available nicht fälschlich löschen."""
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.set_satellite_firmware("wz-esp", "0.60.6")
+        manager.set_satellite_update_available("wz-esp", "0.60.7")
+
+        manager.set_satellite_firmware("wz-esp", "0.60.6")
+
+        sat = manager.get_satellite("wz-esp")
+        assert bool(sat.update_available) is True
+        assert sat.new_version == "0.60.7"
+
+
 class TestPermissions:
     """#111 — DeleteSatellite/SetSatelliteOwner: nur Trustlevel 10. SetSatelliteRoom/
     SetSatelliteDisplayName: ab Trustlevel 5, aber nur für "eigene" Satelliten

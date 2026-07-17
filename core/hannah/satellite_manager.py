@@ -160,6 +160,31 @@ class SatelliteManager:
         sat.set_owner(user_id)
         return True
 
+    def set_satellite_firmware(self, device_id: str, version: str) -> None:
+        """Persistiert die aktuell laufende Firmware-Version (vom `.../firmware`-MQTT-Report).
+        Legt den Satelliten an, falls er noch nicht in der DB existiert. Löscht ein
+        anstehendes update_available/new_version, sobald die gemeldete Version mit
+        der zuvor als Ziel gemerkten new_version übereinstimmt (Update wurde installiert)."""
+        db = self._db()
+        with self._lock:
+            sat = Satellite.get(db, device_id=device_id)
+            if not sat:
+                sat = Satellite.create(db, device_id=device_id, last_seen=_now_sql())
+            if sat.new_version and sat.new_version == version:
+                sat.update(firmware_version=version, update_available=False, new_version=None)
+            else:
+                sat.update(firmware_version=version)
+
+    def set_satellite_update_available(self, device_id: str, new_version: str) -> None:
+        """Vermerkt, dass für diesen Satelliten ein OTA-Update auf new_version ansteht
+        (vom `.../ota/pending`-MQTT-Report)."""
+        db = self._db()
+        with self._lock:
+            sat = Satellite.get(db, device_id=device_id)
+            if not sat:
+                sat = Satellite.create(db, device_id=device_id, last_seen=_now_sql())
+            sat.update(update_available=True, new_version=new_version)
+
     def get_satellite_owner(self, device_id: str) -> Optional[int]:
         """Gibt die zugewiesene owner_user_id zurück oder None."""
         sat = Satellite.get(self._db(), device_id=device_id)
@@ -199,6 +224,9 @@ class SatelliteManager:
                 "room_display_name": room_names.get(s.room_id),
                 "owner_user_id": s.owner_user_id,
                 "owner_display_name": owner_names.get(s.owner_user_id),
+                "firmware_version": s.firmware_version,
+                "update_available": bool(s.update_available),
+                "new_version": s.new_version,
             }
             for s in sats
         ]

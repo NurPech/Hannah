@@ -5,6 +5,10 @@
 -->
 
 
+## 0.61.0
+### Hannah Core
+* Added: satellite firmware version/update-available state is now persisted on the `Satellite` model (`satellites` table: `firmware_version`, `update_available`, `new_version`) instead of only living in a volatile in-memory dict — `GetSatellites` now reports the current firmware state directly, and the external `SubscribeEvents`/`satellite.firmware` event now also carries `update_available`/`new_version` (previously only visible to the ioBroker adapter over `AgentConnect`) (Refs #157)
+
 ## 0.60.12
 ### Satellite Firmware
 * Removed: PCB Rev2 firmware build and its update-server channel (`satellite-esp-rev2`) — Rev2 boards had a dimension error and were only ever used for electrical testing, never deployed; Rev4 is the only hardware in use

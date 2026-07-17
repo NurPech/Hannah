@@ -551,7 +551,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             seen.add(device_id)
             info = connected.get(device_id)
             room_id = sat.get("room_id") or ""
-            result.append(pb.Satellite(
+            kwargs = dict(
                 device_id=device_id,
                 room=info.get("room", "") if info else "",
                 address=info.get("addr", "") if info else "",
@@ -563,7 +563,12 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 room_mismatch=info is not None and info.get("room") != room_id,
                 owner_user_id=sat.get("owner_user_id") or 0,
                 owner_display_name=sat.get("owner_display_name") or "",
-            ))
+                firmware_version=sat.get("firmware_version") or "",
+                update_available=bool(sat.get("update_available")),
+            )
+            if sat.get("new_version"):
+                kwargs["new_version"] = sat["new_version"]
+            result.append(pb.Satellite(**kwargs))
         for device_id, info in connected.items():
             if device_id not in seen:
                 result.append(pb.Satellite(
@@ -1677,11 +1682,16 @@ def make_resident_event(roomie_id: str, display_name: str, event: str) -> pb.Han
     )
 
 
-def make_firmware_event(device: str, version: str) -> pb.HannahEvent:
+def make_firmware_event(
+    device: str, version: str, update_available: bool = False, new_version: Optional[str] = None,
+) -> pb.HannahEvent:
+    kwargs = dict(device=device, version=version, update_available=update_available)
+    if new_version:
+        kwargs["new_version"] = new_version
     return pb.HannahEvent(
         event_type="satellite.firmware",
         timestamp=datetime.now(timezone.utc).isoformat(),
-        firmware_event=pb.FirmwareEventProto(device=device, version=version),
+        firmware_event=pb.FirmwareEventProto(**kwargs),
     )
 
 
