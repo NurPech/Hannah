@@ -508,6 +508,7 @@ def main():
             history = conv_ctx.get_llm_history(device)
             answer = llm.chat(text, system_prompt=prepare_prompt(llm_system_prompt, iobroker), history=history)
             conv_ctx.add_llm_exchange(device, text, answer)
+            _maybe_reopen_smalltalk_mic(device)
             _handle_feedback(device, True, answer)
         elif intent.name == "Query":
             answer = iobroker.answer_query(intent)
@@ -559,7 +560,7 @@ def main():
             return phrase_reply, "Trigger"
 
         # Smalltalk-Modus: LLM-Classifier vor NLU schalten
-        if conv_ctx.is_smalltalk_active(_source):
+        if conv_ctx.is_smalltalk_active(_source) and conv_ctx.is_addressed_to_hannah(_source, text):
             if not llm.classify(text):
                 log.debug(f"[{_source}] Classifier → SMALLTALK (Modus aktiv)")
                 sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
@@ -1026,6 +1027,24 @@ def main():
             log.warning(f"LLM-Rephrase fehlgeschlagen, nutze Original: {e}")
             return text
 
+    def _maybe_reopen_smalltalk_mic(device: str) -> None:
+        """Öffnet nach einer Smalltalk-Antwort das Mic des Satelliten erneut, wenn
+        dieser das Follow-up-Listening-Setting aktiviert hat (#158). Das Silence-
+        Timeout dafür lebt bereits in der Satelliten-Firmware (hannah_audio.c,
+        8s-Fenster nach `listen`) — Core muss den Trigger nur erneut schicken,
+        sobald die aktuelle TTS-Wiedergabe fertig abgespielt ist."""
+        if _device_mute.get(device):
+            return
+        if not satellite_manager.get_satellite_smalltalk_followup(device):
+            return
+        mqtt_handler.reset_playback_done(device)
+
+        def _reopen():
+            mqtt_handler.wait_for_playback_done(device, timeout=15.0)
+            mqtt_handler.publish_listen(device)
+
+        threading.Thread(target=_reopen, daemon=True, name="smalltalk-followup").start()
+
     # Pending-Fragen: {room: (callback, timeout_timer)}
     # Wenn Hannah eine Frage stellt, wird die nächste Äußerung aus dem Raum
     # als Antwort gewertet und direkt an den Callback übergeben statt an NLU.
@@ -1214,6 +1233,9 @@ def main():
                 log.warning(f"[{device}] TTS: synthesize() lieferte kein Ergebnis für Antwort: {answer!r}")
         else:
             log.debug(f"[{device}] TTS deaktiviert — keine Audio-Antwort")
+
+        if intent_name == "Smalltalk" and tts_pcm:
+            _maybe_reopen_smalltalk_mic(device)
 
         return transcript, answer, intent_name, tts_pcm, sample_rate
 

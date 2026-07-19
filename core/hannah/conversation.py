@@ -181,6 +181,13 @@ class ConversationContext:
             ctx = self._ctxs.get(source)
             return bool(ctx and self._valid(ctx) and ctx.smalltalk_active)
 
+    def is_addressed_to_hannah(self, source: str, utterance: str) -> bool:
+        """Prüft, ob eine Utterance während offenem Smalltalk-Mic an Hannah gerichtet ist.
+        Aktuell ein Stub (immer True) — der Silence-Timeout der Satelliten-Firmware
+        übernimmt die Abgrenzung (#158). Später: Relevanzcheck via LLM unter Einbezug
+        von ctx.history."""
+        return True
+
     def add_llm_exchange(self, source: str, user_msg: str, assistant_msg: str) -> None:
         """Speichert user+assistant Nachrichten für LLM-Folgefragen."""
         with self._lock:

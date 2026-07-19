@@ -160,6 +160,18 @@ class SatelliteManager:
         sat.set_owner(user_id)
         return True
 
+    def set_satellite_smalltalk_followup(self, device_id: str, enabled: bool, requestor_id: Optional[int] = None) -> bool:
+        self._check_own_or_admin(requestor_id, device_id)
+        sat = Satellite.get(self._db(), device_id=device_id)
+        if not sat:
+            return False
+        sat.update(smalltalk_followup_listen=enabled)
+        return True
+
+    def get_satellite_smalltalk_followup(self, device_id: str) -> bool:
+        sat = Satellite.get(self._db(), device_id=device_id)
+        return bool(sat.smalltalk_followup_listen) if sat else False
+
     def set_satellite_firmware(self, device_id: str, version: str) -> None:
         """Persistiert die aktuell laufende Firmware-Version (vom `.../firmware`-MQTT-Report).
         Legt den Satelliten an, falls er noch nicht in der DB existiert. Löscht ein
@@ -227,6 +239,7 @@ class SatelliteManager:
                 "firmware_version": s.firmware_version,
                 "update_available": bool(s.update_available),
                 "new_version": s.new_version,
+                "smalltalk_followup_listen": bool(s.smalltalk_followup_listen),
             }
             for s in sats
         ]

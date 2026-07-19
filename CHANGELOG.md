@@ -5,16 +5,22 @@
 -->
 
 
-## 0.61.0
+## 0.62.0 (2026-07-19)
+### Hannah Core
+* Added: per-satellite setting to keep the microphone open after a Smalltalk answer (`smalltalk_followup_listen` on the `satellites` table, `SatelliteManager.set_satellite_smalltalk_followup`/`get_satellite_smalltalk_followup`) — reuses the existing `hannah/satellite/{device}/listen` MQTT trigger (#18) and the satellite firmware's existing 8s listen-after-TTS window, so no new timeout logic was needed in Core (Refs #158)
+* Added: `ConversationContext.is_addressed_to_hannah()` stub (always True for now) — seam for a future LLM-based relevance check on utterances heard during an open Smalltalk follow-up window (Refs #158)
+* Added: `SetSatelliteSmalltalkFollowup` gRPC RPC and `smalltalk_followup_listen` on `GetSatellites` — exposes the new per-satellite setting so the WebUI can eventually surface a toggle (`hannah-proto` bumped to 0.5.4) (Refs #158)
+
+## 0.61.0 (2026-07-17)
 ### Hannah Core
 * Added: satellite firmware version/update-available state is now persisted on the `Satellite` model (`satellites` table: `firmware_version`, `update_available`, `new_version`) instead of only living in a volatile in-memory dict — `GetSatellites` now reports the current firmware state directly, and the external `SubscribeEvents`/`satellite.firmware` event now also carries `update_available`/`new_version` (previously only visible to the ioBroker adapter over `AgentConnect`) (Refs #157)
 
-## 0.60.12
+## 0.60.12 (2026-07-16)
 ### Satellite Firmware
 * Removed: PCB Rev2 firmware build and its update-server channel (`satellite-esp-rev2`) — Rev2 boards had a dimension error and were only ever used for electrical testing, never deployed; Rev4 is the only hardware in use
 * Changed: `noise` capture sample_type auto-flush interval increased from 5s to 50s (`NOISE_AUTOFLUSH_FRAMES`) — longer ambient/noise sample segments for the Voice Collector (Refs #156)
 
-## 0.60.11
+## 0.60.11 (2026-07-16)
 ### Hannah Core
 * Fixed: `TriggerPlink` enabled virtual PTT (recording start) after a guessed fixed sleep following the plink tone, which didn't account for real playback pipeline latency — the plink tone bled into the start of every hey-hannah wakeword sample recorded this way. Now waits for a `playback_done` ack from the satellite instead, falling back to the old guessed sleep if the satellite's firmware doesn't send one yet (Refs #155)
 * Added: `mqtt_handler.reset_playback_done()` / `wait_for_playback_done()` — generic per-device wait for a satellite's `playback_done` MQTT ack (Refs #155)
@@ -22,7 +28,7 @@
 ### Satellite Firmware
 * Added: `speaker_task` publishes `hannah/satellite/{device}/playback_done` once a playback (TTS/plink/asset) is fully drained through I2S — generic ack Core can wait on instead of guessing a fixed delay (Refs #155)
 
-## 0.60.10
+## 0.60.10 (2026-07-16)
 ### Hannah Core
 * Fixed: `deploy/install.sh` installed to `/opt/hannah-core`, but `hannah.service`'s `WorkingDirectory`/`ExecStart` expect `/opt/hannah/core` — the service would fail to start after a fresh install. Now installs to `/opt/hannah/core`, matching the service unit
 * Fixed: `deploy/install.sh` was tracked in git without the executable bit — `curl | bash` worked regardless, but running the extracted script directly (e.g. `--uninstall`) failed with `Permission denied`
@@ -41,7 +47,7 @@
 ### AutoDeploy
 * Fixed: `deploy/install.sh` and `deploy/install-macos.sh` were tracked in git without the executable bit, same fix as Core
 
-## 0.60.9
+## 0.60.9 (2026-07-16)
 ### Hannah Core
 * Fixed: `deploy/install.sh` no longer hard-fails when `UPDATE_SERVER_TOKEN` is unset — the Update Server allows anonymous access to `public_read` channels, so the token is only required for non-public ones (Refs #152)
 * Added: `deploy/install.sh` now checks it's running as root before attempting any privileged operation, instead of failing partway through with a confusing permission error (Refs #153)
@@ -64,36 +70,36 @@
 * Added: `deploy/install.sh` now checks it's running as root, same fix as Core (Refs #153)
 * Fixed: `deploy/install-macos.sh` still hard-failed without `UPDATE_SERVER_TOKEN` — missed in the original pass since it only touched the Linux scripts (Refs #153)
 
-## 0.60.8
+## 0.60.8 (2026-07-15)
 ### Satellite Firmware
 * Added: `hannah_net`'s `heartbeat_task` now logs free/minimum-ever heap size on every tick — diagnostic for suspected resource-exhaustion failures where a satellite keeps processing UDP heartbeats (no new allocation needed) while OTA/webserver (need fresh allocations) stop working (Refs #150)
 
 ### Hannah Core
 * Fixed: `_on_ota_pending()` sent the available/target firmware version in `AgentFirmwareEvent.version` — a field that's supposed to always report the satellite's *current* version — instead of the last known current version, causing the adapter to display the not-yet-installed target version as if it were already running. Now sends the last known current version (already tracked from the satellite's own periodic firmware report) alongside `update_available=true` (Refs #151)
 
-## 0.60.7
+## 0.60.7 (2026-07-15)
 ### Satellite Firmware
 * Fixed: network watchdog (`hannah_net`'s `heartbeat_task`) relied on `esp_wifi_sta_get_ap_info()` as a liveness signal during idle periods — this only queries the WiFi driver's internal association state, which can keep reporting "connected" during the exact "zombie" WiFi state the watchdog was built to catch (Refs #86), so the timeout never elapsed and the satellite stayed offline for days until a manual power cycle. Now uses the `heartbeat_ack` reply Proxy/Core already send for every heartbeat (previously received but silently ignored) as the liveness signal instead — a real, server-confirmed round trip (Refs #149)
 * Changed: `HANNAH_NET_WATCHDOG_TIMEOUT_S` default raised from 120s to 240s, comfortably above the time a normal STA→AP-mode transition (`HANNAH_WIFI_MAX_RETRY` reconnect attempts) takes, so the watchdog doesn't preempt a legitimate reconnect (Refs #149)
 
-## 0.60.6
+## 0.60.6 (2026-07-14)
 ### Hannah Core
 * Fixed: a trigger's `when` list with both a time condition and one or more state conditions as flat sibling entries (the format the WebUI's trigger editor actually saves) is now treated as time AND state, not as independent OR alternatives — previously the state condition(s) fired the trigger on every matching state change regardless of the time/day condition (Refs #147)
 
-## 0.60.5
+## 0.60.5 (2026-07-13)
 ### Hannah Core
 * Fixed: `AlarmManager._compute_next_fire()` now correctly finds the next occurrence of a recurring alarm when today is the only configured weekday and its time has already passed — previously it returned `None` instead of the same weekday one week later (Refs #145)
 * Fixed: `TriggerEngine._check_time_triggers()` now evaluates a condition's `also` field, matching `on_state_update()`/`match_phrase()` — a time-based trigger can now require an additional state match (`also`) directly instead of needing an unguarded second OR-condition that fired regardless of time/day (Refs #146)
 
-## 0.60.4
+## 0.60.4 (2026-07-12)
 ### Hannah Core
 * Added: `GetDevices` now includes a `state_writable` map per device, sourced from the adapter's `AgentDevice.writable` (derived from ioBroker's `common.write`) — lets the WebUI exclude read-only states (e.g. sensors) from control actions (Refs #144)
 
-## 0.60.3
+## 0.60.3 (2026-07-12)
 ### Hannah Core
 * Fixed: `TriggerEngine`'s state cache now persists to disk (`TRIGGER_STATE_CACHE_PATH`, default `trigger_state_cache.json`) and survives a Core restart — previously every state looked "unknown" after a restart, so `also`/`unless` conditions and delay-timer reconciliation silently guessed instead of using the real last-known value. A fresh ioBroker device snapshot now also seeds the cache directly, without firing any trigger (a snapshot is a reality-sync, not a state transition) (Refs #141)
 
-## 0.60.2
+## 0.60.2 (2026-07-11)
 ### Hannah Core
 * Fixed: `RegisterProxy` no longer reverts UDP server + MQTT discovery to Hannah's own address the instant the proxy's gRPC stream ends — a 10s grace period now lets a quick proxy reconnect cancel the revert, preventing satellites behind the proxy from being repointed to an address they can't reach during a brief outage (Refs #140)
 
@@ -101,11 +107,11 @@
 * Fixed: satellite-facing UDP server now stops when the `RegisterProxy` connection to Hannah Core is lost or never established, instead of silently accepting satellite traffic with no path to forward it to (Refs #140)
 * Changed: reconnect log line now distinguishes "initial connection failed" from "lost an established connection" (Refs #140)
 
-## 0.60.1
+## 0.60.1 (2026-07-11)
 ### Hannah Proxy
 * Fixed: `hannah-proto-go` bumped to 0.5.1 — 0.5.0 had a stale `ProtoVersion` (2 instead of 3) baked into the generated Go module, causing the proxy to fail Hannah Core's protocol-version check after upgrading to 0.5.0
 
-## 0.60.0
+## 0.60.0 (2026-07-11)
 ### Hannah Core
 * **Breaking:** Routines are removed as a standalone concept — `RoutineManager`, the `routines` table, the `Routine` model, and the `GetRoutines`/`CreateRoutine`/`UpdateRoutine`/`DeleteRoutine` RPCs are gone. The WebUI routine editor (separate repo) stops working until it's updated there
 * Added: Triggers get a new `when.phrase` condition type (`TriggerEngine.match_phrase()`) — covers the former Routines functionality (voice phrase → actions, checked synchronously before NLU, no cooldown), now as part of the unified Trigger system instead of a separate data model (Refs #139)
@@ -118,54 +124,54 @@
 ### Telegram
 * Changed: `hannah-proto` bumped to 0.5.0. No functional difference
 
-## 0.59.0
+## 0.59.0 (2026-07-11)
 ### Hannah Core
 * Added: `IoBrokerClient`/`GetDevices` now carry a `state_type` (`BOOLEAN`/`NUMERIC`/`ENUM`/`COLOR`/`TEXT`) and, for `ENUM`/`COLOR` states, the allowed values per device state — sourced from the adapter's `state_type`/`enum_values` on `AgentDevice` (`hannah-proto` #117). Prep work for the WebUI trigger editor's dropdown-based condition UI (Refs #117)
 
-## 0.58.1
+## 0.58.1 (2026-07-10)
 ### Hannah Core
 * Added: `set_automation` LLM tool (`tool_agent.py`) — the LLM-driven fallback path (smalltalk-lock, unrecognized intents) now also knows about enabled automations and can enable/disable them for the current user, independent of the deterministic NLU wordlist match. `ToolAgent` now threads `user_id` through `run()`/`_dispatch()` for this (Refs #138)
 * Changed: `automations` settings wordlist for `telegram_autoresponder` extended with more phrasing variants ("automatische Antwort" singular, "automatisch antworten") (Refs #138)
 
-## 0.58.0
+## 0.58.0 (2026-07-09)
 ### Hannah Core
 * Added: per-user enable/disable for external "automation" services (e.g. the Telegram auto-responder) — new `user_automations` table, `SetAutomation` RPC, `AutomationConnect` gRPC stream for the external service to register and receive live updates, and a new "Autoresponder" voice intent (`SetAutomation` in `nlu.py`, decoupled from the internal automation key via a new `automations` settings wordlist) (Refs #138)
 
-## 0.57.0
+## 0.57.0 (2026-07-09)
 ### Satellite Firmware
 * Changed: `POST /nvs` whitelist (`NVS_ALLOWED_KEYS`) reworked for the adapter's upcoming wireless NVS write feature — `seed` dropped (the wireless path only ever targets already-paired, connected satellites, so re-pairing over this channel was never a real use case), `ota_token`/`asset_token` added (without them, secret rotation without physical access was impossible, since both were only writable via a full NVS partition flash) (Refs #136)
 
-## 0.56.2
+## 0.56.2 (2026-07-09)
 ### Satellite Firmware
 * Fixed: `hannah_webserver`'s httpd server left `config.max_uri_handlers` at the ESP-IDF default of 8 while registering 11 routes — `httpd_register_uri_handler()` silently failed for the 9th+ route (`/log/clear`, `/nvs`, and as of today `/log/last`), so those endpoints returned a framework-level 404 with no indication anything was wrong. Raised to 16 and registration failures are now logged (Refs #135)
 
-## 0.56.1
+## 0.56.1 (2026-07-08)
 ### Satellite Firmware
 * Fixed: v0.56.0's network watchdog (Refs #86) restarted satellites every `CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S` (~2 min) even when perfectly healthy — its liveness signal (IP acquired / MQTT connected/data) only fires once per connection or on incoming commands, so idle satellites with no inbound MQTT traffic never refreshed it. `heartbeat_task` now also marks liveness every cycle whenever `esp_wifi_sta_get_ap_info()` still reports an association, closing the gap for the common idle-but-healthy case (this alone doesn't catch the original "truly zombie" case the watchdog targets, but the IP/MQTT signals still do)
 * Fixed: `/log/last` never had any content — `heartbeat_task` is subscribed to the Task Watchdog Timer, and its own `esp_restart()` call (from the network watchdog) could take longer than the TWDT timeout to complete its orderly shutdown (WiFi/MQTT teardown, the log-flush shutdown handler), causing a hard TWDT panic-reset that skips the shutdown-handler chain entirely instead of a clean restart. Now unsubscribes from the TWDT (`esp_task_wdt_delete(NULL)`) immediately before the intentional restart
 
-## 0.56.0
+## 0.56.0 (2026-07-08)
 ### Satellite Firmware
 * Added: `hannah_net`'s `heartbeat_task` now runs an active network watchdog — tracks time since the last confirmed network liveness signal (IP acquired, MQTT connected, or MQTT data received) and calls `esp_restart()` once `CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S` (default 120s) is exceeded. Addresses a "zombie" WiFi state where `WIFI_EVENT_STA_DISCONNECTED` never fires, so the existing reactive reconnect logic in `on_wifi_event()` never triggers (Refs #86)
 * Added: `heartbeat_task` now also subscribes itself to the Task Watchdog Timer (TWDT) and enables `CONFIG_ESP_TASK_WDT_PANIC`, so a hang of the task itself (not just a dead network) now triggers a reset too — previously TWDT only passively watched the idle tasks and only logged, never reset. Since TWDT has a single shared timeout, it's now raised to `CONFIG_HANNAH_HEARTBEAT_INTERVAL_S + 5s` to fit heartbeat's own feed cadence, which also loosens the idle-task hang-detection window from the previous 5s default to the same value (Refs #86)
 * Added: `hannah_webserver` now persists the RAM log ring buffer to flash (`/assets/_hannah_last_log.txt` on the existing SPIFFS partition) via an `esp_register_shutdown_handler()` callback, so it survives any orderly `esp_restart()` (e.g. the new network watchdog above) instead of being lost with the RAM it lived in. Retrievable after reboot via new `GET /log/last`, linked from the `/log` page — no serial connection or PC-at-the-right-moment needed (Refs #86)
 * Added: boot now logs `esp_reset_reason()` (Power-On/Panic/Watchdog/Brownout/…) once the webserver is up, so it lands in the log ring buffer (and thus `/log`/`/log/last`) instead of only going out over a UART nobody has connected. Lets you confirm after the fact whether a given restart actually came from the new network watchdog (Refs #86)
 
-## 0.55.2
+## 0.55.2 (2026-07-08)
 ### Hannah Core
 * Fixed: `_on_agent_device_snapshot()` no longer calls `sync_rooms()` a second time on a device-derived, incomplete room list — a room with no currently-matching virtualDevice state (e.g. a room with only a satellite in it) was getting deleted (and any assigned satellite orphaned) on every reconnect, undoing the correct sync `_on_agent_room_snapshot()` had just done moments earlier (Refs #134)
 
-## 0.55.1
+## 0.55.1 (2026-07-08)
 ### Hannah Core
 * Fixed: `handle_device_snapshot()` no longer lets a category-less sibling state (e.g. a power-meter state whose role/function doesn't resolve to anything) blank out a device's already-resolved category from another sibling state (e.g. the `on` state of a socket) — first non-empty category wins, regardless of processing order within the snapshot (Refs #133)
 
-## 0.55.0
+## 0.55.0 (2026-07-08)
 ### Hannah Core
 * Changed: `core/hannah/models/` no longer carries its own hand-rolled mini-ORM (`base_module.py`/`query.py`) — replaced by the published `dialectorm-m1kad0` package (import name `pyorm`), the same code extracted and generalized into a standalone, dialect-aware (SQLite/Postgres/MySQL) library. Pure internal swap, no behavior change (Refs #132)
 * Fixed: `SetSatelliteRoom` now pushes an `AgentSatelliteUpdate` to all connected adapters right away, instead of adapters only learning about a room reassignment on the affected satellite's next connect/disconnect event (Refs #109)
 * Added: "Wie viel Strom/Watt/Leistung braucht mein PC?" — sockets now have a Watt-based category answer (`_CATEGORY_STATES["socket"]`), gated to the new `power` query intent so it doesn't hijack plain on/off status queries. Requires a `power` entry in the instance's `iobroker.state_names` setting to actually receive the value (new installs get it seeded by default now) (Refs #121)
 
-## 0.54.0
+## 0.54.0 (2026-07-05)
 ### Hannah Core
 * Added: `GetTimers`/`DeleteTimer` unary RPCs — query/cancel a user's active timers independent of the `TimerConnect` stream (e.g. for a future "my timers" view), without needing to be the connected Timer Service. Bridges the async `TimerListResponse` push to a synchronous unary call via a one-shot waiter queue (Refs #97)
 * Added: `SetTimer` now attaches `metadata["user_id"]` when creating a timer, same attribution chain already used for alarms (#4) but without the system-user fallback: Voice-ID-resolved speaker → satellite's assigned owner → left unset if neither resolves. Lets `GetTimers` actually filter by user instead of always returning an empty list (Refs #97)
@@ -174,11 +180,11 @@
 ### Telegram
 * Fixed: `SubscribeEvents` never actually sent the `x-proto-version` metadata despite `ProtocolVersionClientInterceptor` being wired up — `grpc.aio`'s `UnaryStreamClientInterceptor` doesn't reliably apply metadata mutations for streaming calls, unlike unary-unary (`SubmitText`/`SubmitVoice` were unaffected). Now passed explicitly at the call site instead of relying on the interceptor (Refs #60)
 
-## 0.53.2
+## 0.53.2 (2026-07-05)
 ### Satellite Firmware
 * Changed: `audiolib` is now consumed via the ESP-IDF Component Registry (`nurpech/audiolib`, ≥0.2.3) instead of a git submodule — `hannah_audio` declares it in its own `idf_component.yml`, same pattern already used for `espressif/cjson`/`espressif/mqtt`/etc. `EXTRA_COMPONENT_DIRS` and the `audiolib` submodule removed (Refs #130)
 
-## 0.53.1
+## 0.53.1 (2026-07-05)
 ### Hannah Core
 * Changed: `proto` submodule bumped to `hannah-proto` v0.3.3 (`PROTO_VERSION` 1 → 2) — the only change is the Go package moving to the public `github.com/NurPech/hannah-proto-go`; no message/schema changes. `PROTO_VERSION` copies in `core`, `telegram`, `proxy` updated to match (Refs #60)
 * Changed: `proto` submodule bumped to `hannah-proto` v0.3.4 — npm package tooling switched to `ts-proto` codegen; no `.proto`/schema changes, `PROTO_VERSION` unchanged at 2 (Refs #60)
@@ -191,7 +197,7 @@
 ### Hannah Proxy
 * Changed: switched from locally generating proto stubs off the `proto` git submodule to depending on the published `github.com/NurPech/hannah-proto-go` Go module directly. `proxy/proto/hannah/` (generated stubs) and `proxy/gen_proto.sh` removed — first component migrated off the git-submodule pattern, see #60
 
-## 0.53.0
+## 0.53.0 (2026-07-04)
 ### Hannah Core
 * Added: `SetVolume` NLU intent — "stell die Lautstärke auf 50"/"lauter"/"leiser" now sets satellite volume (absolute or relative ±10), last remaining piece of the Volume/Mute refactor (v0.13.0, 2026-05-27) (Refs #63)
 * Removed: dead `TimerManager` class in `core/hannah/timers.py` — unused since `SetTimer` moved to the external Timer Service. File renamed to `alarms.py` since only `AlarmManager` (+ `format_duration`) remains (Refs #128)
@@ -203,25 +209,25 @@
 ### Hannah Proxy
 * Added: gRPC client interceptors attaching the local `x-proto-version` metadata to every outgoing unary and streaming call to Hannah Core. Proxy ships as a single compiled binary with no filesystem access to the `proto` submodule, so the version is embedded at build time via `go:embed` from a local copy in `proto/hannah/` (Refs #60)
 
-## 0.52.0
+## 0.52.0 (2026-07-04)
 ### Hannah Core
 * Changed: `proto` submodule bumped to `hannah-proto` v0.2.0 — `TimerCreate`/`TimerInfo` now carry a generic `metadata` map instead of fixed `room`/`roomie_id` fields, and `TimerFired` echoes `metadata` back. Hannah Core's own `HannahTimerStore` (SQLite) removed — was a redundant duplicate of what the Timer Service already persists; announcement routing now reads `room`/`roomie_id` straight from the echoed `metadata` instead. `trigger_engine`'s `"trigger:"` label-prefix hack for delay-timers replaced with a proper `metadata["trigger_id"]` key (Refs #127)
 
 ### Telegram
 * Changed: generated proto/gRPC stubs regenerated following the `hannah-proto` v0.2.0 bump (Timer Service `metadata` map). No functional change for Telegram itself — it shares the same generated `hannah_pb2`/`timer_service_pb2` modules as Core but doesn't use the Timer Service RPCs (Refs #127)
 
-## 0.51.7
+## 0.51.7 (2026-07-04)
 ### Telegram
 * Fixed: `init_commands()`'s default-scope `set_my_commands` call had no error handling — a Telegram flood-control error (`RetryAfter`, e.g. from rapid restarts) crashed the whole service on startup instead of just skipping that one call. Now caught and logged, same pattern already used for the per-chat `set_my_commands` calls just below it
 
-## 0.51.6
+## 0.51.6 (2026-07-03)
 ### Hannah Core
 * Added: regression test (`core/tests/test_proto_reexport.py`) walking every scope-split `*_pb2` module and asserting nothing is missing from `hannah_pb2` — guards against the class of bug fixed in Telegram below (Refs #125)
 
 ### Telegram
 * Fixed: `hannah_telegram.proto.hannah_pb2` was missing every scope-split message (`EventFilter` and others) — `telegram/hannah_telegram/proto/__init__.py` never got the re-export patch that `core/hannah/proto/__init__.py` received in #44, so it stayed empty. Service crash-looped on every `subscribe_events` call (`AttributeError: module ... has no attribute 'EventFilter'`) (Refs #125)
 
-## 0.51.5
+## 0.51.5 (2026-07-03)
 ### Hannah Core
 * Changed: Proto schema extracted into its own repo, [hannah-proto](https://dev.kernstock.net/gessinger/voice/hannah-proto) (history-preserving subtree split from `core/proto/`), consumed as a Git submodule (`proto/` at repo root) instead of being manually copied into each consumer. `scripts/gen_proto.sh` now reads from the shared submodule path instead of separate `core/proto`/`telegram/proto` copies (Refs #43)
 
@@ -231,7 +237,7 @@
 ### Telegram
 * Changed: `telegram/proto/` (manually copied proto sources) removed — codegen now reads from the shared `proto/` submodule (Refs #43)
 
-## 0.51.4
+## 0.51.4 (2026-07-03)
 ### Hannah Core
 * Changed: `core/proto/hannah.proto` (1241 lines, ~80 messages) split by scope into 12 separate `.proto` files (`shared`, `user_registry`, `control`, `car_state`, `event_stream`, `satellite_proxy`, `device_control_menu`, `satellite_provisioning`, `speaker_enrollment`, `agent`, `wakeword_capture`, `timer_service`), linked via `import`; `hannah.proto` itself now only holds the header/imports and the single `service HannahService` (unchanged, no service split — the codegen footprint reduction that would require doesn't pay off for the current all-backend consumer set, see #44). `scripts/gen_proto.sh`/`core/proto/gen_proto.sh` updated to pass all `.proto` files to `protoc` (it doesn't follow imports transitively for codegen) and to patch relative imports across every generated `*_pb2*.py`, not just `hannah_pb2_grpc.py`. Python (unlike Go/TS) keeps each file's generated messages in that file's own module instead of re-exporting them into `hannah_pb2` — `core/hannah/proto/__init__.py` now patches every scope module's public names onto `hannah_pb2` so existing `pb.AgentDevice`/`pb.ResidentType.ROOMIE`-style call sites across `grpc_server.py`/`iobroker.py`/`residents_manager.py` keep working unchanged (Refs #44)
 
@@ -241,19 +247,19 @@
 ### Telegram
 * Changed: `telegram/proto/` synced to the split scope files (was stale — missing `Alarm`/`SetSatelliteOwner`/`DeleteSatellite`, still had the removed `CreateSetting`/`DeleteSetting`) (Refs #44)
 
-## 0.51.3
+## 0.51.3 (2026-07-03)
 ### Hannah Core
 * Added: `Car` (proto + `Car` model, `core/hannah/models/car.py`) now has its own `name` field for the display name, analogous to `Satellite.display_name` — previously the WebUI showed the technical `topic_prefix` as the card title for lack of a dedicated display-name field. `CreateCarRequest`/`UpdateCarRequest`/`Car` (gRPC) and `CarRegistry.create_car`/`update_car` (`core/hannah/car_registry.py`) extended accordingly; `topic_prefix` remains the technical MQTT key, unchanged. Additive `ALTER TABLE` migration for existing `cars` tables in `core/hannah/utils/db.py` (Refs #123)
 
-## 0.51.2
+## 0.51.2 (2026-07-02)
 ### Hannah Core
 * Added: Helligkeits-/Illuminance-Kategorie (`illuminance_sensor`) wieder in `_CATEGORY_STATES` (`core/hannah/iobroker.py`) ergänzt — kategorienweite Abfragen wie "wie hell ist es im Wohnzimmer" funktionieren wieder (Einheit `lx`, State-Suffix `illuminance` war bereits vorhanden). Passende `category_words`-Einträge `helligkeit`/`lux` in `DEFAULT_NLU_SETTINGS` (`core/hannah/settings_manager.py`) ergänzt (Refs #120)
 
-## 0.51.1
+## 0.51.1 (2026-07-02)
 ### Hannah Core
 * Fixed: `main.py` crashed on startup (`TypeError: HannahServicer.__init__() got an unexpected keyword argument 'create_setting'`) — v0.51.0's `CreateSetting`/`DeleteSetting` removal (#115) only got `delete_setting` cleaned out of the `HannahServicer(...)` call site, `create_setting=settings_manager.create_setting` was left behind (Refs #118)
 
-## 0.51.0
+## 0.51.0 (2026-07-02)
 ### Hannah Core
 * Fixed: `AlarmManager`'s ringing loop (`play_asset` for `alarm_ring`) was completely fire-and-forget — a satellite that couldn't play the sound (asset not cached, e.g. wrong asset-server namespace tagging) never told Core, so the alarm rang silently forever with no audible feedback at all. Satellites now report back per-attempt success/failure over a new `hannah/satellite/{device}/play_asset/result` MQTT topic (`MQTTHandler.set_play_asset_result_handler`); `AlarmManager.on_play_result()` switches the ringing loop from the (broken) asset sound to a repeated TTS announcement on the first nack for that device, so the alarm stays audible instead of going completely silent (Refs #116)
 * Added: `BleTag.user`/`Car.owners` properties (lazy, DB-backed) return the related `User` object(s); reverse `User.ble_tags`/`User.cars` properties mirror them — same lazy-loading pattern as the existing `User.linked_accounts`/`User.satellites` (Refs #115)
@@ -266,51 +272,51 @@
 ### Satellite Firmware
 * Added: `hannah_asset_play()` now returns `bool` (previously `void`) — the result is reported back to Core over a new `hannah/satellite/{device}/play_asset/result` MQTT message via a new `hannah_asset_set_play_result_callback()`, wired in `main.c` alongside the existing `play_asset` command callback. Previously a missing/corrupt cached asset only logged a local `ESP_LOGW`, invisible to Core (Refs #116)
 
-## 0.50.1
+## 0.50.1 (2026-07-02)
 ### Hannah Core
 * Changed: `config.example.yaml` trimmed to the settings that actually stay YAML-only — `nlu.*` (word lists), `llm.system_prompt`, `ble.tags`, `cars` and `iobroker.state_names` are DB-Settings now (`migrate_config_settings.py`, #27 Phase 5); `config.yaml` keeps infra/bootstrap config (connections, credentials, paths)
 * Removed: `core/routines.yaml`/`core/triggers.yaml` — dead since routines/triggers moved to the DB-backed `Routine`/`Trigger` models (`migrate_triggers_routines.py`, #27 Phase 4); nothing in the codebase loaded them anymore
 
-## 0.50.0
+## 0.50.0 (2026-07-02)
 ### Hannah Core
 * Added: recurring alarm clock ("Wecker"), fully rebuilt on top of a new DB-backed `Alarm` model/`AlarmManager` (replaces the old JSON-file-backed, one-shot-only `AlarmManager`). Voice support for setting ("stelle einen Wecker für Montag 8 Uhr", with a Mon-Fri recurring follow-up question for a single weekday), deleting ("lösche meinen Wecker für morgen 8 Uhr" — matches across all satellites, not just the one it's bound to; deleting one occurrence of a recurring series asks whether to delete the whole series), querying ("welche Wecker habe ich"), and stopping a currently-ringing alarm via the existing generic `StopIntent` ("Stopp"). Ringing plays a looping `alarm_ring` asset with alternating volume via MQTT until stopped, then restores the satellite's prior volume. New `Alarm` gRPC message + `GetAlarms`/`CreateAlarm`/`UpdateAlarm`/`DeleteAlarm` RPCs for the future WebUI's alarm management (no consumer in this repo yet). `pending_clarification` (used for the Mon-Fri yes/no follow-ups) gained a `kind`/`payload` discriminator, backward-compatible with the existing room-disambiguation flow (Refs #4)
 
-## 0.49.1
+## 0.49.1 (2026-07-01)
 ### Hannah Core
 * Fixed: `BaseModel.create()`/`update()` only re-encoded `__json_fields__` columns as JSON when the value was a `list`/`dict` (`isinstance` check), not based on `__json_fields__` itself — a scalar value (e.g. `llm.system_prompt`, a plain string) written through `UpdateConfig`/`CreateSetting` landed in the DB unencoded and crashed the next `GetSettings`/`UpdateConfig` call with `JSONDecodeError`, taking down the WebUI's Settings page entirely. Both methods now check `key in __json_fields__` instead (Refs #113)
 
-## 0.49.0
+## 0.49.0 (2026-07-01)
 ### Hannah Core
 * Changed: `LinkAccount` gRPC handler now validates the provider against a known set (`residents`, `telegram`, `microsoft`) and rejects duplicate account links (same `service`+`account_id` already linked to a different user) with `ALREADY_EXISTS`. `UnlinkAccountRequest` gains an optional `requestor_id` field — when set, Core enforces that the requestor is either the target user themselves or holds trust level 10; `requestor_id=0` (default) bypasses the check for internal/system callers (Refs #112)
 
 ### Telegram
 * Changed: `/verknuepfen` command removed — unlinked users now receive a link to the Hannah WebUI instead. WebUI URL is configurable via `webui_url` in `config.yaml` (Refs #112)
 
-## 0.48.2
+## 0.48.2 (2026-07-01)
 ### Hannah Core
 * Added: `SetSatelliteRoom`/`SetSatelliteDisplayName`/`SetSatelliteOwner`/`DeleteSatellite` now enforce trust-level/ownership checks in `SatelliteManager` via a new `requestor_id` field on each request (proto, additive, no consumer in this repo yet — WebUI needs to start sending it). `DeleteSatellite`/`SetSatelliteOwner` require trust level 10; `SetSatelliteRoom`/`SetSatelliteDisplayName` require trust level 5 and ownership of the satellite (trust level 10 is unrestricted). `requestor_id` omitted (`None`) bypasses the check entirely, for internal/system callers. New `SatellitePermissionError`, raised by `SatelliteManager` and translated to `ok=False, message="forbidden"` in the gRPC layer. `SatelliteManager.get_satellite()` now returns the real `Satellite` model instead of a hand-built dict — fixes a latent bug in `DeleteSatellite` that treated the previous dict as an object (`sat.device_id`/`sat.room_id`, `AttributeError` on the actual dict, untested until now) (Refs #111)
 
 ### Firmware (satellite-esp)
 * Added: `hannah_ble` (BLE scanner) can now be enabled/disabled per build via new Kconfig setting `HANNAH_BLE_ENABLED` (default `y`) — NimBLE includes and the full implementation in `hannah_ble.c` sit behind the guard, with no-op stubs for `hannah_ble_init()`/`hannah_ble_set_watchlist_json()` when disabled (same pattern as `hannah_sd`). Groundwork for Satellite-Light variants with tight internal RAM (Refs #67)
 
-## 0.48.1
+## 0.48.1 (2026-06-30)
 ### Hannah Core
 * Added: `DeleteSatellite` gRPC RPC — removes a satellite from the database via `SatelliteManager.delete_satellite()`; pushes a `satellite_deleted` event to the adapter so stale ioBroker object trees are cleaned up immediately
 
-## 0.48.0
+## 0.48.0 (2026-06-30)
 ### Hannah Core
 * Changed: `RoomManager` split into `RoomManager` (rooms/groups only) and new `SatelliteManager` (provisioning, pairing, room/owner assignment, seed cleanup) — satellites no longer share a manager class with rooms/groups. `config.yaml`'s `room_manager.seed_ttl_days` moved to `satellite_manager.seed_ttl_days` (Refs #108)
 * Added: satellites can now be assigned to a `User` ("Person") in addition to a room — new `satellites.owner_user_id` column, `Satellite.owner`/`Satellite.set_owner()` and `User.satellites` model properties. Groundwork for personalized announce routing — no gRPC/UI exposure yet (Refs #31)
 * Added: `Announce` RPC accepts `room_id`/`user_id` in addition to the legacy `device` field — targets all satellites in a room, all satellites owned by a Person, or (if both set) only the satellite that's both, via new `SatelliteManager.get_room_satellite_ids()`/`get_user_satellites()`. New `SetSatelliteOwner` RPC and `Satellite.owner_user_id`/`owner_display_name` fields expose the #31 data model over gRPC — no WebUI exposure yet (WebUI is now a separate repository) (Refs #31)
 
-## 0.47.0
+## 0.47.0 (2026-06-29)
 ### WebUI
 * Removed: `webui/` extracted into its own repository (`gessinger/voice/hannah-webui`) — no longer part of this monorepo. `test:webui`, `upload:webui` and the container-build jobs added in #105 (`build-container:webui:*`, `merge-manifests:webui`) are gone from this pipeline; equivalents now live in the new repo's own `.gitlab-ci.yml`. Fresh start there, no history carried over — see that repo's `CHANGELOG.md` for everything from here on (Refs #106)
 
 ### Hannah Proxy
 * Fixed: Announcements an mehrere Satelliten liefen über denselben Proxy nacheinander statt gleichzeitig ab — `runProxyOnce`s einzige Receive-Goroutine rief `onPlayAudio` synchron auf, das wiederum `udp.Server.SendTTSChunk`s `time.Sleep`-Pacing blockierte, solange die Announcement des vorherigen Satelliten noch lief; `stream.Recv()` für andere Satelliten lief währenddessen nicht weiter. Neuer `playAudioDispatcher` (`internal/hannah/dispatcher.go`) verteilt `PlayAudioCommand`-Chunks pro `device_id` auf je eine eigene gepufferte Queue + Worker-Goroutine — Reihenfolge bleibt pro Gerät strikt FIFO, verschiedene Geräte spielen jetzt parallel (Refs #49)
 
-## 0.46.1
+## 0.46.1 (2026-06-28)
 ### WebUI
 * Fixed: random logout on almost every click — `create_app()` set `app.secret_key = os.urandom(24)`, generating a new key on every call. Gunicorn runs without `--preload`, so each of its 2 worker processes imports `wsgi.py` and calls `create_app()` independently, ending up with a different secret key per worker; whichever worker didn't sign a given session cookie rejects it, dropping the user back to `/login`. `secret_key` is now read from `config.yaml` (or `HANNAH_WEBUI_SECRET_KEY`), stable across workers and restarts; falls back to a random key with a warning log if unset (Refs #104)
 * Added: `hannah_webui/config.py`'s `load()` now falls back to environment variables (`HANNAH_WEBUI_HOST`/`PORT`/`SECRET_KEY`/`GRPC_HOST`/`GRPC_PORT`) when no `config.yaml` file is present, in preparation for a future containerized deployment (Refs #104)
@@ -326,7 +332,7 @@
 ### VoiceID
 * Changed: deploy now runs as the shared `hannah` user instead of the dedicated `hannah-voiceid` user, matching how it's actually run in production (Refs #104)
 
-## 0.46.0
+## 0.46.0 (2026-06-28)
 ### Hannah Core
 * Removed: old in-process WebUI (`hannah/webui.py`, `hannah/webui_templates/`) — fully superseded by the standalone `webui/` service (#27). `main.py` no longer spawns the Flask dev-server thread, `config.yaml`'s `web_ui` section is gone. `flask` dropped from `requirements.txt`; `werkzeug` (used directly for password hashing in `db.py`/`user_manager.py`/`grpc_server.py`, previously only pulled in transitively via `flask`) is now an explicit dependency (Refs #27)
 
@@ -341,7 +347,7 @@
 * Added: gunicorn-Deployment + systemd-Service für `webui/` — `webui/wsgi.py` baut die App einmalig beim Import (gunicorns `module:app`-Konvention lässt kein `--config`-Argument zu wie `main.py`s Flask-Dev-Server-Pfad; Config-Pfad kommt über `HANNAH_WEBUI_CONFIG`, Default `config.yaml`). `webui/deploy/hannah-webui.service` + `install.sh` folgen dem etablierten Muster von `core/deploy/`/`telegram/deploy/` (Update-Server-Download, venv, eigener Service-User, systemd-Hardening). Bewusst EIN konsistenter Pfad (`/opt/hannah/webui`) für `install.sh`s `INSTALL_DIR` und der Unit's `WorkingDirectory`/`ExecStart` — bei core/telegram/voiceid klaffen die beiden Pfade auseinander (`/opt/hannah-<name>` vs. `/opt/hannah/<name>`), separat getrackt (#100), hier bewusst nicht übernommen. Bind-Adresse (`127.0.0.1:5000`, 2 Worker) steht direkt im `ExecStart`, nicht in `config.yaml` — gunicorn bindet den Socket, bevor die WSGI-App überhaupt geladen wird (Refs #27)
 * Added: Trigger-Editor (No-Code) — `/triggers`, Teil 2 von #101 (Teil 1 = Backend, v0.45.4). Sektionen "Wenn" (mehrere Zustand-/Uhrzeit-Bedingungen, fest ODER-verknüpft), "Und" (mehrere Zustandsbedingungen, UND/ODER wählbar), "Außer wenn" (mehrere Zustandsbedingungen, fest UND, einklappbar) und "Dann" (mehrere Aktionen: Ansage oder State setzen) — Zeilen-Builder-Pattern wie bei den Routinen, kein JS für dynamisches Hinzufügen. Da die Engine `also`/`unless` pro Wenn-Bedingung prüft (trigger_engine.py, OR-Branches), die No-Code-UI aber EINEN globalen "Und"/"Außer wenn"-Block abbildet, dupliziert `_attach_also_unless()` diesen Block auf jede Wenn-Zeile beim Speichern und `_extract_also_unless()` liest ihn beim Bearbeiten wieder zurück (alle Kopien sind identisch). `ask`+`on_response_json` bleiben als rohes JSON in einer "Erweitert"-Sektion, `cancel_when` ist in der UI nicht editierbar (kein Use-Case ohne Delay-UI). `webui/proto/hannah.proto` war noch nicht auf das `actions_json`-Feld aus #101 synchronisiert — jetzt nachgezogen (Refs #101)
 
-## 0.45.4
+## 0.45.4 (2026-06-28)
 ### Hannah Core
 * Added: `trigger_engine.py`'s `when` akzeptiert jetzt ein Dict (Alt-Format, unverändert) oder eine Liste solcher Dicts (neu: ODER-verknüpft); `also` ("und") akzeptiert zusätzlich `{"op": "and"|"or", "conditions": [...]}` für explizite ODER-Verknüpfung (eine Plain-Liste bleibt wie bisher UND); neue `actions`-Liste (`say`/`set_state`, analog zu `Routine.actions`) ersetzt das bisherige Einzel-`say`, wenn gesetzt. Alt-Trigger ohne Migration weiter lauffähig. Backend-Teil von #101s No-Code-Editor für die WebUI (Teil 1 von 2 — WebUI-Seite folgt nach diesem Release) (Refs #101)
 * Fixed: `BaseModel.create()`/`update()` quoteten Spaltennamen nicht — brach bei reservierten SQL-Wörtern wie der `triggers`-Tabellenspalte `"when"` (`sqlite3.OperationalError: near "when": syntax error`). Nie aufgefallen, weil `CreateTrigger`/`UpdateTrigger` bisher ausschließlich mit gemocktem `TriggerEngine` getestet wurden — aufgefallen beim Schreiben echter Engine-Tests für #101 (Refs #102)
@@ -352,11 +358,11 @@
 ### Telegram
 * Changed: Proto-Datei für #101s neues `actions_json`-Feld auf `Trigger`/`CreateTriggerRequest`/`UpdateTriggerRequest` aktualisiert (Refs #101)
 
-## 0.45.3
+## 0.45.3 (2026-06-27)
 ### Hannah Core
 * Fixed: `UnlinkAccount` RPC reported `ok=True, message="entfernt"` without actually removing the link — the handler only checked whether the user exists but never called `user.unlink_account(request.service)` (`LinkAccount` correctly calls its counterpart when linking). Found while building the `/users` page in `webui/` (#27) (Refs #99)
 
-## 0.45.2
+## 0.45.2 (2026-06-27)
 ### Hannah Core
 * Added: `CreateUser`/`UpdateUser`/`DeleteUser`/`GetResidents` RPCs on `HannahServicer` — Phase 6 of #27's WebUI gRPC surface, übersehen bei der ursprünglichen Phasenplanung (1–5, #88–#92). `User`-Message additiv um `email`/`type` erweitert. Passwort kommt im Klartext über gRPC an und wird serverseitig gehasht — gleicher bereits akzeptierter Constraint wie beim `Login`-RPC (#90). `trust_level`/`system_messages` bleiben bei den bestehenden `SetTrustLevel`/`SetSystemMessages`-RPCs, nicht dupliziert. `HannahServicer` bekommt neuen `get_residents`-Callback, in `main.py` per Lambda verdrahtet (Forward-Reference auf `residents`, das erst nach der `HannahServicer`-Instanziierung entsteht — gleiches Muster wie `get_satellites` mit `grpc_servicer` selbst) (Refs #98, #27)
 
@@ -366,14 +372,14 @@
 ### Telegram
 * Changed: Proto-Dateien aktualisiert für Phase 6 (User-CRUD, Residents) (Refs #98, #27)
 
-## 0.45.1
+## 0.45.1 (2026-06-27)
 ### Hannah Core
 * Fixed: `hannah.service` failed to start with `RuntimeError: ... depends on grpcio>=1.81.1` — `grpc_tools.protoc` bakes the locally-installed grpcio-tools version into the generated `_grpc.py` as a minimum runtime requirement, but `requirements.txt`'s old `grpcio>=1.60.0` floor didn't force an upgrade of an already-installed older grpcio on deploy. Raised the floor to `>=1.81.1` to match, and added a warning comment in `gen_proto.sh` so future stub regenerations keep grpcio-tools in step with this pin (Refs #93)
 
 ### Telegram
 * Fixed: same `grpcio`/`grpcio-tools` version floor raised to `>=1.81.1`, for the same reason as Hannah Core (Refs #93)
 
-## 0.45.0
+## 0.45.0 (2026-06-27)
 ### Hannah Core
 * Added: new unary gRPC RPCs `GetRooms`/`GetGroups`/`CreateGroup`/`UpdateGroup`/`DeleteGroup`/`SetGroupRooms` on `HannahServicer` — first phase of #27's planned WebUI gRPC surface. Pure wiring onto `RoomManager`'s existing methods (#77), no new business logic; no consumer yet, this just adds the server-side API surface ahead of the future standalone `webui/` service (Refs #88, #27)
 * Added: `UserManager.login_user(username, password)` — verifies via `check_password_hash` against the stored hash, constant-time even for unknown usernames (checks against a dummy hash instead of short-circuiting). Prep work for #27 Phase 3's planned `Login` RPC, not wired into gRPC yet (Refs #27)
@@ -390,59 +396,59 @@
 ### Telegram
 * Changed: updated proto files to reflect the newest Core changes (#27 Phases 1–5: Rooms/Groups, Satellites, Login, Routines/Triggers, Settings) (Refs #27)
 
-## 0.44.0
+## 0.44.0 (2026-06-27)
 ### Hannah Core
 * Changed: `routines.yaml`/`triggers.yaml` replaced by SQLite (`routines`/`triggers` tables, `hannah.db`) — new `Routine`/`Trigger` models (`hannah.models.routine`/`hannah.models.trigger`), nested condition/action structures (`when`, `cancel_when`, `on_response`, `triggers`, `actions`) stored as JSON columns, same pattern as `LinkedAccount.provider_payload`. `RoutineManager`/`TriggerEngine` now take a `db` callable instead of a file path; eliminates the mtime-based hot-reload entirely (SQL query is always current). Part of #27's planned WebUI scope — Routinen/Trigger get full CRUD via the WebUI once it lands (Refs #27)
 * Added: `core/deploy/migrate_triggers_routines.py` — one-time, idempotent migration of existing `routines.yaml`/`triggers.yaml` content into `hannah.db`, analogous to `migrate_rooms_db.py` for #77 (Refs #27)
 
-## 0.43.1
+## 0.43.1 (2026-06-26)
 ### Hannah Core
 * Fixed: the room fallback for voice commands without an explicit room (`main.py`) only checked `udp_server.get_registered_room()` — proxy-connected satellites are tracked separately (`grpc_servicer._proxy_satellites`) and were never consulted, even though RoomManager already had a room assigned for them at registration time. Now resolves directly via `room_manager.get_satellite_room()`, independent of the live connection type (Refs #87)
 * Removed: `device_rooms` config (static MQTT-satellite room fallback) — dead since #35 removed room reporting from satellite NVS entirely, making RoomManager the sole authority; no legacy satellites needing this fallback remain in active use (Refs #87)
 * Removed: `residents.user_roomie`/`user_roomies` config (static list of "real" roomie IDs used to tell residents apart from guests in unscoped presence queries) — `ResidentsClient.is_home()` now derives this from the User Registry (new `UserManager.get_roomie_ids()`, based on `User.type == "roomie"` via the linked `residents` account) instead of duplicating it in config, consistent with #72 (Refs #87)
 
-## 0.43.0
+## 0.43.0 (2026-06-26)
 ### Satellite Firmware
 * Added: `POST /nvs` HTTP endpoint — lets the ioBroker adapter remotely update whitelisted NVS keys (`wifi_ssid`, `wifi_pass`, `mqtt_broker`, `mqtt_port`, `ota_channel`, `seed`, `ww_threshold`) over WiFi without physical/WebSerial access, then restarts. Secured by a new, dedicated `nvs_token` — kept separate from `ota_token` since that one isn't guaranteed identical across the fleet (overridable per-device via `/settings`) and can't double as a shared secret. Empty `nvs_token` = endpoint fully disabled (fail closed) (Refs #36)
 
-## 0.42.1
+## 0.42.1 (2026-06-25)
 ### Hannah Core
 * Fixed: `UserManager.get_user_by_id()` crashed with `ValueError` on a non-numeric `user_id` instead of returning `None` — Voice-ID returns the literal string `"unknown"` as `speaker_user_id` when recognition confidence is too low, which flows straight into this lookup via `main.py`'s `_speaker_context()`/`_resolve_roomie_id()`. Those two call sites also bypassed `UserManager`'s cache entirely by calling `User.get()` directly; now go through `get_user_by_id()` like everything else (Refs #84)
 
-## 0.42.0
+## 0.42.0 (2026-06-25)
 ### Hannah Core
 * Changed: BLE-Indoor-Lokalisierung (`ble_location.py`) ist jetzt von ioBroker Residents entkoppelt und setzt direkt `User.presence`, statt über `ResidentsClient`/`Resident` zu laufen. Grund: `ResidentsClient._residents` wird nur asynchron über die gRPC-Verbindung zum Adapter befüllt (Einzel-Updates oder das `send_residents`-Snapshot, #73) — BLE-Reports kommen aber unabhängig per MQTT und können direkt nach einem Core-Neustart schon eintreffen, bevor der Adapter verbunden ist, was zu `log.warning(...Tippfehler in config.yaml?)` führte, obwohl kein Tippfehler vorlag. `UserManager` lädt dagegen synchron aus der lokalen SQLite-DB, keine Race möglich
 * Changed: `config.yaml`s BLE-Tag-Einträge nutzen jetzt `username` statt `roomie`/`type` — Auflösung zu `user_id` passiert einmalig beim Config-Laden (nicht mehr pro Sichtung), ein unbekannter Username wird sofort beim Start gewarnt statt erst bei der ersten Sichtung
 * Added: `UserManager.dump_present_users()`, aufgerufen bei jedem `AgentConnect` — pusht "anwesend" für jeden User, den Hannah aktuell als zuhause kennt, Richtung ioBroker. Schließt eine Lücke aus #82: BLE-Sichtungen können eintreffen, bevor der Adapter überhaupt verbunden ist, das zugehörige arrival-Event verhallt dann ungehört. Sendet bewusst nur "anwesend", nie "weg" — ioBroker kann eine eigene, unabhängige Presence-Quelle haben (z.B. WLAN-Controller-Tracking), die nicht überschrieben werden soll (Refs #83)
 
-## 0.41.2
+## 0.41.2 (2026-06-25)
 ### Hannah Core
 * Fixed: the `/satellites` WebUI page's "Meldet sich als" warning compared a live-resolved room *ID* (e.g. `leonie_schlafzimmer`) against the assigned room's *display name* (e.g. `Leonie Schlafzimmer`) — a false positive for every room whose ID isn't spelled identically to its display name, even though the satellite was correctly assigned. The satellite/proxy never sends a room at all (`SatelliteRegistration.room` was deliberately removed — RoomManager is the sole authority); the mismatch check now compares room ID against room ID, resolving the live ID to a display name only for the message text (Refs #81)
 
-## 0.41.1
+## 0.41.1 (2026-06-25)
 ### Hannah Core
 * Fixed: a satellite's "last seen" timestamp froze forever after its initial registration — `udp_server.py` only refreshed it on the `"register"` control packet, never on the periodic `"heartbeat"` ones; `grpc_server.py`'s `NotifySatelliteRegistered` (proxy-routed satellites) never refreshed it at all, not even once. Since the Go proxy also never forwards individual satellite heartbeats to Core (only one heartbeat per proxy connection, covering every satellite behind it), `RegisterProxy`'s heartbeat drain loop now refreshes `last_seen` for every currently-known proxy satellite on each proxy heartbeat as a pragmatic stand-in — a real per-satellite heartbeat would need a proxy protocol change, deliberately out of scope here (Refs #80)
 
-## 0.41.0
+## 0.41.0 (2026-06-25)
 ### Hannah Core
 * Fixed: `BaseModel.create()`/`update()`/`delete()` never rolled back on a failed write (e.g. `IntegrityError` from a UNIQUE violation) — the implicitly-started transaction stayed open on that connection, which then blocked every other write to the same DB file with `database is locked` until the connection happened to get garbage-collected. Found while writing an end-to-end test for #77; also affects `User`/`LinkedAccount` already in production (e.g. a duplicate username/email via `/users/create`) (Refs #79)
 * Added: `Room`/`Group`/`Satellite` models, `rooms`/`groups`/`group_rooms`/`satellites` tables added to `hannah.db`'s schema (Refs #77)
 * Changed: `RoomManager` now uses the `hannah.models` layer instead of hand-rolled `sqlite3` — same public API/return shapes, so `main.py`/`webui.py`/`grpc_server.py` needed no changes beyond the constructor call. `group_rooms` (pure n:n pivot) stays model-less, queried via joins; `Satellite`'s pairing rename (device_id is the PK) stays raw SQL since `BaseModel.update()` never touches PK columns (Refs #77)
 * Added: `core/deploy/migrate_rooms_db.py` — one-time, idempotent migration of the real production data in the old standalone `rooms.db` into `hannah.db`'s new tables; ships with the next core release since `deploy/` is part of the release tarball (Refs #77)
 
-## 0.40.6
+## 0.40.6 (2026-06-25)
 ### Hannah Core
 * Fixed: `hannah.db` (User-Registry, Issue #72) was deleted on every AutoDeploy update — `DB_PATH` defaulted to a path relative to `__file__` (`.../core/hannah/hannah.db`), landing it *inside* the `hannah/` package directory that `autodeploy.py`'s `_extract_and_copy()` wipes and replaces wholesale on each deploy. Now defaults to the relative path `"hannah.db"`, resolved against the service's working directory like `room_manager.py`'s `rooms.db` and `memory.py`'s `memory.db` already do (Refs #76)
 
-## 0.40.5
+## 0.40.5 (2026-06-25)
 ### Hannah Core
 * Added: "Löschen"-Button auf der `/users`-WebUI-Seite — `username` ist im Edit-Formular absichtlich readonly (Identifier für Telegram `/verknuepfen` u.a.), ein Vertipper beim Anlegen (z.B. Groß-/Kleinschreibung) ließ sich bisher nur direkt in der DB korrigieren. Neue `UserManager.delete_user()` räumt zusätzlich den In-Memory-Cache/Wiring-State auf, `linked_accounts` läuft per `ON DELETE CASCADE` mit (Refs #75)
 
-## 0.40.4
+## 0.40.4 (2026-06-25)
 ### Hannah Core
 * Fixed: the adapter's initial `send_residents` snapshot (sent once per `AgentConnect`, all currently known residents in one message) was never wired up on the Core side — `on_agent_send_residents` was passed as `None` with a `#TODO`, so `HannahServicer` always fell through to `log.warning("[grpc] Unrecognized AgentMessage payload: send_residents")` and Core had to wait for the next individual `resident_update` per resident instead (Refs #73)
 
-## 0.40.3
+## 0.40.3 (2026-06-25)
 ### Hannah Core
 * Changed: `User.id` and every `*Request.user_id`/`GetUserRequest.id` field (LinkAccount, UnlinkAccount, SetTrustLevel, SetSystemMessages, GetUser) are now `int32` instead of `string` on the wire, matching the actual `users.id` SQLite column — found while debugging `/verknuepfen` always failing with `Exception calling application: '3'`. `EnrollVoiceprintRequest.user_id`/`SubmitSatelliteAudioRequest.speaker_user_id` stay `string` on purpose — those cross into the Voice-ID HTTP service, which treats the identifier as an opaque key
 * Fixed: `UserManager.get_user_by_id()` looked a (possibly string) `user_id` up against its int-keyed cache after caching under the int — `self._users[user_id]` then missed with `KeyError` for any non-int input; now normalizes to `int(user_id)` up front regardless of what the proto wire type guarantees
@@ -456,15 +462,15 @@
 ### Telegram
 * Changed: proto copy synced with the `User`/`*Request.user_id` `string` → `int32` change above — `user.id` was already typed `int` in `grpc_client.py`'s signatures, so no source changes needed, just regenerated stubs
 
-## 0.40.2
+## 0.40.2 (2026-06-25)
 ### VoiceID
 * Added: `voiceid/deploy/install-macos.sh` now passes `--config /opt/hannah/etc/voiceid.yaml` to the service — config support already existed in `app.py` but nothing on macOS ever wired it up, so `unknown_threshold`/`uncertain_threshold`/host/port were silently stuck on defaults
 
-## 0.40.1
+## 0.40.1 (2026-06-25)
 ### AutoDeploy
 * Fixed: the self-update restart path (when autodeploy deploys a newer version of itself) still hardcoded `systemctl restart` — `_restart_service()` got the macOS/launchd platform switch earlier, but this is a separate call site that was missed, crashing with `FileNotFoundError` on the Mac Mini as soon as a newer autodeploy release was available
 
-## 0.40.0
+## 0.40.0 (2026-06-25)
 ### Hannah Core
 * Added: new SQLite-backed user/linked-account model (`users`, `linked_accounts`), replacing ioBroker Residents as the source of authority for Hannah's users — accounts, trust levels, and provider links now live natively in Hannah Core (Refs #72)
 * Added: `linked_accounts.external_id` column — separates the per-provider lookup key from `provider_payload` (now JSON metadata only), since the payload's shape differs per provider (residents: `roomie_id` nested in JSON; telegram: raw ID; OAuth: tokens) and can't be queried generically. `LinkedAccountLookup` proto message gets an `external_id` field to carry the search value (Refs #72)
@@ -497,7 +503,7 @@
 ### AutoDeploy
 * Added: macOS support — `_restart_service()` uses `launchctl kickstart -k system/<label>` instead of `systemctl restart` when running on Darwin; new `deploy/install-macos.sh` bootstraps the agent itself as a LaunchDaemon via the Update Server, mirroring the existing Linux installer. The voiceid Mac install still bypasses the Update Server entirely (separate concern, not changed here)
 
-## 0.39.1
+## 0.39.1 (2026-06-21)
 ### Hannah Core
 * Fixed: `UserRegistry._init_db()`'s `type`-column migration (#64/0.39.0) did `ALTER TABLE users RENAME TO users_old`, which made SQLite automatically rewrite `linked_accounts.user_uuid`'s FOREIGN KEY to point at `users_old` — the migration then dropped that table, leaving `linked_accounts` referencing a table that no longer existed. Every `link_account()` call failed with `FOREIGN KEY constraint failed` (surfaced in Telegram as `/verknuepfen` always failing). `_init_db()` now rebuilds `linked_accounts` too, repointed at the new `users` table *before* `users_old` is dropped (dropping it first fails too — for the same reason) (Refs #69)
 * Fixed: `get_by_roomie`/`link_account`/`set_trust_level` resolved a resident by `roomie_id` alone — if a Guest and a Roomie (or a Pet) share a name, `fetchone()`/`UPDATE ... WHERE roomie_id = ?` would silently act on whichever row SQLite happened to return, with no guarantee it's the right one (e.g. linking your Telegram account to a same-named pet instead of yourself). All three now accept an optional `resident_type` and raise a new `AmbiguousResidentError` (naming the colliding types) when it's omitted and more than one active match exists, instead of guessing (Refs #69)
@@ -511,7 +517,7 @@
 * Changed: `/verknuepfen <roomie-id> [roomie|guest|pet]` — the type is now an optional second argument, needed only when `roomie-id` is ambiguous; the bot surfaces Hannah Core's `FAILED_PRECONDITION` details instead of swallowing them as a generic "not found" (`get_user_by_roomie`/`link_account` now thread `resident_type` through and return the real error message) (Refs #69)
 * Changed: `/trustlevel <roomie-id> <0-10> [roomie|guest|pet]` — same optional type argument as `/verknuepfen`, for the same reason (admin-only command, but still needs to disambiguate a colliding `roomie-id`) (Refs #69)
 
-## 0.39.0
+## 0.39.0 (2026-06-21)
 ### Hannah Core
 * Changed: `is_guest: bool` replaced by a `ResidentType` enum (`ROOMIE`/`GUEST`/`PET`) throughout the residents proto surface (`AgentResident`, `AgentSetResident`); `AgentResidentUpdate` removed and merged into `AgentResident` (now also carries `name`, `optional mood_level`, `presence_state`), used directly as the `resident_update` payload — groundwork for Pet support (Refs #64)
 * Added: `core/hannah/residents/` package — `Resident` base class (`Roomie`/`Guest`/`Pet` subclasses) replaces the flat boolean/cache-dict model; a minimal event system (`on()`/`_emit()`) plus `update()` detect arrival/departure (and `mood_changed`) transitions on the object itself instead of an external string-keyed cache, so Pets get the same presence semantics as Roomies/Guests for free (Refs #64)
@@ -531,21 +537,21 @@
 ### Telegram
 * Changed: proto updated — `ResidentType` enum replaces `is_guest` bool, `AgentResidentUpdate` merged into `AgentResident` (Refs #64)
 
-## 0.38.3
+## 0.38.3 (2026-06-20)
 ### Hannah Core
 * Added: `IoBrokerClient.handle_state_update()` now logs a `WARNING` (once per suffix, no log spam on repeated updates) when a live state update arrives for a suffix missing from `config.yaml`'s `iobroker.state_names`, instead of silently dropping it — found via a stale production `config.yaml` that never got the `iaq`/`co2_equiv`/`voc_equiv` entries added for #21, causing those values to freeze at the last gRPC snapshot indefinitely without any visible symptom (Refs #21)
 
-## 0.38.2
+## 0.38.2 (2026-06-20)
 ### Satellite Firmware
 * Added: WiFi AP-Setup-Modus verlässt sich nicht mehr endgültig — ein periodischer Timer (alle 10 Minuten, gleiches Muster wie der bestehende SNTP-Retry) versucht im Hintergrund das ursprüngliche Netz wiederzufinden, parallel zum laufenden AP (kein Scan-/Konfigurations-Unterbruch). Bei Erfolg wird der AP nur sofort abgeworfen, wenn kein Client mehr am Captive Portal hängt — sonst wartet der Cutover bis zur letzten Trennung, damit eine laufende Konfiguration (z.B. neuer PSK bei Netz-Umzug) nicht durch einen verschwindenden AP unterbrochen wird. Kein Retry bei unkonfigurierten Geräten ohne hinterlegtes WiFi (Refs #52)
 
-## 0.38.1
+## 0.38.1 (2026-06-20)
 ### Hannah Core
 * Added: `RoomManager.sync_rooms()` now detects rooms that disappeared from the ioBroker enum catalog and removes them; satellites that were assigned to a vanished room have their `room_id` nulled (kept in the DB, not deleted) and are reported back to the caller, which pushes `agent_satellite_deleted()` to the adapter so the now-roomless satellite's object tree is cleaned up there too (Refs #51)
 * Fixed: `NotifySatelliteRegistered`/`NotifySatelliteGone` pushed `agent_satellite_update()` to the adapter twice per connect/disconnect — once directly, once via the `_on_satellite_change` online/offline diff in `main.py`; the direct calls are removed, `_on_satellite_change` now resolves `display_name` itself via `RoomManager.resolve_satellite_name()` (Refs #53)
 * Fixed: the UDP-direct satellite path (fallback when no proxy is connected) took its room straight from the satellite's own registration payload, completely bypassing `RoomManager` — a satellite has had no way to know its own room since the room/group management rework (#25); it now resolves the room via `RoomManager` like the proxy path already does, and isn't tracked/forwarded to the adapter at all without one (Refs #53)
 
-## 0.38.0
+## 0.38.0 (2026-06-20)
 ### Hannah Core
 * Added: `humidity_sensor` sensor category — `_CATEGORY_STATES["humidity_sensor"]` with `current` (%); reuses the existing generic category-query mechanism, same pattern as `temperature_sensor` (Refs #47)
 * Added: `category_words` for humidity (luftfeuchtigkeit, luftfeuchte, feuchtigkeit, feuchte) in `config.yaml`/`config.example.yaml` (Refs #47)
@@ -557,7 +563,7 @@
 ### Telegram
 * Changed: proto updated — `AgentSatelliteDeleted` added (Refs #42)
 
-## 0.37.1
+## 0.37.1 (2026-06-20)
 ### Hannah Core
 * Fixed: `IoBrokerClient.handle_state_update` silently dropped live updates for state suffixes missing from `config.yaml`'s `iobroker.state_names` — affected `iaq`/`co2_equiv`/`voc_equiv` (added in the `air_quality_sensor` category) since they were never added there; the initial gRPC snapshot writes the raw suffix directly (no `state_names` translation), so affected values froze at whatever the last snapshot held instead of updating live (Refs #21)
 * Fixed: `_describe_category` repeated the device name twice in single-device responses (e.g. "Sofaecke im Wohnzimmer: Sofaecke: okay, ...") — the per-device name prefix is now only added when there's more than one device in the room; affects all single-device sensor categories (temperature, window, door, air quality), not just air quality
@@ -566,21 +572,21 @@
 ### Telegram
 * Added: `_device_status_text` now renders `iaq`/`co2_equiv`/`voc_equiv` for air-quality devices (was missing entirely — the device showed up in `/haus` menus with no values); `_iaq_label` mirrored from Hannah Core for the same plain-text assessment
 
-## 0.37.0
+## 0.37.0 (2026-06-19)
 ### Hannah Core
 * Added: `air_quality_sensor` sensor category — `_CATEGORY_STATES["air_quality_sensor"]` with `iaq` (rendered as plain-text assessment via new `_iaq_label()`: 0–50 good, 51–100 okay, 101–150 slightly polluted, >150 bad), `co2_equiv` and `voc_equiv` (ppm); reuses the existing generic category-query mechanism instead of a Hannah-specific cache, so any ioBroker-known air quality sensor works, not just Hannah's own satellites (Refs #21)
 * Added: `category_words` for air quality (luftqualitaet, iaq, co2, voc, luftguete, luft, raumluft) in `config.yaml`/`config.example.yaml` (Refs #21)
 
-## 0.36.2
+## 0.36.2 (2026-06-19)
 ### Satellite Firmware
 * Fixed: `bsec_set_configuration` returned `BSEC_E_CONFIG_VERSIONMISMATCH` (-34) — `libalgobsec.a` (esp32s3) was linked from the BSEC2 "Selectivity" algorithm variant, while `bme680_iaq_33v_3s_4d.bin` is a config for the classic "IAQ" variant; replaced both with the matching `bsec_IAQ` build (BSEC 2.6.1.0 generic release) and stripped a 4-byte length header that the source `.config` file carries in front of the raw 492-byte config blob (closes #24)
 * Fixed: unused variable `cfg` in `status_handler` (`hannah_webserver.c`) — leftover from the device-ID/room removal in #26/#32, never read (closes #46)
 
-## 0.36.1
+## 0.36.1 (2026-06-19)
 ### Hannah Core
 * Added: `RoomManager` cleans up provisioned-but-never-paired satellite seeds older than `seed_ttl_days` (default 7) via a background thread, configurable in `config.yaml` (Refs #41)
 
-## 0.36.0
+## 0.36.0 (2026-06-19)
 ### Hannah Core
 * Added: `AgentRoomSnapshot`/`AgentRoom` proto message + `AgentMessage.send_rooms` — adapter now sends the full `enum.rooms.*` catalog (independent of devices) on connect and on enum change; `RoomManager.sync_rooms()` is fed from it via a new `on_agent_room_snapshot` callback, so provisioning a satellite into a brand-new room with no devices yet no longer fails with `FOREIGN KEY constraint failed` (Refs #40)
 
@@ -590,18 +596,18 @@
 ### Telegram
 * Changed: proto updated — `AgentRoomSnapshot`/`AgentRoom` added (Refs #40)
 
-## 0.35.0
+## 0.35.0 (2026-06-19)
 ### Hannah Core
 * Fixed: `NotifySatelliteRegistered` now skips satellites with no room in RoomManager instead of propagating empty `room_id` to the adapter — prevents ghost registrations from unpaired MAC-based device IDs (Refs #37)
 
 ### Hannah Proxy
 * Refactor: removed `room` from all Go callbacks and gRPC calls — `AudioCallback`, `SatelliteChangeCallback`, `SubmitSatelliteAudio`, `NotifySatelliteRegistered`, `NotifySatelliteGone`; `SatelliteInfo.Room` removed; `RegisteredDevices()` now returns `[]string` (Refs #38)
 
-## 0.34.1
+## 0.34.1 (2026-06-19)
 ### Hannah Core
 * Fixed: `_on_agent_satellite_control` (mute/dnd/volume/announcement/announcement_ssml/announcement_rephrase via the adapter) matched only against the satellite's self-reported room, which is always empty since #35 removed room reporting from firmware — now uses `_resolve_targets()` like all other room-based routing, so `RoomManager` assignments are honored (closes #39)
 
-## 0.34.0
+## 0.34.0 (2026-06-18)
 ### Hannah Core
 * Changed: `GrpcServer.NotifySatelliteRegistered` no longer uses the satellite-reported room as fallback; `RoomManager` is now the sole authority for room assignment (Refs #35)
 * Changed: `GrpcServer.SubmitSatelliteAudio` resolves room from `_proxy_satellites` / `RoomManager` instead of `request.room` (Refs #35)
@@ -623,7 +629,7 @@
 * Changed: `FlashDialog` — room free-text field replaced with dropdown populated from `enum.rooms.*`; `provisionSatellite` now called before flash with `seed` + `roomId`; `seed` written to NVS partition (Refs #35)
 * Changed: `provisionSatellite` sendTo handler — `roomId` is now optional; enables seed-only re-provisioning without changing the satellite's room assignment (Refs #35)
 
-## 0.33.0
+## 0.33.0 (2026-06-18)
 ### Hannah Core
 * Changed: `AgentDevice.room` now carries the enum ID segment (e.g. `wohnzimmer`) instead of the German display name; `room_names` map added with all available languages for NLU matching (Refs #33)
 * Changed: `IoBrokerClient` keys rooms by enum ID; `Device.room_display_name` carries the German display name for spoken responses (Refs #33)
@@ -637,7 +643,7 @@
 ### Telegram
 * Changed: proto updated — `AgentDevice.room_names` map added (field 8) (Refs #33)
 
-## 0.32.0
+## 0.32.0 (2026-06-18)
 ### Hannah Core
 * Added: `RoomManager.resolve_satellite_name(device_id, serial)` — returns provisioned `display_name` from DB; looked up by serial if present, else by device_id (Refs #26)
 * Added: `display_name` field (8) to `AgentSatelliteUpdate` — Core populates it from DB on every satellite registration event so the adapter can show a human-readable name in ioBroker (Refs #26)
@@ -660,11 +666,11 @@
 ### Hannah Proxy
 * Changed: proto updated — `serial` removed from `SatelliteRegistration`; `NotifySatelliteRegistered` and satellite callbacks no longer carry or store serial (Refs #32)
 
-## 0.31.1
+## 0.31.1 (2026-06-18)
 ### Hannah Core
 * Fixed: `_migrate_db` in `room_manager.py` failed with `sqlite3.OperationalError: Cannot add a UNIQUE column` — SQLite does not support `ADD COLUMN … UNIQUE`; replaced with `ADD COLUMN serial TEXT` followed by `CREATE UNIQUE INDEX … WHERE serial IS NOT NULL` (Refs #26)
 
-## 0.31.0
+## 0.31.0 (2026-06-18)
 ### Hannah Core
 * Added: `satellites` table extended with `serial`, `seed`, `paired_at` columns; auto-migrates existing DBs (Refs #26)
 * Added: `provision_satellite(seed, display_name, room_id)` — pre-registers a satellite before WebFlash (Refs #26)
@@ -690,31 +696,31 @@
 * Added: hardware serial read from eFuse MAC (`esp_efuse_mac_get_default`) and sent in every Register message as `serial` field (Refs #26)
 * Added: `seed` NVS key — one-time pairing token written during WebFlash; included in Register if present, cleared from NVS on `{"type":"paired"}` ACK from proxy (Refs #26)
 
-## 0.30.0
+## 0.30.0 (2026-06-17)
 ### Hannah Core
 * Added: `RoomManager` — SQLite persistence for rooms (synced from ioBroker), n:n room groups, and satellite-to-room assignment (`core/hannah/room_manager.py`) (Refs #25)
 * Added: Web UI (`core/hannah/webui.py`) — Flask app for room/group/satellite management; starts as daemon thread on configurable port (default 8080); `flask>=3.0.0` added to `requirements.txt` (Refs #25)
 * Added: `web_ui` and `room_manager` config sections in `config.example.yaml` (Refs #25)
 * Added: `_resolve_targets` uses DB satellite room assignments (overrides self-reported room) and DB groups (fallback: `config.yaml groups:`); NLU room list updated with DB groups on device snapshot (Refs #25)
 
-## 0.29.3
+## 0.29.3 (2026-06-17)
 ### AutoDeploy
 * Added: optional `post_install` shell command in component config — executed after extraction, before state save and service restart; non-zero exit aborts the deployment
 
 ### VoiceID
 * Added: `requirements.txt` with service dependencies (`torch`, `numpy`, `PyYAML`, `fastapi`, `uvicorn`, `speechbrain`)
 
-## 0.29.2
+## 0.29.2 (2026-06-17)
 ### Satellite Firmware
 * Added: BSEC2 3.3V config binary (`bme680_iaq_33v_3s_4d.bin`) embedded via `EMBED_FILES` and loaded with `bsec_set_configuration()` after `bsec_init()` to improve self-heating compensation for 3.3V supply; falls back to 1.8V defaults with a warning on version mismatch (Refs #17, Refs #24)
 * Fixed: `work_buf[BSEC_MAX_WORKBUFFER_SIZE]` (4096 bytes) in `sensor_init()` declared `static` to prevent stack overflow that caused heap corruption and a boot loop
 
-## 0.29.1
+## 0.29.1 (2026-06-17)
 ### Satellite Firmware
 * Refactored: AudioLib integrated as an IDF component via EXTRA_COMPONENT_DIRS instead of a manual list of source files — future AudioLib updates will automatically include the source and header files (closes #23)
 * Added: WebRTC VAD replaces RMS-based silence detection during streaming — `hannah_webrtc_vad_init/feed/free` (from AudioLib 0.2.0 / libfvad) distinguishes speech from music and background noise by spectral features instead of energy level; aggressiveness configurable via Kconfig (`HANNAH_VAD_WEBRTC_AGGRESSIVENESS`, default 2); `noise_ema` stays for the wakeword-onset guard (closes #20)
 
-## 0.29.0
+## 0.29.0 (2026-06-16)
 ### Hannah Core
 * Added: MQTT sensor handler forwards IAQ, IAQ accuracy, CO₂ equivalent and VOC equivalent from satellite MQTT payload through to gRPC `AgentSensorUpdate` (Refs #17)
 
@@ -731,12 +737,12 @@
 * Added: BSEC2 library integration for BME680 — replaces raw gas resistance (Ω) with meaningful IAQ (0–500), Static IAQ, CO₂ equivalent (ppm), and breath VOC equivalent (ppm); accuracy level (0–3) published alongside; BSEC2 calibration state persisted to NVS every 30 min and restored on boot to retain accuracy across reboots (Refs #17)
 * Added: `bme68x` and `bsec2` as local IDF components (`components/bme68x/`, `components/bsec2/`) with precompiled `libalgobsec.a` for ESP32-S3 (Xtensa LX7); workaround for IDF 6.0 `component_requirements.py` Windows path bug via explicit `target_include_directories` / `target_link_libraries` in `hannah_sensors/CMakeLists.txt`
 
-## 0.28.3
+## 0.28.3 (2026-06-16)
 ### Satellite Firmware
 * Fixed: PDM clock inversion flag set to `true` (`clk_inv = true`) — SPH0641 with SEL=GND outputs data on the falling CLK edge; reading on the rising edge caused white noise instead of signal (Refs #5)
 * Fixed: VAD `noise_ema` stuck at initial value 0.02 — `noise_ema` is now calibrated during the 5 s mic warmup (excluding TTS frames via `s_speaking_active` guard) so the correct floor is known before the first stream; idle tracking also gated on `!s_speaking_active` to prevent speaker bleed from contaminating the noise floor estimate (Refs #19)
 
-## 0.28.2
+## 0.28.2 (2026-06-16)
 ### Hannah Core
 * Fixed: `_ask_fn` routes `start_listening` via MQTT instead of UDP — UDP-based send silently failed for proxy-connected satellites (closes #18)
 
@@ -744,7 +750,7 @@
 * Fixed: `hannah_net` subscribes to `hannah/satellite/{device}/listen` MQTT topic and calls `start_listening` callback on receipt — proxy satellites now receive the command
 * Fixed: `hannah_audio_start_listen_after_tts` activates virtual PTT immediately if TTS has already ended, avoiding a missed trigger when the MQTT message arrives after the sentinel
 
-## 0.28.1
+## 0.28.1 (2026-06-16)
 ### Hannah Core
 * Fixed: `_ask_fn` now sends `start_listening` UDP command to all satellites in the room after TTS — satellites were not entering listening mode after the question was played, so no answer ever arrived at Hannah
 
@@ -755,18 +761,18 @@
 ### Scripts
 * Fixed: `release.js` now removes the `## **WORK IN PROGRESS**` line when promoting WIP entries to a version — the HTML comment above it is preserved
 
-## 0.28.0
+## 0.28.0 (2026-06-16)
 ### Hannah Core
 * Added: `AgentAskResident` 
 
 ### Proto
 * Added: `correlation_id` field to `AgentAskResident` — identifies a pending question across the round-trip; `AgentResidentAnswered` message carries the resident's spoken answer back to the adapter; `resident_answered` variant added to `AgentCommand` oneof so Hannah can push the answer over the existing adapter stream
 
-## 0.27.0
+## 0.27.0 (2026-06-15)
 ### Hannah Core
 * Added: `for:` delay in triggers — state-trigger can specify `for: "5h"` (or `"30m"`, `"90s"`) to defer execution until the duration elapses; the Timer Service registers a SQLite-persistent timer so delays survive Hannah restarts; `cancel_when:` cancels the pending timer if a counter-condition is met before the delay fires; on reconnect, `TimerListRequest` reconciles active trigger timers against current state (stale timers cancelled, active ones restored into RAM); `cancel_when` state IDs included in `WatchMore` so the adapter watches them
 
-## 0.26.0
+## 0.26.0 (2026-06-15)
 ### Hannah Core
 * Added: Trigger-Engine supports active questioning — triggers can use `ask` instead of `say` to pose a question via TTS and route the next utterance from that room as the answer; `on_response` rules match the free-form answer via `llm_match("category")` (LLM classification prompt) and execute `say` actions accordingly; unanswered questions time out after 60s; answered utterances bypass NLU routing (`AnswerPending` intent)
 * Added: `LLMClient.match(text, category)` — classifies whether a free-form answer belongs to a semantic category using a yes/no LLM prompt; `DummyLLM` always returns `False`
@@ -775,15 +781,15 @@
 ### Hannah Proxy
 * Changed: replaced `gopkg.in/yaml.v3` with `sigs.k8s.io/yaml` for config parsing — struct tags switched from `yaml:"..."` to `json:"..."` accordingly (config.yaml format unchanged)
 
-## 0.25.2
+## 0.25.2 (2026-06-13)
 ### Hannah Proxy
 * Fixed: `SendTTSChunk()` now throttles UDP packet sending to playback rate — each 1400-byte packet is followed by a sleep proportional to its audio duration (`chunk_bytes / (sample_rate × 2)`); without this, the proxy sent all packets in a burst that overflowed the satellite's lwIP socket buffer, dropping most audio and causing garbled/truncated TTS on long responses
 
-## 0.25.1
+## 0.25.1 (2026-06-13)
 ### Satellite Firmware
 * Changed: Speaker audio buffering replaced per-chunk `malloc`/`free` with a FreeRTOS `RINGBUF_TYPE_NOSPLIT` ring buffer (32 KB internal DRAM, ~640ms buffer at 24kHz) — `hannah_audio_play()` uses `xRingbufferSendAcquire`/`xRingbufferSendComplete` to write directly into the ring buffer without heap allocation; `speaker_task` uses `xRingbufferReceive`/`vRingbufferReturnItem`; end-of-stream signalled by a sentinel item with `len=0`; internal DRAM required (PSRAM not suitable for I2S-DMA source)
 
-## 0.25.0
+## 0.25.0 (2026-06-13)
 ### Hannah Core
 * Added: `stream_audio_to_proxy()` — slices full TTS PCM into ~100ms chunks (4800 bytes @ 24kHz) and sends each as a separate `PlayAudioCommand` with `is_last=true` on the final chunk; reduces satellite startup latency from full Azure response time to first chunk arrival
 
@@ -794,80 +800,80 @@
 ### Proto
 * Changed: `PlayAudioCommand` — added `bool is_last = 4`; signals the proxy to send `tts_end` after the final chunk
 
-## 0.24.13
+## 0.24.13 (2026-06-13)
 ### Satellite Firmware
 * Added: Asset Server URL and Token fields to the satellite settings web interface (`/settings`) — token inputs are write-only (password type); submitting an empty token field leaves the stored value unchanged
 * Added: Update Server Token field to the satellite settings web interface — same write-only behaviour
 * Added: "Disable TLS certificate validation" checkbox in settings web interface — stored in NVS (`tls_skip`), default off; when enabled, `crt_bundle_attach` is omitted so ESP-IDF skips chain verification (useful for self-signed certificates)
 
-## 0.24.12
+## 0.24.12 (2026-06-12)
 ### Satellite Firmware
 * Fixed: `hannah_asset` now verifies the SHA256 of a downloaded asset against the manifest before caching it — previously an aborted partial download (e.g. 512 bytes from a dropped TLS connection) was accepted as valid (`total > 0`), its manifest hash stored in NVS, and the corrupt file served forever; mismatching files are now discarded and re-fetched on the next cycle (SHA256 via PSA Crypto API, mbedTLS 4.x compatible)
 * Changed: BLE (NimBLE) memory footprint reduced — host heap moved to PSRAM (`BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL`) and roles restricted to observer-only (central/peripheral/broadcaster/SMP disabled), since `hannah_ble` is a pure passive scanner; frees scarce internal RAM that AES/I2S DMA and WiFi mgmt-frames compete for (TLS asset download failed with `esp-aes: Failed to allocate memory` while BLE was active)
 
-## 0.24.11
+## 0.24.11 (2026-06-12)
 ### Satellite Firmware
 * Fixed: `asset_upd` task stack increased from 8 KB to 16 KB — with mbedTLS now able to complete the TLS handshake (v0.24.10), the ECDHE MPI hardware-acceleration operations (`mpi_ll_read_from_mem_block`) ran out of stack during the asset download, causing a stack overflow and reboot
 
-## 0.24.10
+## 0.24.10 (2026-06-12)
 ### Satellite Firmware
 * Fixed: mbedTLS context allocations redirected to PSRAM via `mbedtls_platform_set_calloc_free()` — internal RAM fragmentation (caused by BLE/NimBLE init) prevented `mbedtls_ssl_setup` from allocating the SSL context, causing all TLS connections to fail after boot
 
-## 0.24.9
+## 0.24.9 (2026-06-12)
 ### Satellite Firmware
 * Fixed: `hannah_asset` retries manifest fetch indefinitely (every 30 min) instead of giving up after 3 attempts — previously the update task deleted itself on failure, so assets were never fetched if TLS wasn't ready at boot
 * Fixed: `CONFIG_MBEDTLS_KEY_EXCHANGE_RSA=n` added — disables RSA key exchange cipher suites (no forward secrecy); forces ECDHE negotiation with the Netscaler reverse proxy which otherwise prefers `AES256-SHA` (RSA key exchange) causing TLS handshake failure on ESP32-S3 via PSA crypto
 
-## 0.24.8
+## 0.24.8 (2026-06-12)
 ### Satellite Firmware
 * Fixed: `CONFIG_LWIP_SNTP_MAX_SERVERS=2` added — without it, pool.ntp.org (at slot 1) was silently dropped because lwIP only allocated one server slot; now DHCP NTP (slot 0) and pool.ntp.org (slot 1) are both active
 * Improved: `hannah_net_wait_sntp()` now uses an EventGroup bit instead of `esp_netif_sntp_sync_wait` — fixes immediate return on second call; bit stays set after sync so all subsequent callers return instantly
 * Improved: after WiFi gets IP, a 30s repeating FreeRTOS timer calls `esp_sntp_restart()` until SNTP is synced
 
-## 0.24.7
+## 0.24.7 (2026-06-12)
 ### Satellite Firmware
 * Fixed: SNTP init moved from `IP_EVENT_STA_GOT_IP` handler to `hannah_net_init()` — previously SNTP registered its `renew_servers_after_new_IP` event handler *after* the IP event already fired, so the DHCP-provided NTP server (Option 42) was never picked up; now the handler is registered before WiFi connects
 * Fixed: `hannah_ota` now waits up to 10s for SNTP sync before the first `check_for_update()` call — prevents TLS handshake failure (`-0x008D`) caused by invalid system clock at t=60s boot
 
-## 0.24.6
+## 0.24.6 (2026-06-12)
 ### Satellite Firmware
 * Fixed: `CONFIG_LWIP_DHCP_GET_NTP_SRV=y` added to `sdkconfig.defaults` — required for `server_from_dhcp = true` in SNTP config; without it ESP-IDF rejected the SNTP init with `sntp_init_api: Tried to configure SNTP server from DHCP, while disabled`
 
-## 0.24.5
+## 0.24.5 (2026-06-12)
 ### Satellite Firmware
 * Fixed: SNTP time synchronization added — `hannah_net` starts NTP (`pool.ntp.org`) after WiFi connect; `hannah_asset` waits up to 10s for sync before first manifest fetch — fixes TLS handshake failure (`-0x3B00`) caused by invalid system clock
 * Improved: SNTP now prefers NTP server from DHCP (Option 42); falls back to `pool.ntp.org` if DHCP provides none; DHCP-provided server is refreshed automatically on IP renewal
 * Fixed: BME680 humidity compensation formula corrected to match Bosch reference (`bme68x.c`) — wrong divisors for `par_h3` (200→100), `par_h4` (100→16384), `par_h5` (10⁹→1048576) and wrong structure of correction term (used `v1` instead of `h`); fixes `H=0.0%` readings
 
-## 0.24.4
+## 0.24.4 (2026-06-11)
 ### Satellite Firmware
 * Changed: `wakeword_enabled` removed from NVS and web interface — wake-word on/off is now a compile-time decision via `CONFIG_HANNAH_WAKEWORD_ENABLED`; threshold (`ww_threshold`) remains configurable at runtime
 * Fixed: `hannah_asset` manifest fetch retries up to 3 times with 30s delay on failure instead of silently skipping the update
 * Fixed: BME680 calibration block 1 address corrected from `0x89` to `0x8A`, length from 25 to 23 bytes — fixes incorrect temperature/humidity readings
 
-## 0.24.3
+## 0.24.3 (2026-06-11)
 ### Satellite Firmware
 * Fixed: `hannah_asset` startup delay increased from 10s to 50s to ensure PSA crypto is ready before first TLS connection (asset check at t=50s, OTA check at t=60s)
 
-## 0.24.2
+## 0.24.2 (2026-06-11)
 ### Satellite Firmware
 * Fixed: `PSA_ERROR_INSUFFICIENT_MEMORY` (-141) during TLS handshake — `hannah_asset` delays 10s at boot before manifest fetch and uses `esp_crt_bundle_attach`; OTA unmounts SPIFFS before download to free heap for PSA signature verification
 
-## 0.24.1
+## 0.24.1 (2026-06-11)
 ### Satellite Firmware
 * Fixed: OTA TLS handshake failed with `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` — replaced hardcoded intermediate CA PEM with `esp_crt_bundle_attach` in both version check and OTA download
 
-## 0.24.0
+## 0.24.0 (2026-06-11)
 ### Satellite Firmware
 * Changed: asset server URL and token moved from compile-time Kconfig constants to NVS (with sdkconfig fallback) — adapter can now provision them during initial flash
 * Changed: `hannah_asset` uses `hannah_config_get()` instead of `CONFIG_HANNAH_ASSET_SERVER_URL` / `CONFIG_HANNAH_ASSET_SERVER_TOKEN`; asset URL is now logged on each manifest fetch
 
-## 0.23.16
+## 0.23.16 (2026-06-10)
 ### Satellite Firmware
 * Fixed: PDM microphone channel selection was wrong — code read right channel (SEL=VDD, index 1) but Rev 4 PCB has SEL=GND (left channel, index 0); switched to `s16[i * 2]`
 * Fixed: PDM gain factor x256 caused hard clipping; tuned to x64 which gives usable speech levels without distortion
 
-## 0.23.15
+## 0.23.15 (2026-06-10)
 ### Satellite Firmware
 * Fixed: `mic_task` could starve `IDLE0` on CPU0 and trigger the task watchdog — every loop iteration now yields via `vTaskDelay(1)` instead of relying solely on `i2s_channel_read()` blocking (or `taskYIELD()`)
 
@@ -875,15 +881,15 @@
 * Fixed: audio received via UDP from a satellite in capture/sampling mode was processed through the normal STT/LLM/TTS pipeline instead of being routed to the capture stream — `process_audio_udp` now checks `is_captured()` like the gRPC path
 * Fixed: a satellite could get stuck in capture/sampling mode after a Hannah Core restart because the retained MQTT sampling-mode flag survived independently of Hannah's in-memory capture state — Hannah now republishes `sampling: false` (retained) for any newly (re)connected satellite it doesn't consider captured
 
-## 0.23.14
+## 0.23.14 (2026-06-10)
 ### Satellite Firmware
 * Added: configurable status LED — `HANNAH_STATUS_LED_ENABLED` / `HANNAH_STATUS_LED_GPIO` (Kconfig, default GPIO 18 for Rev 4); turned on as early as possible in `app_main`
 
-## 0.23.13
+## 0.23.13 (2026-06-09)
 ### Hannah Core
 * Fixed: `_on_satellite_change` callback crashed with `TypeError` when a proxy satellite registered — `grpc_server.py` was passing `{device: {"room": ..., "addr": ...}}` but the callback expected `{device: room_string}`; snapshots now consistently use `{device: room_string}` matching the UDP server format
 
-## 0.23.12
+## 0.23.12 (2026-06-09)
 ### Hannah Core
 * Fixed: proxy satellites always had empty `address` state in ioBroker — `SatelliteRegistration` proto now carries the satellite IP; `grpc_server.py` stores it in `_proxy_satellites`; `get_satellites` lambda uses new `proxy_satellites_full()` to include the address
 
@@ -891,11 +897,11 @@
 * Changed: `SatelliteChangeCallback` now includes `address` (satellite IP); passed through `NotifySatelliteRegistered` to Hannah Core
 * Added: `udp.Server.RegisteredDevicesFull()` — returns `{device: SatelliteInfo{Room, Address}}` for re-notify on reconnect
 
-## 0.23.11
+## 0.23.11 (2026-06-09)
 ### CI
 * Fixed: upload jobs failed with SSL certificate error — `alpine` container has no internal CA; added `echo insecure >> ~/.curlrc` in `.upload.before_script` so all curl calls skip TLS verification for the self-signed Update-Server
 
-## 0.23.10
+## 0.23.10 (2026-06-09)
 ### Hannah Core
 * Fixed: `GetSatellites` response always returned empty `address` field — `get_satellites` lambda now uses new `udp_server.registered_devices_full()` which includes the actual `ip:port` address
 * Added: `UdpServer.registered_devices_full()` — returns `{device: {room, addr}}` with address as `ip:port` string
@@ -904,11 +910,11 @@
 * Added: `HANNAH_MIC_TYPE_NONE` Kconfig option — disables microphone input (mic_init, mic_task, sampling/PTT callbacks skipped); LED set to IDLE directly at init
 * Added: `HANNAH_SPEAKER_ENABLED` Kconfig bool (default y) — disables I2S speaker output and TTS callbacks when set to n; allows building pure sensor-node firmware
 
-## 0.23.9
+## 0.23.9 (2026-06-07)
 ### Satellite Firmware
 * Fixed: BLE watchlist retained MQTT message was dropped on boot because `hannah_ble_init()` registers the callback after MQTT has already connected and received the retained payload; `hannah_net` now caches the payload and delivers it immediately when the callback is registered
 
-## 0.23.8
+## 0.23.8 (2026-06-07)
 ### Hannah Core
 * Changed: `udp_server` — added 300 ms delay before sending `tts_end` to satellite; prevents hard audio cutoff caused by `tts_end` arriving before the last PCM UDP packets are received and queued on the satellite
 
@@ -918,23 +924,23 @@
 ### Satellite Firmware
 * Fixed: `hannah_audio` warmup loop — `taskYIELD()` (0.23.7) does not yield to `IDLE0` (priority 0) when higher-priority tasks are runnable during boot; replaced with `vTaskDelay(1 ms)` so the loop actually blocks and lets `IDLE0` reset the task watchdog
 
-## 0.23.7
+## 0.23.7 (2026-06-07)
 ### Satellite Firmware
 * Fixed: `hannah_audio` warmup loop — `continue` bypassed the `taskYIELD()` at the end of `mic_task`'s main loop, starving `IDLE0` for the full 5-second warmup period and causing a task watchdog warning at boot; added `taskYIELD()` inside the warmup block before `continue`
 
-## 0.23.6
+## 0.23.6 (2026-06-07)
 ### Satellite Firmware
 * Fixed: `hannah_ota` / `hannah_audio` — TFLite wakeword inference in `mic_task` (CPU 0) prevented `IDLE0` from running during OTA download, triggering repeated task watchdog warnings and potentially stalling HTTPS reads; `ota_update_task` now calls `hannah_audio_pause_wakeword()` before starting the download, causing `mic_task` to sleep 50 ms per iteration instead of running inference
 
-## 0.23.5
+## 0.23.5 (2026-06-07)
 ### Satellite Firmware
 * Fixed: `hannah_audio` — `mic_task` and `speaker_task` both ran unpinned on CPU 0; TFLite inference starved the speaker task causing `i2s_channel_write` silence drain to time out, resulting in TTS audio cutoff at end; `mic_task` now pinned to CPU 0, `speaker_task` to CPU 1; silence drain timeout changed to `portMAX_DELAY`
 
-## 0.23.4
+## 0.23.4 (2026-06-07)
 ### Satellite Firmware
 * Fixed: `mic_task` — added `taskYIELD()` at end of each loop iteration; TFLite wakeword inference was monopolizing CPU 0 and starving IDLE0, causing repeated task watchdog triggers (especially during concurrent OTA download)
 
-## 0.23.3
+## 0.23.3 (2026-06-07)
 ### Hannah Core
 * Fixed: BLE tag locations were not delivered to ioBroker adapter after reconnect — `_on_agent_connect` now pushes all current locations via `ble_engine.get_current_locations()` as a resync on every adapter connect
 * Added: `BleLocationEngine.get_current_locations()` — returns last known location for all configured tags
@@ -942,15 +948,15 @@
 ### Satellite Firmware
 * Fixed: `hannah_audio` speaker task — TTS playback was cut off at the end; on `audio_end` only 320 bytes of silence were written which was insufficient to drain the I2S DMA pipeline (8 × 640 frames × 2 bytes = 10240 bytes); now writes full DMA-sized silence buffer to ensure all buffered audio is clocked out
 
-## 0.23.2
+## 0.23.2 (2026-06-06)
 ### Hannah Core
 * Fixed: `tool_agent` — LLM had no access to current date/time; now injected into system prompt on every run (weekday, date, time); prevents wrong guesses for questions like "Welcher Tag ist heute?"
 
-## 0.23.1
+## 0.23.1 (2026-06-06)
 ### Hannah Core
 * Fixed: startup crash — `main.py` log statement referenced removed `topic_prefix_write` attribute on `ResidentsClient`; replaced with `topic_prefix_read`
 
-## 0.23.0
+## 0.23.0 (2026-06-06)
 ### Satellite Firmware
 * Added: `hannah_sd` component — SPI Micro-SD card support via `esp_vfs_fat`; mounts at `/sdcard`; enabled per Kconfig (`CONFIG_HANNAH_SD_ENABLED`); no-op stubs when disabled
 * Added: `sdkconfig.defaults.rev4` enables SD card (GPIO 4/5/6/7) and BME680
@@ -959,18 +965,18 @@
 * Added: `build:esp32:rev4` — builds firmware with `sdkconfig.defaults.rev4`
 * Added: `upload:esp32:rev4` — uploads Rev4 firmware to channel `satellite-esp-stable`
 
-## 0.22.2
+## 0.22.2 (2026-06-05)
 ### Hannah Core
 * Fixed: `tool_agent` — `speak()` is now a terminal tool; the loop returns immediately after dispatching `speak` without waiting for a further LLM round-trip; previously the loop could exhaust `_MAX_ITERATIONS` before `speak` was ever called, causing the fallback "Das habe ich leider nicht verstanden." instead of the generated answer
 * Changed: `_MAX_ITERATIONS` raised from 3 to 5 — allows more complex tool-use flows (e.g. multi-device commands, intermediate queries) without hitting the limit prematurely
 * Added: TTS result logging in `_handle_satellite_audio` — logs byte count and sample rate on success, or a warning when `synthesize()` returns nothing
 
-## 0.22.1
+## 0.22.1 (2026-06-04)
 ### Hannah Core
 * Fixed: `process_notification` (notify/alert severity) was sending raw Azure TTS (24kHz) to satellites without resampling — audio played at 67% speed with noticeably lower pitch; now resampled to 16kHz via `_resample_to_16k` before `_send_audio`
 * Fixed: `_on_agent_satellite_control` (ioBroker announcements) had the same missing resample, and called `udp_server.send_tts` directly instead of `_send_audio` — breaking proxy-connected satellites
 
-## 0.22.0
+## 0.22.0 (2026-06-04)
 ### Hannah Core
 * Added: LLM rephrase for announcements — `_rephrase_text()` helper shared by trigger engine and satellite control handler; falls back to original text when LLM is unavailable or fails
 * Added: `rephrase: true` field in `triggers.yaml` — TriggerEngine passes `say` text through LLM before TTS when set
@@ -979,7 +985,7 @@
 ### Proto
 * Added: `announcement_rephrase` (field 8) to `AgentSatelliteControl.oneof control` — speak announcement with LLM rephrase applied before TTS
 
-## 0.21.3
+## 0.21.3 (2026-06-04)
 ### Telegram
 * Added: Automated test suite for the Telegram bot (`telegram/tests/test_app.py`, 28 tests) — covers private-chat guard, trust-level checks, link/unlink flow, `/start` welcome message, free-text command dispatch, and car-state formatting; integrated as `test:telegram` CI job
 
@@ -987,15 +993,15 @@
 * Refactored: `voiceid/app.py` — moved all module-level side effects (model loading, argparse, `os.makedirs`) out of import scope into a `create_app()` factory and FastAPI lifespan handler; routes extracted to `APIRouter`; `get_embedding()` now accepts classifier as parameter instead of using a global
 * Added: Automated test suite for the VoiceID service (`voiceid/tests/test_app.py`, 16 tests) — covers embedding extraction, profile enrollment (new + blending), identification with threshold logic, startup profile sync from disk to RAM, and config-file threshold overrides; integrated as `test:voiceid` CI job (Python 3.11, torch CPU-only, no speechbrain install required)
 
-## 0.21.2
+## 0.21.2 (2026-06-04)
 ### Hannah Core
 * Changed: Asset manifest is now fetched without namespace filter (`GET /manifest`) so asset metadata can be queried generically across all namespaces
 
-## 0.21.1
+## 0.21.1 (2026-06-03)
 ### Satellite Firmware
 * Fixed: `hannah_asset` — asset server HTTPS requests failed due to missing CA certificate; added Thawte TLS RSA CA G1 cert to `fetch_manifest()` and `download_asset()` (same CA as OTA)
 
-## 0.21.0
+## 0.21.0 (2026-06-03)
 ### Hannah Core
 * Added: Asset manifest fetch at startup — reads `duration_s`, `sample_rate`, `channels`, `bits_per_sample` from asset server manifest (`asset_server.url` + `asset_server.token` in `config.yaml`)
 * Changed: Timer alert now plays `timer_jingle` asset on all target satellites before TTS; TTS is pre-synthesized so jingle and announcement are sequenced precisely (`play_asset` → sleep `duration_s + 0.1 s` → TTS PCM)
@@ -1007,7 +1013,7 @@
 * Added: `HANNAH_ASSET_SERVER_URL` + `HANNAH_ASSET_SERVER_TOKEN` Kconfig options (set via CI as `sdkconfig.defaults.ci`)
 * Changed: SPIFFS partition expanded from 1.9 MB to 9 MB
 
-## 0.20.0
+## 0.20.0 (2026-06-01)
 ### Hannah Core
 * Fixed: Notifications played back at wrong pitch — Azure TTS output (24 kHz) was not resampled before sending to satellite, causing 2/3-speed playback and a noticeably deeper voice; use `_resample_to_16k()` helper
 * Added: `TriggerPlink` gRPC RPC — Hannah plays an 880 Hz plink tone on the satellite and holds virtual PTT for `record_duration` seconds so the collector can trigger guided Hey-Hannah recordings remotely
@@ -1030,7 +1036,7 @@
 * Changed: capture LED animation is now more distinctly purple (higher blue component relative to red)
 * Added: LED state transition logging — each state change is logged (`LED X → Y`)
 
-## 0.19.0
+## 0.19.0 (2026-05-31)
 ### Hannah Core
 * Added: Wakeword Collector integration — satellites can be put in capture mode via gRPC; Hannah relays raw PCM to the collector instead of STT pipeline; DND is set automatically; MQTT `hannah/satellite/{device}/sampling` notifies satellite firmware (firmware-side pending)
 * Added: `RequestSatelliteCapture`, `ReleaseSatelliteCapture`, `StreamSatelliteAudio` gRPC RPCs for wakeword training data capture
@@ -1039,34 +1045,34 @@
 ### Satellite Firmware
 * Added: Sampling mode via MQTT `hannah/satellite/{device}/sampling` — when `{"enabled":true}` is received, speaker output is blocked, any running TTS queue is cleared, and LED shows `LED_STATE_CAPTURE` (purple pulsing); restored to normal on `{"enabled":false}` or auto-release
 
-## 0.18.6
+## 0.18.6 (2026-05-31)
 ### Hannah Core
 * Fixed: NLU timer trigger now recognizes Whisper-truncated "erinner" (prefix match instead of exact set match)
 * Fixed: Announcements (proactive / timer / trigger) played back at wrong pitch — Azure TTS output (24 kHz) was not resampled before sending to satellite, causing 2/3-speed playback and a noticeably deeper voice; extracted `_resample_to_16k()` helper used by both announcement and satellite audio paths
 
-## 0.18.5
+## 0.18.5 (2026-05-31)
 ### Hannah Core
 * Fixed: `SetTimer` intent not handled in gRPC/satellite audio path (`_handle_text`) — fell through to `iobroker.execute()` causing "Kein Raum erkannt" warning and no timer being set; timer is now created correctly from all input paths
 
 ### Proto
 * Added: `TimerNotReady` message — Hannah can signal a temporary degraded state (e.g. ioBroker disconnected) over the `TimerConnect` stream; Timer Service should hold `TimerFired` events until a subsequent `TimerReady` is received; Hannah Core does not yet send this message
 
-## 0.18.4
+## 0.18.4 (2026-05-31)
 ### Hannah Core
 * Fixed: NLU responses no longer contain raw internal category names (e.g. "light") — mapped to German labels: Lichter, Steckdosen, Klimageräte, Rollläden, Sensoren
 
-## 0.18.3
+## 0.18.3 (2026-05-31)
 ### Satellite Firmware
 * Fixed: false wakeword trigger immediately after boot — wakeword frontend is now fed audio during the 5-second warmup period so model state is fully initialized before detection begins; previously the uninitialized frontend caused a consistent false trigger ~200 ms after warmup ended
 * Fixed: TTS audio chunks silently dropped during playback — speaker queue depth increased from 8 to 256 entries; send is now blocking with a 2-second timeout to apply backpressure instead of discarding chunks
 * Fixed: OTA reliability — mbedTLS TLS IN buffer reduced from 16 KB to 8 KB via `MBEDTLS_ASYMMETRIC_CONTENT_LEN`; frees internal RAM headroom consumed by DSR_16S PDM downsampling
 
-## 0.18.2
+## 0.18.2 (2026-05-31)
 ### Satellite Firmware
 * Fixed: PDM microphone channel selection corrected — SPH0641LU4H-1 with SEL=VDD outputs on the right channel (index 1), not left; previously all captured audio was zero
 * Fixed: PDM digital gain increased from default (1×) to 8× — default gain produced inaudibly quiet signal for the SPH0641LU4H-1
 
-## 0.18.1
+## 0.18.1 (2026-05-31)
 ### Hardware (PCB Rev. 4)
 * Changed: SW1 (EN) tap rerouted closer to ESP pin for more clearance to C3/C4/R3
 * Changed: SW2 (IO0) rerouted for more clearance between R6 and button body; AMP_LRC/AMP_BCLK traces rerouted away from button area
@@ -1077,7 +1083,7 @@
 * Added: VAD silence timeout (`vad_silence_ms`) is now stored in NVS and configurable via web UI (200–10000 ms); default remains 1500 ms
 * Fixed: after wakeword detection, VAD cannot end the stream for the first 2 seconds — prevents cutoff during the natural pause between wakeword and spoken command
 
-## 0.18.0
+## 0.18.0 (2026-05-30)
 ### AutoDeploy
 * Changed: revision field from update server is now compared alongside version — same version but higher revision triggers redeployment; revision is persisted in state file
 * Changed: download URL is now taken from the server response `url` field; `device=<id>` query parameter added to download requests
@@ -1086,7 +1092,7 @@
 * Changed: OTA now compares server `revision` field in addition to version — same version but higher revision triggers an update; revision is persisted in NVS after successful OTA
 * Changed: OTA download URL now includes `device=<id>` query parameter (matching the `/latest` check request)
 
-## 0.17.0
+## 0.17.0 (2026-05-30)
 ### Hardware (PCB Rev. 4)
 * Changed: PCB revision bumped from 3 to 4
 * Fixed: ALPS SKRPABE010 button LCSC part numbers corrected for all 6 buttons (Mute, Vol-, Vol+, PTT, EN, IO0)
@@ -1095,66 +1101,66 @@
 ### Satellite Firmware
 * Added: LED animations per state — BOOT rotating white, WAKE pulsing blue, STREAM rotating blue arc, SPEAK green breathing, MUTE dim static red, ERROR fast red blink; driven by a 50 Hz FreeRTOS task
 
-## 0.16.3
+## 0.16.3 (2026-05-30)
 ### Satellite Firmware
 * Fixed: LED stays in SPEAK (green) state until the speaker task has finished playing all TTS audio — previously `status=idle` from the server would immediately reset the LED while chunks were still queued for playback
 
-## 0.16.2
+## 0.16.2 (2026-05-30)
 ### Hardware (PCB Rev. 3)
 * Fixed: ALPS SKRPABE010 footprint corrected — contacts were bridged on the wrong axis causing EN and IO0 to be permanently pulled to GND; all 6 button footprints (EN, IO0, Mute, Vol-, Vol+, PTT) replaced
 ### Satellite Firmware
 * Added: `sdkconfig.defaults.rev2` — build target for PCB Rev. 2 (PDM mics, BMP280, external LED ring, corrected GPIO assignments)
 
-## 0.16.1
+## 0.16.1 (2026-05-30)
 ### Hannah Core
 * Added: INFO log in `Notify` gRPC handler — logs severity and text on every received notification to diagnose duplicate delivery
 
-## 0.16.0
+## 0.16.0 (2026-05-30)
 ### Hannah Core
 * Changed: `SetTimer` voice intent now routes through the external Timer Service — generates a UUID timer_id, persists metadata in `HannahTimerStore`, and calls `grpc_servicer.timer_create()`; in-process `TimerManager` removed for timer commands
 * Added: NLU label extraction for timer commands — "erinnere mich in X Minuten an Y" triggers `SetTimer` and extracts Y as label; response includes label if detected ("Timer für 40 Minuten gesetzt: Spazierengehen.")
 
-## 0.15.0
+## 0.15.0 (2026-05-29)
 ### Hannah Core
 * Added: `say` action type in routines — routines can now speak text via TTS as part of their action sequence; optional `room` parameter (default: `all`)
 * Added: Hannah Timer Service gRPC interface — `TimerConnect` bidirectional stream, `TimerReady` signal sent after ioBroker device snapshot; `HannahTimerStore` (SQLite) persists timer metadata (label, room, roomie_id, fire_at) locally; on `TimerFired`, Hannah looks up metadata and plays TTS announcement
 
-## 0.14.7
+## 0.14.7 (2026-05-29)
 ### Hannah Core
 * Changed: notification reformulation prompt now uses Hannah's persona ("24-jährige Mitbewohnerin") and per-severity tone tuning for more natural, less formal spoken notifications
 
-## 0.14.6
+## 0.14.6 (2026-05-29)
 ### Hannah Core
 * Fixed: `get_active_devices` now correctly uses the `on` state as the sole indicator of activity when present — previously a non-zero `level` alone would mark a device as active even if `on=false` (e.g. lights with a saved level but physically off)
 * Changed: `get_active_devices` output now includes total device count (e.g. "5 von 47") to give the LLM context for relative statements
 
-## 0.14.5
+## 0.14.5 (2026-05-29)
 ### Hannah Core
 * Added: INFO-level payload size logging in tool agent — logs message count and character count per iteration, and tool result size after each dispatch
 * Fixed: tool agent now blocks duplicate tool calls (same name + same arguments) server-side and returns an error forcing the LLM to call `speak` instead of looping
 * Changed: tool agent query tools now return human-readable text instead of raw JSON — `get_all_devices`, `get_active_devices`, `get_devices_in_room`, `get_devices_by_category`, `get_device_state` all return formatted strings that LLMs can directly use for spoken answers
 
-## 0.14.4
+## 0.14.4 (2026-05-29)
 ### Hannah Core
 * Added: `get_active_devices` tool — returns only active devices (on=true or level>0) with current state; ideal for "was läuft gerade?"
 * Added: `get_devices_in_room(room)` tool — returns devices in a specific room with state keys; for targeted queries and control
 * Added: `get_devices_by_category(category)` tool — returns devices of a category with state keys; for bulk actions like "alle Lichter aus"
 * Changed: `get_all_devices` now returns only id/name/room/category (no state_keys, no current) — pure discovery tool to reduce token usage
 
-## 0.14.3
+## 0.14.3 (2026-05-29)
 ### Hannah Core
 * Fixed: `get_all_devices` tool no longer returns `current` state values — payload was too large for LLM token budget; use `get_device_state` for current values
 
-## 0.14.2
+## 0.14.2 (2026-05-29)
 ### CI
 * Fixed: `upload:core` CI job did not include `main.py` in the release archive — services deployed via autodeploy were missing the entry point
 
-## 0.14.1
+## 0.14.1 (2026-05-29)
 ### Hannah Core
 * Fixed: LLM tool calls in `chat_with_tools` could hang indefinitely on large Ollama responses — added explicit `stream: false` to payload and explicit `(connect, read)` timeout tuple
 * Added: INFO-level iteration logging in `tool_agent.run()` for observability in journalctl
 
-## 0.14.0
+## 0.14.0 (2026-05-28)
 ### Hannah Core
 * Added: LLM Tool Agent (`hannah/tool_agent.py`) — handles complex requests via OpenAI-compatible function-calling; tools: `get_all_devices`, `get_device_state`, `set_device_state`, `speak`
 * Changed: `Unknown` and `Smalltalk` intents now both route to the Tool Agent instead of bare `llm.chat()`
@@ -1165,10 +1171,10 @@
 ### Scripts
 * Added: `scripts/hannah_shell.py` — interactive text shell for testing NLU/Tool Agent via gRPC `SubmitText` without Telegram
 
-## 0.13.1
+## 0.13.1 (2026-05-27)
 * Fixed: MQTT-triggered mute/unmute now correctly updates the LED state (was only updated on button press)
 
-## 0.13.0
+## 0.13.0 (2026-05-27)
 ### Proto
 * Changed: `AgentSatelliteUpdate` — added optional `volume` (int32) and `mute` (bool) fields
 * Changed: `AgentSatelliteControl` — added optional `device_id` (string) for per-satellite targeting
@@ -1185,7 +1191,7 @@
 * Added: subscribe to `hannah/satellite/<device>/volume/set`; received value is applied to local playback volume
 * Added: change detection in `hannah_net_set_mute()` — state is only published if it actually changed
 
-## 0.12.5
+## 0.12.5 (2026-05-27)
 ### CI
 * Fixed: `skip_if_unchanged` calls were removed from all upload jobs for the v0.12.4 release to force a full upload — this commit restores them
 
@@ -1200,22 +1206,22 @@
 * Fixed: mute command topic changed from `…/mute` to `…/mute/set`; state feedback published on `…/mute/state`
 * Fixed: mute value parsing now accepts `true`/`false` in addition to `1`/`0`
 
-## 0.12.4
+## 0.12.4 (2026-05-26)
 ### CI
 * Fixed: Upload jobs fetched tags without pruning deleted ones (`--tags`) — replaced with `--tags --prune --prune-tags` so stale tags in the runner cache no longer cause `skip_if_unchanged` to compare against a non-existent previous tag
 
-## 0.12.3
+## 0.12.3 (2026-05-26)
 ### AutoDeploy
 * New: Generates a persistent device ID (UUID v4) on first start, stored in `/var/lib/hannah/autodeploy-device-id`; sent as `?device=<uuid>` with every `/latest` poll to enable accurate per-installation device counting on the Update Server
 
 ### Satellite Firmware
 * New: Sends `?device=<device_id>` (NVS-backed device ID) with every OTA `/latest` request to enable accurate per-device counting on the Update Server
 
-## 0.12.2
+## 0.12.2 (2026-05-26)
 ### CI
 * Fixed: `skip_if_unchanged` caused SIGPIPE (exit 141) — replaced `grep | head -1` with `awk`
 
-## 0.12.1
+## 0.12.1 (2026-05-26)
 ### AutoDeploy
 * Fixed: `UnboundLocalError` for `current` variable in `deploy_component()` — `state.get(name)` was called after `get_latest()` which already needed it
 
@@ -1224,25 +1230,25 @@
 * Changed: `PACKAGE_NAME` variable renamed to `PROXY_PACKAGE_NAME`
 * New: Upload jobs skip the Update-Server upload if the component directory has no changes since the previous release tag (`skip_if_unchanged` function in `.upload`)
 
-## 0.12.0
+## 0.12.0 (2026-05-25)
 ### Satellite Firmware
 * Changed: OTA update-check requests now include `?current=<version>` so the Update-Server can track installed version distribution
 
 ### AutoDeploy
 * Changed: `get_latest()` now passes the currently installed version as `current` query parameter to the Update-Server
 
-## 0.11.0
+## 0.11.0 (2026-05-25)
 ### Hannah Core
 * New: Connect sound — Hannah plays `core/sounds/satellite_connected.wav` (if present) on the satellite when it registers via the proxy
 * New: Timer — "Hannah, stelle einen Timer auf 20 Minuten" fires TTS on the source satellite when the countdown ends
 * New: Alarm — "Hannah, stelle einen Wecker auf 7 Uhr 30" sets a persistent alarm that fires on the configured `alarm.satellite` (falls back to source satellite); survives Hannah restarts via `alarms.json`
 
-## 0.10.0
+## 0.10.0 (2026-05-25)
 ### Hannah Core
 * New: `climate` device type — NLU recognizes `SetMode` (`SetMode`: cool/heat/dry/fan_only/auto) and `SetFanSpeed` (low/medium/high/auto) intents; German compound words ("Klimaanlage", "Klimaanlagen") map to `climate` category
 * New: Climate device query answers report on/off state, operating mode, current temperature, target temperature, and fan speed
 
-## 0.9.1
+## 0.9.1 (2026-05-25)
 ### Satellite Firmware
 * Fixed: `ota_channel` buffer increased from 16 to 32 bytes — channel names longer than 15 characters (e.g. `satellite-esp-dev`) were silently truncated
 
@@ -1257,7 +1263,7 @@
 * Fixed: Replacing a running executable raised `ETXTBSY` — file is now unlinked before copy
 * Changed: `hannah-autodeploy.service` sets `REQUESTS_CA_BUNDLE` to system trust store
 
-## 0.9.0
+## 0.9.0 (2026-05-24)
 ### Satellite Firmware
 * New: `hannah_sensors` now publishes readings every 30s to `hannah/satellite/{device}/sensors` (retained, QoS 1); JSON payload includes `temperature`, `pressure`, `humidity`, and optionally `gas_resistance` (BME680 only)
 
@@ -1268,7 +1274,7 @@
 * New: `AgentSensorUpdate` message — carries `device`, `temperature`, `pressure`, `humidity`, `gas_resistance`
 * New: `sensor_update = 8` added to `AgentCommand.command` oneof
 
-## 0.8.3
+## 0.8.3 (2026-05-24)
 ### Satellite Firmware
 * New: OTA rollback — `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` enabled; firmware marks itself valid after first successful MQTT connection, otherwise the bootloader automatically reverts to the previous partition on the next reboot
 * New: OTA rollback loop prevention — after a rollback, the previously invalid partition version is compared against the server's latest; if they match, `ota/failed` (with `reason: rollback`) is published instead of `ota/pending` to prevent an update loop
@@ -1282,15 +1288,15 @@
 ### CI
 * Changed: firmware is now uploaded to the `stable` channel (`?channel=stable`) instead of the implicit default
 
-## 0.8.2
+## 0.8.2 (2026-05-24)
 ### Satellite Firmware
 * Fixed: `.history_trim` VS Code Local History directory was accidentally tracked as a git submodule — removed from index and added to `.gitignore`; fixes CI submodule init failure
 
-## 0.8.1
+## 0.8.1 (2026-05-24)
 ### Satellite Firmware
 * Changed: OTA version check uses semver comparison instead of strict string equality — downgrades and git-describe suffixes (e.g. `0.8.0-1-gabcdef`) are no longer treated as available updates
 
-## 0.8.0
+## 0.8.0 (2026-05-24)
 ### Satellite Firmware
 * New: `hannah_ble` component — passive BLE scanner for indoor localisation; MAC-based watchlist from `hannah/satellite/{device}/ble/watchlist`; RSSI reports to `hannah/satellite/{device}/ble/report`; rate-limited per MAC (Kconfig: `HANNAH_BLE_REPORT_INTERVAL_MS`); NimBLE host in dedicated FreeRTOS task; BLE/WiFi coexistence via `CONFIG_ESP_COEX_SW_COEXIST_ENABLE`
 
@@ -1307,7 +1313,7 @@
 ### ioBroker Adapter
 * New: `BleWatcher` class — handles `ble_update` commands; creates/updates `hannah.0.ble.{label}.{room,satellite,rssi}` states on first update
 
-## 0.7.0
+## 0.7.0 (2026-05-23)
 ### Satellite Firmware
 * New: `hannah_ota` publishes firmware version to `hannah/satellite/{device}/firmware` (retained, QoS 1) after boot — enables firmware visibility in ioBroker
 * Changed: OTA MQTT topics renamed from `hannah/{device}/ota/*` to `hannah/satellite/{device}/ota/*` for consistency with the satellite topic namespace
@@ -1326,7 +1332,7 @@
 * New: `AgentFirmwareEvent` message — carries `device`, `version`, and `update_available` bool for the `AgentConnect` stream
 * New: `TriggerFirmwareUpdateRequest` message and `TriggerFirmwareUpdate` RPC
 
-## 0.6.0
+## 0.6.0 (2026-05-23)
 ### Hardware
 * New: Hardware Rev 3 PCB — iterates on Rev 2; ESP32-S3-WROOM-1U (external U.FL antenna, no keep-out conflict with LED ring); hierarchical schematic (Audio, Supplementals, Power_Control sub-sheets); AHT20 humidity sensor integrated directly on board sharing BMP280 I2C bus; LD2410 24GHz radar presence sensor header (5-pin: 5V, GND, TX, RX, OUT); 24× SK6812MINI-E LED ring directly on PCB at 3.3V (replaces JST connector + SN74AHCT125D level shifter); BMP280 I2C bus unified with shared SDA/SCL (was on separate GPIOs); I2C pull-up resistors moved to root sheet; fixed mic power circuit bug (R10 was on MOSFET drain instead of gate)
 
@@ -1351,48 +1357,48 @@
 ### Hannah Core
 * New: Hannah Core subscribes to `hannah/+/ota/pending`; sends `ota/ok` immediately if no resident is home, otherwise queues the device and releases all pending updates when the last resident leaves
 
-## 0.5.3
+## 0.5.3 (2026-05-12)
 * New: NLU compound word splitting — "Schlafzimmerlicht" is split into "Schlafzimmer Licht" before parsing using known room name words as prefixes and category keywords as suffixes
 * Fixed: Telegram `/systemmessages` command threw `AttributeError: system_messages` — generated `hannah_pb2.py` in the telegram service was out of sync with the proto definition and missing field 7 (`system_messages`)
 
-## 0.5.2
+## 0.5.2 (2026-05-09)
 * Fixed: Proxy UDP server now clears any open audio session on satellite re-registration — previously a session accumulated indefinitely across ESP reboots (no `audio_end` sent), causing gRPC `ResourceExhausted` on the first successful `audio_end`
 * Fixed: Proxy gRPC client max receive message size raised to 32 MB (was 4 MB default)
 
-## 0.5.1
+## 0.5.1 (2026-05-06)
 * Fixed: NLU rooms dict was stale after adapter snapshot — NLU was initialized before the device snapshot arrived and never received the updated rooms/devices; room detection failed for all queries
 * Fixed: Telegram device menu threw `Can't parse entities` for devices with `_` in category name (e.g. `temperature_sensor`) — category label is now sanitized before use in Markdown
 * Fixed: Telegram device menu now shows `Soll` temperature for thermostat devices (`expected` state)
 
-## 0.5.0
+## 0.5.0 (2026-05-06)
 * New: `AgentDevice` proto carries a `device_type` field (field 5) — resolved by the adapter from `common.hannah.type`, `common.role`, or function enum IDs; Hannah uses this instead of deriving the category from the state ID path
 * New: NLU recognizes `SetTemperature` intent — detects temperature values ("22 Grad", "21,5°C") and maps them to the `expected` state on thermostat devices
 * New: Extended device category support — `temperature_sensor`, `thermostat`, `window`, `door`, `blind` (in addition to `light` and `socket`)
 * Fixed: Pi satellite `max_heartbeat_wait` reduced from 15s to 5s — prevents heartbeat cycle from exceeding the proxy's 30s timeout window
 
-## 0.4.5
+## 0.4.5 (2026-05-06)
 * Fixed: LLM classifier now correctly routes device state queries (e.g. "Welche Lichter sind an?") as COMMAND instead of SMALLTALK, preventing them from bypassing NLU when smalltalk mode is active
 
-## 0.4.4
+## 0.4.4 (2026-05-06)
 * New: STT supports Azure Cognitive Services as primary backend — fallback chain: Azure → Remote (faster-whisper-server) → Local
 
-## 0.4.3
+## 0.4.3 (2026-05-04)
 * Fixed: Auto-deploy now also pulls `/opt/hannah-telegram` before restarting the Telegram service, so the service actually runs the updated code.
 
-## 0.4.2
+## 0.4.2 (2026-05-04)
 * Fixed: Proxy and UDP server now send `reregister` to satellites that send heartbeats or audio without being registered — prevents satellites from silently losing their registration without reconnecting.
 
-## 0.4.1
+## 0.4.1 (2026-05-04)
 * Changed: Auto-deploy script now only triggers on new release tags instead of every commit to master.
 * Fixed: Auto-deploy `git fetch --tags` now uses `--force` to prevent failure when local tags diverge from remote.
 
-## 0.4.0
+## 0.4.0 (2026-05-03)
 * New: `AgentDevice` carries a `floor` field — provided by the ioBroker adapter, resolved from `common.floor` or from the state ID path (known abbreviations: EG, OG, UG, DG, KG, ZG).
 
-## 0.3.1
+## 0.3.1 (2026-05-02)
 * Fixed: Release-Cycle
 
-## 0.3.0
+## 0.3.0 (2026-05-02)
 * New: Device discovery via gRPC adapter snapshot — Hannah Core no longer queries the ioBroker REST API; device structure (room, name, functions, current value) is pushed by the adapter on connect
 * New: Resident snapshot on connect — all known residents are forwarded by the adapter via gRPC, replacing the previous API-based lookup
 * New: `_state_cache` for roomless states (weather, car tracker, etc.) — extra-prefix states are cached separately from the device structure and kept up to date via state updates
@@ -1400,15 +1406,15 @@
 * Removed: ioBroker REST API dependency — `requests`-based state reads replaced by local cache lookup
 * Removed: MQTT transport layer — all ioBroker communication now runs exclusively over gRPC
 
-## 0.2.1
+## 0.2.1 (2026-05-01)
 * Fixed: Hannah must detect if a satellite silently went offline
 
-## 0.2.0
+## 0.2.0 (2026-04-30)
 * New: AgentNotification — ioBroker adapter sends notifications via gRPC
 * New: Notify unary RPC replaces AgentMessage notification stream
 * New: compatibility with iobroker.hannah v0.2.0
 
-## 0.1.2
+## 0.1.2 (2026-04-30)
 * New: AgentSetResident + AgentSatelliteUpdate, satellite state sync
 * New: move residents.set_presence to gRPC
 * New: ESP32 satellite end-to-end audio working
@@ -1417,8 +1423,8 @@
 * New: compatibility with iobroker.hannah v0.1.0
 * Fixed: fix timing issue
 
-## 0.1.1
+## 0.1.1 (2026-04-28)
 * Fixed: optimistic cache update in control_direct
 
-## 0.1.0
+## 0.1.0 (2026-04-28)
 * initial Release

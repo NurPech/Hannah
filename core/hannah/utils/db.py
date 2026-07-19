@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS "satellites" (
 	"firmware_version"	TEXT,
 	"update_available"	INTEGER NOT NULL DEFAULT 0,
 	"new_version"	TEXT,
+	"smalltalk_followup_listen"	INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY("device_id"),
 	FOREIGN KEY("room_id") REFERENCES "rooms"("room_id") ON DELETE SET NULL,
     FOREIGN KEY("owner_user_id") REFERENCES "users"("id") ON DELETE SET NULL
@@ -209,6 +210,10 @@ def init_db():
 
     if "name" not in _col_names(db, "cars"):
         db.execute('ALTER TABLE "cars" ADD COLUMN "name" TEXT')
+        db.commit()
+
+    if "smalltalk_followup_listen" not in _col_names(db, "satellites"):
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "smalltalk_followup_listen" INTEGER NOT NULL DEFAULT 0')
         db.commit()
 
     # --- First-run: create admin account if no users exist ---

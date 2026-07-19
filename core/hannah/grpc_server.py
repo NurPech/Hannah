@@ -565,6 +565,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 owner_display_name=sat.get("owner_display_name") or "",
                 firmware_version=sat.get("firmware_version") or "",
                 update_available=bool(sat.get("update_available")),
+                smalltalk_followup_listen=bool(sat.get("smalltalk_followup_listen")),
             )
             if sat.get("new_version"):
                 kwargs["new_version"] = sat["new_version"]
@@ -610,6 +611,16 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._upsert_satellite(request.device_id)
         try:
             ok = self._set_satellite_owner(request.device_id, request.user_id or None, requestor_id=request.requestor_id)
+        except SatellitePermissionError:
+            return pb.StatusResponse(ok=False, message="forbidden")
+        return pb.StatusResponse(ok=ok, message="set" if ok else "not found")
+
+    def SetSatelliteSmalltalkFollowup(self, request, _context):
+        self._upsert_satellite(request.device_id)
+        try:
+            ok = self._satellite_manager.set_satellite_smalltalk_followup(
+                request.device_id, request.enabled, requestor_id=request.requestor_id,
+            )
         except SatellitePermissionError:
             return pb.StatusResponse(ok=False, message="forbidden")
         return pb.StatusResponse(ok=ok, message="set" if ok else "not found")

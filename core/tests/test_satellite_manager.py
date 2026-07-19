@@ -195,6 +195,37 @@ class TestFirmware:
         assert sat.new_version == "0.60.7"
 
 
+class TestSmalltalkFollowup:
+    """#158 — Bool pro Satellit, ob nach einer Smalltalk-Antwort das Mic erneut geöffnet wird."""
+
+    def test_default_is_disabled(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        assert manager.get_satellite_smalltalk_followup("wz-esp") is False
+
+    def test_set_and_get(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        ok = manager.set_satellite_smalltalk_followup("wz-esp", True)
+
+        assert ok is True
+        assert manager.get_satellite_smalltalk_followup("wz-esp") is True
+
+    def test_unset_again(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.set_satellite_smalltalk_followup("wz-esp", True)
+
+        manager.set_satellite_smalltalk_followup("wz-esp", False)
+
+        assert manager.get_satellite_smalltalk_followup("wz-esp") is False
+
+    def test_unknown_device_set_returns_false(self, manager):
+        assert manager.set_satellite_smalltalk_followup("unknown", True) is False
+
+    def test_unknown_device_get_returns_false(self, manager):
+        assert manager.get_satellite_smalltalk_followup("unknown") is False
+
+
 class TestPermissions:
     """#111 — DeleteSatellite/SetSatelliteOwner: nur Trustlevel 10. SetSatelliteRoom/
     SetSatelliteDisplayName: ab Trustlevel 5, aber nur für "eigene" Satelliten
@@ -287,3 +318,13 @@ class TestPermissions:
         _insert_satellite(mgr, "wz-esp", "seed-1", days_old=0)
 
         assert mgr.set_satellite_room("wz-esp", "wohnzimmer") is True
+
+    def test_trust5_cannot_set_smalltalk_followup_on_others_satellite(self, manager_with_users):
+        mgr, db = manager_with_users
+        owner_id = _create_user(db, "owner", 10)
+        other_id = _create_user(db, "other", 5)
+        _insert_satellite(mgr, "wz-esp", "seed-1", days_old=0)
+        mgr.set_satellite_owner("wz-esp", owner_id)
+
+        with pytest.raises(SatellitePermissionError):
+            mgr.set_satellite_smalltalk_followup("wz-esp", True, requestor_id=other_id)
