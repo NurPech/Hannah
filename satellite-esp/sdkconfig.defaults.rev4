@@ -1,6 +1,12 @@
 # Hannah Satellite — PCB Rev.4 (88 mm, ESP32-S3-WROOM-1-N16R8)
 # Alle Pin-Belegungen gemäß satellite-esp/hardware/Phase2/GPIO_Map.md
 
+# OTA-Update-Channel — explizit gesetzt im Zuge des Rev5-Channel-Umzugs
+# (Refs #160), damit Rev4-Geräte nach dem NVS-Migrationsfix in
+# hannah_config.c dauerhaft auf ihrem eigenen Channel bleiben, unabhängig
+# davon, was der Server künftig unter "satellite-esp-stable" ausliefert.
+CONFIG_HANNAH_OTA_CHANNEL="satellite-esp-stable-rev4"
+
 # Mikrofon — PDM (2× SPH0641LU4H-1)
 CONFIG_HANNAH_MIC_TYPE_PDM=y
 CONFIG_HANNAH_MIC_I2S_PORT=0

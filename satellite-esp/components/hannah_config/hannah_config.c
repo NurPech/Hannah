@@ -87,12 +87,29 @@ void hannah_config_init(void)
     NVS_STR(h, "asset_token", asset_token, CONFIG_HANNAH_ASSET_SERVER_TOKEN);
     NVS_STR(h, "nvs_token",   nvs_token,   CONFIG_HANNAH_NVS_TOKEN);
 
+    /* Einmalige Migration: alte Firmware hat "ota_channel" immer explizit in
+     * NVS geschrieben (auch leer), wodurch NVS_STR's Fallback auf einen neuen
+     * CONFIG_HANNAH_OTA_CHANNEL-Compile-Default nie mehr greift. Ohne diesen
+     * Fix würde ein Channel-Umzug per neuem Firmware-Release auf bereits
+     * ausgerollten Geräten wirkungslos bleiben. */
+    uint8_t ota_ch_migrated = 0;
+    nvs_get_u8(h, "ota_ch_migrated", &ota_ch_migrated);
+    if (!ota_ch_migrated) {
+        if (s_cfg.ota_channel[0] == '\0' && CONFIG_HANNAH_OTA_CHANNEL[0] != '\0') {
+            snprintf(s_cfg.ota_channel, sizeof(s_cfg.ota_channel), "%s", CONFIG_HANNAH_OTA_CHANNEL);
+            nvs_set_str(h, "ota_channel", s_cfg.ota_channel);
+            ESP_LOGI(TAG, "OTA-Channel einmalig auf Compile-Default migriert: %s", s_cfg.ota_channel);
+        }
+        nvs_set_u8(h, "ota_ch_migrated", 1);
+    }
+
     uint8_t tls_skip = 0;
     nvs_get_u8(h, "tls_skip", &tls_skip);
     s_cfg.tls_skip_verify = (bool)tls_skip;
 
     NVS_STR(h, "seed", seed, "");
 
+    nvs_commit(h);
     nvs_close(h);
 
     ESP_LOGI(TAG, "Config: device=%s wifi=%s mqtt=%s:%u (device_id from eFuse)",

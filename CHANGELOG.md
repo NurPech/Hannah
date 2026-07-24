@@ -5,6 +5,12 @@
 -->
 
 
+## 0.63.0 (2026-07-24)
+### Satellite Firmware
+* Added: PCB Rev.5 firmware build (`sdkconfig.defaults.rev5`, `build:esp32:rev5`/`upload:esp32:rev5`/`upload:esp32:rev5:init`/`publish:esp32:rev5` CI jobs, own update-server channel `satellite-esp-stable-rev5`) — 4× PDM mics via ADAU7118 PDM→TDM converter (new `HANNAH_MIC_TYPE_TDM` Kconfig option), USB-C removed for 5V/GND solder pads, repositioned buttons/status LED/SD card. ADAU7118 register init is a placeholder pending its datasheet — TDM audio path compiles and runs but isn't tuned yet. Rev4 build unchanged (Refs #160)
+* Fixed: `ota_channel` was written to NVS unconditionally on every settings save (web UI form always submits the field), so a new firmware build's `CONFIG_HANNAH_OTA_CHANNEL` compile default silently never took effect on already-provisioned devices. Added a one-time NVS migration in `hannah_config_init()` (Refs #160)
+* Changed: `sdkconfig.defaults.rev4` now explicitly sets `CONFIG_HANNAH_OTA_CHANNEL="satellite-esp-stable-rev4"`, moving Rev4 devices onto their own channel ahead of Rev5 taking over `satellite-esp-stable` (Refs #160)
+
 ## 0.62.0 (2026-07-19)
 ### Hannah Core
 * Added: per-satellite setting to keep the microphone open after a Smalltalk answer (`smalltalk_followup_listen` on the `satellites` table, `SatelliteManager.set_satellite_smalltalk_followup`/`get_satellite_smalltalk_followup`) — reuses the existing `hannah/satellite/{device}/listen` MQTT trigger (#18) and the satellite firmware's existing 8s listen-after-TTS window, so no new timeout logic was needed in Core (Refs #158)

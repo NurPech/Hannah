@@ -19,6 +19,8 @@ menu "Hannah Audio"
         help
             I2S Standard für Breadboard (INMP441).
             PDM für PCB-Bestückung (zwei Mics teilen CLK+DATA, SEL bestimmt L/R).
+            TDM für PCB Rev.5+ (vier PDM-Mics via ADAU7118 PDM→TDM-Wandler,
+            ein gemeinsamer I2S-TDM-Stream).
             None für reine Announcement-Empfänger oder Sensor-Nodes.
 
         config HANNAH_MIC_TYPE_I2S
@@ -26,6 +28,9 @@ menu "Hannah Audio"
 
         config HANNAH_MIC_TYPE_PDM
             bool "PDM (PCB)"
+
+        config HANNAH_MIC_TYPE_TDM
+            bool "TDM (PDM→TDM-Wandler ADAU7118, PCB Rev.5+)"
 
         config HANNAH_MIC_TYPE_NONE
             bool "Kein Mikrofon"
@@ -46,12 +51,16 @@ menu "Hannah Audio"
     config HANNAH_MIC_BCK_GPIO
         int "Mikrofon BCK GPIO"
         default 4
-        depends on HANNAH_MIC_TYPE_I2S
+        depends on HANNAH_MIC_TYPE_I2S || HANNAH_MIC_TYPE_TDM
+        help
+            Bei TDM: BCLK-Ausgang des ADAU7118.
 
     config HANNAH_MIC_WS_GPIO
         int "Mikrofon WS GPIO"
         default 5
-        depends on HANNAH_MIC_TYPE_I2S
+        depends on HANNAH_MIC_TYPE_I2S || HANNAH_MIC_TYPE_TDM
+        help
+            Bei TDM: FSYNC-Ausgang des ADAU7118.
 
     config HANNAH_MIC_CLK_GPIO
         int "Mikrofon CLK GPIO"

@@ -446,3 +446,8 @@ bool hannah_sensors_get(hannah_sensor_data_t *out)
     *out = s_last;
     return true;
 }
+
+i2c_master_bus_handle_t hannah_sensors_get_i2c_bus(void)
+{
+    return s_bus;
+}

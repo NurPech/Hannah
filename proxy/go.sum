@@ -10,6 +10,8 @@ github.com/NurPech/hannah-proto-go v0.5.1 h1:R6SRIapsOtV67Uo1K4JBmvG4Hajf6z0UNPp
 github.com/NurPech/hannah-proto-go v0.5.1/go.mod h1:Lq/5kXVNXAwWCP+6QnrJouMpp6Toh1B6U9fAood25N8=
 github.com/NurPech/hannah-proto-go v0.5.2 h1:XJhYQZkzeaSZ2crv5EE4J5O+K3KoaIGcFSoLRcv48hk=
 github.com/NurPech/hannah-proto-go v0.5.2/go.mod h1:Lq/5kXVNXAwWCP+6QnrJouMpp6Toh1B6U9fAood25N8=
+github.com/NurPech/hannah-proto-go v0.5.4 h1:bA21ubHPBizo6TOQ+mRKZ7sRsOxIOm9HMhwbFDpvOxY=
+github.com/NurPech/hannah-proto-go v0.5.4/go.mod h1:VKl29EHQWsu3FsFGj0OD27JZtF60VT40I/IXlCbc6ps=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=

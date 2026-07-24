@@ -1,0 +1,47 @@
+# Hannah Satellite — PCB Rev.5 (88 mm, ESP32-S3-WROOM-1U-N16R8, externe Antenne)
+# Alle Pin-Belegungen von Leonie bestätigt, siehe Issue #160.
+#
+# OTA-Update-Channel bewusst NICHT gesetzt: leer bedeutet "Server-Default
+# verwenden", und Rev5 landet dort laut Rollout-Plan (Refs #160), sobald der
+# Rev4-Channel-Umzug abgeschlossen ist.
+
+# Mikrofon — TDM (4× SPH0641LU4H-1 via ADAU7118 PDM→TDM-Wandler)
+CONFIG_HANNAH_MIC_TYPE_TDM=y
+CONFIG_HANNAH_MIC_I2S_PORT=0
+CONFIG_HANNAH_MIC_WS_GPIO=12
+CONFIG_HANNAH_MIC_BCK_GPIO=13
+CONFIG_HANNAH_MIC_DATA_GPIO=14
+CONFIG_HANNAH_MUTE_HW_GPIO=10
+
+# Speaker (MAX98357A) — unverändert ggü. Rev4
+CONFIG_HANNAH_SPK_BCK_GPIO=47
+CONFIG_HANNAH_SPK_WS_GPIO=38
+CONFIG_HANNAH_SPK_DATA_GPIO=21
+
+# LED-Ring (24× SK6812MINI-RV) — unverändert
+CONFIG_HANNAH_LED_GPIO=3
+CONFIG_HANNAH_LED_COUNT=24
+
+# Status-LED — Rev5-spezifisch (überschreibt shared default GPIO18).
+# R12 (zweite, rein passive Power-LED fest an 3.3V/GND) braucht keinen
+# eigenen Eintrag — kein GPIO involviert.
+CONFIG_HANNAH_STATUS_LED_GPIO=1
+
+# Tasten — neu belegt ggü. Rev4 (ADAU7118-TDM belegt jetzt GPIO12-14)
+CONFIG_HANNAH_MUTE_GPIO=11
+CONFIG_HANNAH_PTT_GPIO=40
+CONFIG_HANNAH_VOL_UP_GPIO=39
+CONFIG_HANNAH_VOL_DOWN_GPIO=18
+
+# Sensoren — BME680, teilt I2C-Bus mit ADAU7118 (SDA/SCL unverändert)
+CONFIG_HANNAH_SENSOR_TYPE_BME680=y
+CONFIG_HANNAH_SENSOR_SDA_GPIO=8
+CONFIG_HANNAH_SENSOR_SCL_GPIO=9
+CONFIG_HANNAH_SENSOR_BME680_ADDR=118
+
+# SD-Karte (SPI) — gleiche GPIOs wie Rev4, physisch neu platziert
+CONFIG_HANNAH_SD_ENABLED=y
+CONFIG_HANNAH_SD_CS_GPIO=4
+CONFIG_HANNAH_SD_MOSI_GPIO=5
+CONFIG_HANNAH_SD_CLK_GPIO=6
+CONFIG_HANNAH_SD_MISO_GPIO=7

@@ -128,11 +128,13 @@ void app_main(void)
     esp_reset_reason_t reset_reason = esp_reset_reason();
     ESP_LOGI(TAG, "Reset-Grund: %s (%d)", reset_reason_str(reset_reason), reset_reason);
 
+    /* Sensoren — vor Audio-Pipeline initialisieren: auf PCB Rev.5+ teilt
+     * sich der ADAU7118 (TDM-Mic-Wandler) den I2C-Bus mit dem BME680, der
+     * hier angelegt wird (hannah_sensors_get_i2c_bus()). */
+    hannah_sensors_init();
+
     /* Audio-Pipeline */
     hannah_audio_init();
-
-    /* Sensoren */
-    hannah_sensors_init();
 
     /* SD-Karte */
     hannah_sd_init();

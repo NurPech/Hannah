@@ -17,10 +17,15 @@
 .EXAMPLE
     # Skip build, upload existing binary to a custom channel
     .\scripts\upload-dev-firmware.ps1 -NoBuild -Channel beta
+
+.EXAMPLE
+    # Build the Rev5 config instead of the default Rev4
+    .\scripts\upload-dev-firmware.ps1 -Rev rev5
 #>
 
 param(
     [string]$Channel = "satellite-esp-dev",
+    [string]$Rev = "rev4",
     [switch]$NoBuild,
     [switch]$List,
     [string]$Delete = "",
@@ -91,10 +96,15 @@ if (-not $NoBuild) {
         Write-Host "sdkconfig deleted - rebuilding from defaults." -ForegroundColor Cyan
     }
 
-    Write-Host "Building firmware (rev4 config)..." -ForegroundColor Cyan
+    $RevSdkconfig = Join-Path $RepoRoot "satellite-esp\sdkconfig.defaults.$Rev"
+    if (-not (Test-Path $RevSdkconfig)) {
+        Write-Error "No sdkconfig.defaults.$Rev found under satellite-esp/."; exit 1
+    }
+
+    Write-Host "Building firmware ($Rev config)..." -ForegroundColor Cyan
     Push-Location (Join-Path $RepoRoot "satellite-esp")
     try {
-        idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.rev4;sdkconfig.ci" build
+        idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.$Rev;sdkconfig.ci" build
         if ($LASTEXITCODE -ne 0) { Write-Error "idf.py build failed."; exit 1 }
     } finally {
         Pop-Location

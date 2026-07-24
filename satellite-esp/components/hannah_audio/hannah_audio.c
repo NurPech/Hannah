@@ -32,6 +32,10 @@
 #if CONFIG_HANNAH_MIC_TYPE_PDM
 #include "driver/i2s_pdm.h"
 #endif
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+#include "driver/i2s_tdm.h"
+#include "hannah_sensors.h"
+#endif
 
 static const char *TAG = "hannah_audio";
 
@@ -44,6 +48,8 @@ static const char *TAG = "hannah_audio";
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
 #  if CONFIG_HANNAH_MIC_TYPE_PDM
 #  define STEP_BYTES_RAW  (STEP_SAMPLES * 4)   /* 16-bit stereo PDM */
+#  elif CONFIG_HANNAH_MIC_TYPE_TDM
+#  define STEP_BYTES_RAW  (STEP_SAMPLES * 8)   /* 4× 16-bit TDM-Slots (ADAU7118) */
 #  else
 #  define STEP_BYTES_RAW  (STEP_SAMPLES * 8)   /* 32-bit slots I2S  */
 #  endif
@@ -124,6 +130,45 @@ static void IRAM_ATTR vol_down_isr_handler(void *arg)
         s_vol_down_req = true;
 }
 
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+/* ------------------------------------------------------------------ */
+/* ADAU7118 — I2C-Steuerung (PDM→TDM-Wandler, PCB Rev.5+)               */
+
+#define ADAU7118_I2C_ADDR  0x14  /* Datenblatt-Default, ADDR-Pin auf GND */
+
+static esp_err_t adau7118_init(void)
+{
+    i2c_master_bus_handle_t bus = hannah_sensors_get_i2c_bus();
+    if (!bus) {
+        ESP_LOGE(TAG, "ADAU7118: I2C-Bus nicht verfügbar (hannah_sensors_init() nicht vor hannah_audio_init() aufgerufen?)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address  = ADAU7118_I2C_ADDR,
+        .scl_speed_hz    = 400000,
+    };
+    i2c_master_dev_handle_t dev;
+    esp_err_t err = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ADAU7118: I2C-Device konnte nicht angelegt werden (%s)", esp_err_to_name(err));
+        return err;
+    }
+
+    /* TODO(#160): Register-Sequenz fehlt — ADAU7118-Datenblatt noch nicht
+     * vorliegend. Nötig u.a.: TDM-Modus aktivieren, 4 PDM-Eingänge auf die
+     * 4 TDM-Slots mappen, ggf. Hochpassfilter/Gain konfigurieren. Ohne
+     * diese Konfiguration liefert der Chip vermutlich seinen Power-on-
+     * Default (oft bereits ein sinnvoller TDM-Modus, aber nicht verifiziert) —
+     * bewusst als No-Op belassen statt Register zu raten. */
+    (void)dev;
+
+    ESP_LOGW(TAG, "ADAU7118: I2C-Device angelegt, Register-Init ist Platzhalter (Refs #160)");
+    return ESP_OK;
+}
+#endif /* CONFIG_HANNAH_MIC_TYPE_TDM */
+
 /* ------------------------------------------------------------------ */
 /* I2S Mic initialisieren (I2S0, RX, stereo, INMP441)                   */
 
@@ -151,6 +196,24 @@ static esp_err_t mic_init(void)
     pdm_cfg.clk_cfg.dn_sample_mode = I2S_PDM_DSR_16S;
     ESP_ERROR_CHECK(i2s_channel_init_pdm_rx_mode(s_rx_chan, &pdm_cfg));
     ESP_LOGI(TAG, "Mic PDM I2S%d: %dHz stereo DSR_16S", CONFIG_HANNAH_MIC_I2S_PORT, SAMPLE_RATE);
+#elif CONFIG_HANNAH_MIC_TYPE_TDM
+    ESP_ERROR_CHECK(adau7118_init());
+    i2s_tdm_config_t tdm_cfg = {
+        .clk_cfg  = I2S_TDM_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
+        .slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(
+            I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
+            I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = (gpio_num_t)CONFIG_HANNAH_MIC_BCK_GPIO,
+            .ws   = (gpio_num_t)CONFIG_HANNAH_MIC_WS_GPIO,
+            .dout = I2S_GPIO_UNUSED,
+            .din  = (gpio_num_t)CONFIG_HANNAH_MIC_DATA_GPIO,
+            .invert_flags = {false, false, false},
+        },
+    };
+    ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(s_rx_chan, &tdm_cfg));
+    ESP_LOGI(TAG, "Mic TDM I2S%d: %dHz, 4 Slots (ADAU7118)", CONFIG_HANNAH_MIC_I2S_PORT, SAMPLE_RATE);
 #else
     // INMP441 requires ≥32 BCLK cycles per channel — use 32-bit slot width.
     // Data sits in bits [31:8]; we shift down in mic_task.
@@ -272,6 +335,14 @@ static void mic_task(void *arg)
         int16_t *s16     = (int16_t *)raw;
         for (size_t i = 0; i < frames; i++) {
             mono[i] = (int16_t)((int32_t)s16[i * 2] * 64 > 32767 ? 32767 : (int32_t)s16[i * 2] * 64 < -32768 ? -32768 : (int32_t)s16[i * 2] * 64);
+        }
+#elif CONFIG_HANNAH_MIC_TYPE_TDM
+        /* TDM: 4× 16-bit Slots (ADAU7118) → Slot 0 (ein fester Kanal von 4,
+         * kein Beamforming — s. mic_init()-Kommentar / Issue #160) */
+        size_t frames    = bytes_read / 8;
+        int16_t *s16     = (int16_t *)raw;
+        for (size_t i = 0; i < frames; i++) {
+            mono[i] = s16[i * 4];
         }
 #else
         /* I2S: 32-bit slots → linker Kanal (INMP441: MSB in bits[31:8]) */
@@ -725,6 +796,8 @@ void hannah_audio_init(void)
              "none",
 #elif CONFIG_HANNAH_MIC_TYPE_PDM
              "PDM",
+#elif CONFIG_HANNAH_MIC_TYPE_TDM
+             "TDM",
 #else
              "I2S",
 #endif
