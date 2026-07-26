@@ -5,6 +5,16 @@
 -->
 
 
+## 0.64.1 (2026-07-26)
+### AutoDeploy
+* Fixed: `post_install` hooks (`autodeploy.yaml.example`, `autodeploy`/`core`/`voiceid` components) now run `pip install --upgrade -q -r requirements.txt` instead of plain `pip install -q -r requirements.txt` — the latter leaves an already-installed package untouched even when a newer version is actually required (e.g. a transitive floor bump like #163's `protobuf>=7.35.1`), so `hannah-core` deployed and restarted straight into a crash loop after v0.64.0 with no way to notice short of watching logs. `--upgrade` always resolves to the latest version satisfying declared constraints instead of "whatever already happens to satisfy the old one" (Refs #164)
+
+### Hannah Core
+* Changed: `numpy` floor capped at `<3` (`numpy>=1.24.0,<3`) — needed now that AutoDeploy deploys with `--upgrade`, to stop an unbounded floor from silently permitting a future breaking major version jump (numpy 2.0 had real breaking changes: ABI, removed APIs) (Refs #164)
+
+### VoiceID
+* Changed: same `numpy<3` cap as Hannah Core, same reason (Refs #164)
+
 ## 0.64.0 (2026-07-26)
 ### Hannah Core
 * Added: `mqtt_handler.publish_restart()` + `TriggerSatelliteRestart` gRPC handler, wired up analogous to the existing `TriggerFirmwareUpdate` — publishes to the satellite's new `.../restart` MQTT topic. `requirements.txt`/`requirements-test.txt` bumped to `hannah-proto>=0.5.6`, which carries the RPC (Refs #161)

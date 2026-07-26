@@ -10,13 +10,13 @@ components:
     channel: autodeploy-stable
     install_dir: /opt/hannah/autodeploy
     service: hannah-autodeploy
-    post_install: "/opt/hannah/venv/bin/pip install -q -r /opt/hannah/autodeploy/requirements.txt"
+    post_install: "/opt/hannah/venv/bin/pip install --upgrade -q -r /opt/hannah/autodeploy/requirements.txt"
 
   - name: core
     channel: core-stable
     install_dir: /opt/hannah/core
     service: hannah-core
-    post_install: "/opt/hannah/venv/bin/pip install -q -r /opt/hannah/core/requirements.txt"
+    post_install: "/opt/hannah/venv/bin/pip install --upgrade -q -r /opt/hannah/core/requirements.txt"
 
   - name: proxy
     channel: proxy-stable
@@ -27,4 +27,4 @@ components:
     channel: voiceid-stable
     install_dir: /opt/hannah/voiceid
     service: hannah-voiceid  # macOS: use the launchd label instead, e.g. com.hannah.voiceid
-    post_install: "/opt/hannah/venv/bin/pip install -q -r /opt/hannah/voiceid/requirements.txt"
+    post_install: "/opt/hannah/venv/bin/pip install --upgrade -q -r /opt/hannah/voiceid/requirements.txt"
