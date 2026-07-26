@@ -381,6 +381,9 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/listen",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
+        snprintf(topic, sizeof(topic), "hannah/satellite/%s/restart",
+                 hannah_config_get()->device_id);
+        esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
         break;
     }
 
@@ -511,6 +514,23 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                                 if (strcmp(topic, listen_topic) == 0) {
                                     ESP_LOGI(TAG, "start_listening via MQTT.");
                                     if (s_start_listening_cb) s_start_listening_cb();
+                                } else {
+                                    char restart_topic[128];
+                                    snprintf(restart_topic, sizeof(restart_topic),
+                                             "hannah/satellite/%s/restart",
+                                             hannah_config_get()->device_id);
+                                    if (strcmp(topic, restart_topic) == 0) {
+                                        /* Geordneter Neustart auf Zuruf (#161) — Diagnose-/
+                                         * Rejuvenation-Werkzeug für den Ressourcenerschöpfungs-
+                                         * Verdacht aus #150: läuft über denselben Pfad wie der
+                                         * Netzwerk-Watchdog oben (erst TWDT abmelden, dann
+                                         * esp_restart()), damit der Shutdown-Handler-Chain
+                                         * (persist_log_to_flash() in hannah_webserver) durchläuft
+                                         * statt in einen harten Panic-Reset zu laufen. */
+                                        ESP_LOGW(TAG, "Remote-Neustart via MQTT angefordert.");
+                                        esp_task_wdt_delete(NULL);
+                                        esp_restart();
+                                    }
                                 }
                             }
                         }

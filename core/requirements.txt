@@ -5,8 +5,8 @@ requests>=2.31.0
 numpy>=1.24.0
 piper-tts>=1.2.0    # TTS-Synthese (optional, deaktivierbar via config)
 miniaudio>=1.58     # Audio-Dekodierung (MP3, WAV, OGG, FLAC) für Bestätigungstöne
-grpcio>=1.82.1      # gRPC-Laufzeit (Server + Client) — hannah-proto>=0.5.0's generated _pb2_grpc.py requires >=1.82.1
+grpcio>=1.83.0      # gRPC-Laufzeit (Server + Client) — hannah-proto>=0.5.6's generated _pb2_grpc.py requires >=1.83.0 (#163)
 protobuf>=7.35.0    # hannah-proto>=0.5.0's gencode (7.35.0) requires a runtime this new or newer
-hannah-proto>=0.5.4 # Proto schema — published package instead of the git-submodule/local-codegen pattern (#60); >=0.5.4 for Satellite.smalltalk_followup_listen + SetSatelliteSmalltalkFollowup (#158)
+hannah-proto>=0.5.6 # Proto schema — published package instead of the git-submodule/local-codegen pattern (#60); >=0.5.6 for TriggerSatelliteRestart (#161) + the grpcio floor fix (#163)
 werkzeug>=3.1.0     # Password-Hashing (generate_password_hash in db.py/user_manager.py/grpc_server.py) — bisher nur transitiv über flask installiert, das mit der alten In-Process-WebUI entfallen ist
 dialectorm-m1kad0>=0.1.1 # Mini-ORM (import name: pyorm) — published package instead of the in-repo hannah/models/base_module.py copy (#132)

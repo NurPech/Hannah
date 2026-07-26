@@ -5,6 +5,14 @@
 -->
 
 
+## 0.64.0 (2026-07-26)
+### Hannah Core
+* Added: `mqtt_handler.publish_restart()` + `TriggerSatelliteRestart` gRPC handler, wired up analogous to the existing `TriggerFirmwareUpdate` — publishes to the satellite's new `.../restart` MQTT topic. `requirements.txt`/`requirements-test.txt` bumped to `hannah-proto>=0.5.6`, which carries the RPC (Refs #161)
+* Fixed: `grpcio` floor raised to `>=1.83.0` — `hannah-proto>=0.5.6`'s generated gencode requires it; the previously-documented `>=1.82.1` hard-failed at import (Refs #163)
+
+### Satellite Firmware
+* Added: `hannah/satellite/{device}/restart` MQTT topic — triggers an ordered `esp_restart()` (same path as the existing network watchdog: TWDT deregister first, so the shutdown handler chain incl. `persist_log_to_flash()` runs instead of a hard panic reset). Diagnostic/rejuvenation tool for the resource-exhaustion suspicion from #150, usable even when OTA/webserver are already unresponsive, since MQTT stays alive in that failure mode (Refs #161)
+
 ## 0.63.0 (2026-07-24)
 ### Satellite Firmware
 * Added: PCB Rev.5 firmware build (`sdkconfig.defaults.rev5`, `build:esp32:rev5`/`upload:esp32:rev5`/`upload:esp32:rev5:init`/`publish:esp32:rev5` CI jobs, own update-server channel `satellite-esp-stable-rev5`) — 4× PDM mics via ADAU7118 PDM→TDM converter (new `HANNAH_MIC_TYPE_TDM` Kconfig option), USB-C removed for 5V/GND solder pads, repositioned buttons/status LED/SD card. ADAU7118 register init is a placeholder pending its datasheet — TDM audio path compiles and runs but isn't tuned yet. Rev4 build unchanged (Refs #160)

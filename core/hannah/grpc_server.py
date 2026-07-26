@@ -119,6 +119,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         on_agent_send_residents: Optional[Callable[[Iterable[pb.AgentResident]], None]] = None,
         on_agent_room_snapshot: Optional[Callable[[Iterable[pb.AgentRoom]], None]] = None,
         on_trigger_firmware_update: Optional[Callable[[str], None]] = None,  # (device)
+        on_trigger_satellite_restart: Optional[Callable[[str], None]] = None,  # (device)
         on_timer_fired: Optional[Callable[[str, str, dict], None]] = None,     # (timer_id, label, metadata)
         on_timer_list: Optional[Callable[[list], None]] = None,               # (list[TimerInfo])
         on_timer_connected: Optional[Callable[[], None]] = None,
@@ -188,6 +189,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_agent_send_residents     = on_agent_send_residents
         self._on_agent_room_snapshot      = on_agent_room_snapshot
         self._on_trigger_firmware_update  = on_trigger_firmware_update or (lambda _: None)
+        self._on_trigger_satellite_restart = on_trigger_satellite_restart or (lambda _: None)
         self._on_timer_fired    = on_timer_fired
         self._on_timer_list     = on_timer_list
         self._on_timer_connected = on_timer_connected
@@ -799,6 +801,13 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             return pb.StatusResponse(ok=False, message="device required")
         self._on_trigger_firmware_update(device)
         return pb.StatusResponse(ok=True, message=f"OTA-OK gesendet an {device}")
+
+    def TriggerSatelliteRestart(self, request, _context):
+        device = request.device
+        if not device:
+            return pb.StatusResponse(ok=False, message="device required")
+        self._on_trigger_satellite_restart(device)
+        return pb.StatusResponse(ok=True, message=f"Neustart-Kommando gesendet an {device}")
 
     def GetDevices(self, _request, _context):
         rooms_raw = self._get_devices()

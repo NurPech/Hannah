@@ -127,6 +127,14 @@ class MQTTHandler:
         self._client.publish(f"hannah/satellite/{device}/ota/ok", "", qos=1)
         log.info(f"OTA-OK → hannah/satellite/{device}/ota/ok")
 
+    def publish_restart(self, device: str):
+        """Remote-Neustart (#161) — Diagnose-/Rejuvenation-Werkzeug für den
+        Ressourcenerschöpfungs-Verdacht aus #150. Funktioniert auch, wenn OTA/Webserver
+        auf dem Satelliten bereits nicht mehr reagieren, da MQTT in diesem Fehlerfall
+        nachweislich weiterläuft."""
+        self._client.publish(f"hannah/satellite/{device}/restart", "", qos=1)
+        log.info(f"Remote-Neustart → hannah/satellite/{device}/restart")
+
     def publish_virtual_ptt(self, device: str, active: bool):
         self._client.publish(
             f"hannah/satellite/{device}/ptt",

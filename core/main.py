@@ -1479,6 +1479,7 @@ def main():
         on_agent_send_residents=_on_agent_send_residents,
         on_agent_room_snapshot=_on_agent_room_snapshot,
         on_trigger_firmware_update=lambda device: mqtt_handler.publish_ota_ok(device),
+        on_trigger_satellite_restart=lambda device: mqtt_handler.publish_restart(device),
         on_timer_fired=_on_timer_fired,
         on_timer_list=_on_timer_list,
         on_timer_connected=_on_timer_connected,
