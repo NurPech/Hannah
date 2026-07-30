@@ -292,6 +292,7 @@ static void ota_update_task(void *arg)
             } else {
                 ESP_LOGI(TAG, "OTA erfolgreich — Neustart.");
             }
+            hannah_net_mark_restart_source("ota");
             esp_restart();
         } else {
             ESP_LOGE(TAG, "OTA fehlgeschlagen: %s", esp_err_to_name(err));
@@ -318,9 +319,11 @@ static void ota_poll_task(void *arg)
         const hannah_config_t *cfg = hannah_config_get();
         const char *current = esp_app_get_description()->version;
         char fw_topic[96];
-        char fw_payload[64];
+        char fw_payload[160];
         snprintf(fw_topic,   sizeof(fw_topic),   "hannah/satellite/%s/firmware", cfg->device_id);
-        snprintf(fw_payload, sizeof(fw_payload), "{\"version\":\"%s\"}", current);
+        snprintf(fw_payload, sizeof(fw_payload),
+                 "{\"version\":\"%s\",\"restart_reason\":\"%s\",\"restart_count\":%lu}",
+                 current, hannah_net_get_restart_reason(), (unsigned long)hannah_net_get_restart_count());
         hannah_net_mqtt_publish(fw_topic, fw_payload, 1, 1);
         ESP_LOGI(TAG, "Firmware-Version publiziert: %s = %s", fw_topic, fw_payload);
     }

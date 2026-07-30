@@ -32,7 +32,7 @@ class MQTTHandler:
         self._on_dnd:    Optional[Callable[[str, bool], None]] = None
 
         self._on_ota_pending: Optional[Callable[[str, str], None]] = None
-        self._on_firmware:    Optional[Callable[[str, str], None]] = None
+        self._on_firmware:    Optional[Callable[[str, str, str, int], None]] = None
         self._on_ble_report:  Optional[Callable[[str, str, int], None]] = None
         self._on_sensor:      Optional[Callable[[str, float, float, float, float, int, float, float], None]] = None
         self._on_play_asset_result: Optional[Callable[[str, str, bool], None]] = None
@@ -104,7 +104,7 @@ class MQTTHandler:
     def set_ota_pending_handler(self, callback: Callable[[str, str], None]):
         self._on_ota_pending = callback
 
-    def set_firmware_handler(self, callback: Callable[[str, str], None]):
+    def set_firmware_handler(self, callback: Callable[[str, str, str, int], None]):
         self._on_firmware = callback
 
     def set_sensor_handler(self, callback: Callable[[str, float, float, float, float], None]):
@@ -287,7 +287,13 @@ class MQTTHandler:
                     data = json.loads(msg.payload.decode())
                     version = data.get("version", "")
                     if version:
-                        self._on_firmware(parts[2], version)
+                        # restart_reason/restart_count fehlen bei älterer Firmware ohne #165 —
+                        # dann Default ""/0, main.py's _on_firmware_version überspringt das
+                        # Speichern der Neustart-Historie in diesem Fall.
+                        self._on_firmware(
+                            parts[2], version,
+                            data.get("restart_reason", ""), int(data.get("restart_count", 0)),
+                        )
                 except Exception:
                     pass
             return

@@ -57,3 +57,43 @@ class TestPlayAssetResult:
         handler._on_message(None, None, _msg(
             "hannah/satellite/wz-sat/play_asset/result", {"asset_id": "alarm_ring", "ok": True},
         ))
+
+
+class TestFirmwareReport:
+    """#165 — firmware-Topic-Payload trägt seit der Neustart-Metrik zusätzlich
+    restart_reason/restart_count; ältere Firmware ohne diese Felder muss weiter
+    funktionieren (Default ""/0)."""
+
+    def test_dispatches_version_with_restart_info(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_firmware_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, _msg(
+            "hannah/satellite/wz-sat/firmware",
+            {"version": "0.65.0", "restart_reason": "watchdog", "restart_count": 12},
+        ))
+
+        assert results == [("wz-sat", "0.65.0", "watchdog", 12)]
+
+    def test_missing_restart_fields_default_to_empty(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_firmware_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, _msg(
+            "hannah/satellite/wz-sat/firmware", {"version": "0.60.0"},
+        ))
+
+        assert results == [("wz-sat", "0.60.0", "", 0)]
+
+    def test_missing_version_is_ignored(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_firmware_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, _msg(
+            "hannah/satellite/wz-sat/firmware", {"restart_reason": "ota", "restart_count": 3},
+        ))
+
+        assert results == []

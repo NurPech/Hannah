@@ -61,6 +61,7 @@ user_registry:
 
 satellite_manager:
   seed_ttl_days: 7              # Provisionierte, aber nie gepairte Satelliten-Seeds nach X Tagen löschen
+  restart_interval_days: 7      # Präventiver Rejuvenation-Restart (#162) — grobe Schätzung, anpassen sobald Heap-Trend-Daten aus #150 vorliegen
 
 residents:
   topic_prefix_read:  "residents/0/roomie"          # ioBroker → Hannah (subscribe)

@@ -5,6 +5,7 @@ Verwaltet, über hannah.models, Persistenz für Satelliten: Provisioning/Pairing
 Raum-Zuweisung, Personen-Zuordnung (Owner) und Seed-Cleanup.
 """
 import datetime
+import hashlib
 import logging
 import sqlite3
 import threading
@@ -30,10 +31,20 @@ def _now_sql() -> str:
 class SatelliteManager:
     _CLEANUP_INTERVAL_S = 3600  # Prüfintervall für veraltete unpaired Seeds
 
-    def __init__(self, db: Callable, cfg: dict, user_manager=None):
+    def __init__(
+        self,
+        db: Callable,
+        cfg: dict,
+        user_manager=None,
+        is_device_free: Optional[Callable[[str], bool]] = None,
+        trigger_restart: Optional[Callable[[str], None]] = None,
+    ):
         self._db = db
         self._user_manager = user_manager
         self._seed_ttl_days = int(cfg.get("seed_ttl_days", 7))
+        self._restart_interval_days = int(cfg.get("restart_interval_days", 7))
+        self._is_device_free = is_device_free
+        self._trigger_restart = trigger_restart
         self._lock = threading.Lock()
         threading.Thread(
             target=self._cleanup_loop, daemon=True, name="hannah-satellitemanager-cleanup"
@@ -272,6 +283,89 @@ class SatelliteManager:
             )
         return len(stale)
 
+    def record_restart_report(self, device_id: str, restart_reason: str, restart_count: int) -> None:
+        """Persistiert eine vom Satelliten gemeldete Neustart-Kennzahl (#165) —
+        restart_count ist der geräteseitige NVS-Zähler (überlebt Neustarts),
+        restart_reason unterscheidet "remote" (#161/#162), "ota" und "watchdog"
+        (reaktiv) sowie harte Reset-Gründe (Brownout/Panic/...). Dedupliziert gegen
+        Satellite.last_reported_restart_count: der Firmware-`firmware`-Topic wird
+        mit retain=1 publiziert, jeder MQTT-(Re-)Connect von Core liefert daher den
+        zuletzt retained Payload erneut — ohne diese Prüfung würde jeder Core-
+        Neustart eine Phantom-Zeile in die Historie schreiben."""
+        from hannah.models.satellite_restart import SatelliteRestart
+        db = self._db()
+        sat = Satellite.get(db, device_id=device_id)
+        if not sat:
+            # Gleiches Muster wie set_satellite_firmware(): der Satellit könnte
+            # theoretisch noch nicht in der DB existieren (satellite_restarts hat
+            # eine FK auf satellites, die Zeile muss also erst angelegt werden).
+            sat = Satellite.create(db, device_id=device_id, last_seen=_now_sql())
+        if sat.last_reported_restart_count == restart_count:
+            return
+        SatelliteRestart.create(
+            db, device_id=device_id, restart_reason=restart_reason, restart_count=restart_count,
+        )
+        sat.update(last_reported_restart_count=restart_count)
+
+    def get_restart_reports(self, device_id: str) -> list[dict]:
+        """Gibt die Neustart-Historie eines Satelliten zurück, neueste zuerst (#165)."""
+        from hannah.models.satellite_restart import SatelliteRestart
+        rows = SatelliteRestart.select(self._db()).where(device_id=device_id).order_by("id DESC").all()
+        return [
+            {"reported_at": r.reported_at, "restart_reason": r.restart_reason, "restart_count": r.restart_count}
+            for r in rows
+        ]
+
+    def mark_restarted(self, device_id: str) -> None:
+        """Setzt last_restart_at auf jetzt — sowohl vom periodischen Scheduler (#162)
+        als auch vom manuellen Remote-Neustart (#161) genutzt: ein Neustart ist ein
+        Neustart, egal ob automatisch oder auf Zuruf ausgelöst."""
+        sat = Satellite.get(self._db(), device_id=device_id)
+        if sat:
+            sat.update(last_restart_at=_now_sql())
+
+    def check_and_restart_due_satellites(self, now: Optional[datetime.datetime] = None) -> int:
+        """Präventiver Rejuvenation-Restart (#162): pro Satellit fällig, wenn seit
+        last_restart_at mindestens restart_interval_days vergangen sind UND die
+        aktuelle Stunde dem Hash-Offset des Geräts entspricht (Streuung über den Tag,
+        damit nicht alle Satelliten gleichzeitig neu starten). Ausgelöst wird nur,
+        wenn is_device_free(device_id) True liefert (kein aktives Gespräch/Stream/
+        TTS/DND) — sonst wird der Versuch übersprungen und beim nächsten stündlichen
+        Durchlauf erneut geprüft (last_restart_at bleibt unverändert, bis tatsächlich
+        neugestartet wurde).
+
+        now: optional injizierbarer Zeitpunkt (UTC) für Tests — Default ist die echte
+        aktuelle Zeit."""
+        if not self._trigger_restart:
+            return 0
+        now = now or datetime.datetime.now(datetime.timezone.utc)
+        current_hour = now.hour
+        restarted = 0
+        due = Satellite.select(self._db()).where("last_restart_at IS NOT NULL").all()
+        for sat in due:
+            last = datetime.datetime.strptime(
+                sat.last_restart_at, "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=datetime.timezone.utc)
+            if (now - last).days < self._restart_interval_days:
+                continue
+            offset_hour = int(hashlib.md5(sat.device_id.encode()).hexdigest(), 16) % 24
+            if current_hour != offset_hour:
+                continue
+            if self._is_device_free and not self._is_device_free(sat.device_id):
+                log.info(
+                    "SatelliteManager: Rejuvenation-Restart für '%s' fällig, aber gerade nicht frei — verschoben.",
+                    sat.device_id,
+                )
+                continue
+            log.info(
+                "SatelliteManager: Rejuvenation-Restart für '%s' ausgelöst (zuletzt %s).",
+                sat.device_id, sat.last_restart_at,
+            )
+            self._trigger_restart(sat.device_id)
+            self.mark_restarted(sat.device_id)
+            restarted += 1
+        return restarted
+
     def _cleanup_loop(self) -> None:
         while True:
             time.sleep(self._CLEANUP_INTERVAL_S)
@@ -279,3 +373,7 @@ class SatelliteManager:
                 self.cleanup_stale_seeds()
             except Exception as e:
                 log.error("SatelliteManager: cleanup_stale_seeds fehlgeschlagen: %s", e)
+            try:
+                self.check_and_restart_due_satellites()
+            except Exception as e:
+                log.error("SatelliteManager: check_and_restart_due_satellites fehlgeschlagen: %s", e)

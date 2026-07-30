@@ -159,7 +159,11 @@ def main():
     # Room Manager (Räume, Gruppen) + Satellite Manager (Provisioning, Raum-/Owner-Zuweisung) —
     # teilen sich hannah.db mit der User-Registry
     room_manager = RoomManager(get_db)
-    satellite_manager = SatelliteManager(get_db, cfg.get("satellite_manager", {}), user_manager=_user_manager)
+    satellite_manager = SatelliteManager(
+        get_db, cfg.get("satellite_manager", {}), user_manager=_user_manager,
+        is_device_free=lambda d: _is_device_free(d),
+        trigger_restart=lambda d: mqtt_handler.publish_restart(d),
+    )
 
     # STT + NLU + TTS
     stt = STT(cfg.get("stt", {}))
@@ -560,14 +564,21 @@ def main():
             return phrase_reply, "Trigger"
 
         # Smalltalk-Modus: LLM-Classifier vor NLU schalten
-        if conv_ctx.is_smalltalk_active(_source) and conv_ctx.is_addressed_to_hannah(_source, text):
-            if not llm.classify(text):
+        if conv_ctx.is_smalltalk_active(_source):
+            history = conv_ctx.get_llm_history(_source)
+            verdict = llm.classify(text, history=history)
+            if verdict == "SMALLTALK":
                 log.debug(f"[{_source}] Classifier → SMALLTALK (Modus aktiv)")
                 sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
-                history = conv_ctx.get_llm_history(_source)
                 answer = llm.chat(text, system_prompt=sp, history=history)
                 conv_ctx.add_llm_exchange(_source, text, answer)
                 return answer, "Smalltalk"
+            if verdict == "NOT_ADDRESSED":
+                # #159 — erkennbar nicht an Hannah gerichtet (z.B. Fremdgespräch im offenen
+                # Follow-up-Mic-Fenster). Bewusst kein Fallthrough in die NLU-Verarbeitung,
+                # sonst würde zufällig aufgenommenes Gespräch als Gerätebefehl interpretiert.
+                log.debug(f"[{_source}] Classifier → NOT_ADDRESSED (Modus aktiv, ignoriert)")
+                return "", "Ignored"
             log.debug(f"[{_source}] Classifier → COMMAND (Modus aktiv, weiter mit NLU)")
 
         if conv_ctx.has_clarification(_source):
@@ -756,6 +767,22 @@ def main():
     _device_volume: dict[str, int] = {}
     _device_mute:   dict[str, bool] = {}
     _device_dnd:    dict[str, bool] = {}
+
+    # Activity-Tracking für den periodischen Rejuvenation-Restart (#162): statt eines
+    # echten busy=True/False-Paars (fehleranfällig, da die Smalltalk-Follow-up-Logik
+    # in einem eigenen Thread noch lange nach _handle_satellite_audio weiterläuft) wird
+    # nur ein Zeitstempel je Gerät aktualisiert — "frei" heißt: seit dem letzten Touch
+    # ist das Quiet-Window verstrichen. _device_dnd deckt zusätzlich Capture-/Sampling-
+    # Modus ab (_on_set_capture setzt DND bereits).
+    _device_last_activity: dict[str, float] = {}
+    _FREE_QUIET_WINDOW_S = 60.0
+
+    def _touch_activity(device: str) -> None:
+        _device_last_activity[device] = time.monotonic()
+
+    def _is_device_free(device: str) -> bool:
+        last = _device_last_activity.get(device, 0.0)
+        return (time.monotonic() - last) > _FREE_QUIET_WINDOW_S and not _device_dnd.get(device, False)
 
     def _send_audio(target: str, pcm: bytes, rate: int, label: str = ""):
         """Sendet PCM an einen Satelliten."""
@@ -1042,6 +1069,7 @@ def main():
         def _reopen():
             mqtt_handler.wait_for_playback_done(device, timeout=15.0)
             mqtt_handler.publish_listen(device)
+            _touch_activity(device)
 
         threading.Thread(target=_reopen, daemon=True, name="smalltalk-followup").start()
 
@@ -1160,7 +1188,7 @@ def main():
 
         # TTS → PCM → OGG/Opus via ffmpeg
         audio_ogg_out = b""
-        if tts.enabled:
+        if tts.enabled and answer:
             result = tts.synthesize(answer)
             if result:
                 pcm, sample_rate = result
@@ -1196,6 +1224,7 @@ def main():
 
         speaker_user_id: vom Proxy per Voice-ID identifizierter Sprecher (leer = anonym).
         """
+        _touch_activity(device)
         try:
             audio_array = audio_mod.from_raw_pcm(pcm_bytes, audio_cfg)
         except Exception as e:
@@ -1223,7 +1252,7 @@ def main():
 
         tts_pcm = b""
         sample_rate = 0
-        if tts.enabled:
+        if tts.enabled and answer:
             result = tts.synthesize(answer)
             if result:
                 tts_pcm, sample_rate = result
@@ -1231,6 +1260,8 @@ def main():
                 log.info(f"[{device}] TTS: {len(tts_pcm)} Bytes @ {sample_rate} Hz")
             else:
                 log.warning(f"[{device}] TTS: synthesize() lieferte kein Ergebnis für Antwort: {answer!r}")
+        elif not answer:
+            log.debug(f"[{device}] Keine Antwort (z.B. Ignored) — kein TTS")
         else:
             log.debug(f"[{device}] TTS deaktiviert — keine Audio-Antwort")
 
@@ -1387,6 +1418,7 @@ def main():
     def _on_trigger_plink(device_id: str, record_duration: float):
         import time
         from hannah.plink import get_plink_pcm
+        _touch_activity(device_id)
         plink_wav = cfg.get("plink_wav_path", "")
         pcm, plink_duration = get_plink_pcm(plink_wav)
         mqtt_handler.reset_playback_done(device_id)
@@ -1399,6 +1431,7 @@ def main():
         time.sleep(record_duration)
         mqtt_handler.publish_virtual_ptt(device_id, False)
         log.info(f"[plink] Virtual PTT AUS → {device_id}")
+        _touch_activity(device_id)
 
     def _on_agent_device_snapshot(devices):
         nonlocal _iobroker_ready
@@ -1479,7 +1512,10 @@ def main():
         on_agent_send_residents=_on_agent_send_residents,
         on_agent_room_snapshot=_on_agent_room_snapshot,
         on_trigger_firmware_update=lambda device: mqtt_handler.publish_ota_ok(device),
-        on_trigger_satellite_restart=lambda device: mqtt_handler.publish_restart(device),
+        on_trigger_satellite_restart=lambda device: (
+            mqtt_handler.publish_restart(device),
+            satellite_manager.mark_restarted(device),
+        ),
         on_timer_fired=_on_timer_fired,
         on_timer_list=_on_timer_list,
         on_timer_connected=_on_timer_connected,
@@ -1565,9 +1601,13 @@ def main():
             process_announcement("all", "Es ist Besuch angekommen!")
             grpc_servicer.publish_event(make_resident_event(f"guest:{resident.roomie_id}", resident.roomie_id, "arrived"))
 
-    def _on_firmware_version(device: str, version: str):
+    def _on_firmware_version(device: str, version: str, restart_reason: str = "", restart_count: int = 0):
         log.info(f"Firmware-Version: {device} = {version}")
         satellite_manager.set_satellite_firmware(device, version)
+        if restart_count:
+            # restart_count == 0 heißt: ältere Firmware ohne #165, keine Neustart-
+            # Historie verfügbar — nichts zu speichern.
+            satellite_manager.record_restart_report(device, restart_reason, restart_count)
         grpc_servicer.publish_event(make_firmware_event(device, version))
         grpc_servicer.agent_firmware_event(device, version)
 

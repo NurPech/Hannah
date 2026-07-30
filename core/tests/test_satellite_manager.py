@@ -1,3 +1,4 @@
+import datetime
 import os
 
 import pytest
@@ -51,6 +52,25 @@ def _insert_satellite(mgr, device_id, seed, days_old):
                VALUES (?, ?, ?, datetime('now', ?))""",
             (device_id, seed, device_id, f"-{days_old} days"),
         )
+
+
+def _insert_satellite_with_last_restart(mgr, device_id, days_since_restart):
+    """Wie _insert_satellite, setzt zusätzlich last_restart_at auf vor X Tagen
+    (statt NULL) — Voraussetzung dafür, dass check_and_restart_due_satellites
+    den Satelliten überhaupt betrachtet."""
+    with mgr._db().connection as conn:
+        conn.execute(
+            """INSERT INTO satellites (device_id, seed, display_name, created_at, last_restart_at)
+               VALUES (?, NULL, ?, datetime('now'), datetime('now', ?))""",
+            (device_id, device_id, f"-{days_since_restart} days"),
+        )
+
+
+def _due_hour_for(device_id: str) -> int:
+    """Reproduziert den Hash-Offset aus SatelliteManager.check_and_restart_due_satellites,
+    damit Tests eine Uhrzeit simulieren können, zu der ein Gerät tatsächlich fällig ist."""
+    import hashlib
+    return int(hashlib.md5(device_id.encode()).hexdigest(), 16) % 24
 
 
 class TestCleanupStaleSeeds:
@@ -224,6 +244,132 @@ class TestSmalltalkFollowup:
 
     def test_unknown_device_get_returns_false(self, manager):
         assert manager.get_satellite_smalltalk_followup("unknown") is False
+
+
+class TestRejuvenationRestart:
+    """#162 — periodischer präventiver Restart, gestreut über Hash-Offset-Stunde,
+    nur ausgelöst wenn is_device_free() zustimmt."""
+
+    def test_mark_restarted_sets_timestamp(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        manager.mark_restarted("wz-esp")
+
+        assert manager.get_satellite("wz-esp").last_restart_at is not None
+
+    def test_mark_restarted_unknown_device_is_noop(self, manager):
+        manager.mark_restarted("unknown")  # darf nicht crashen
+
+    def test_no_trigger_restart_callback_returns_zero(self, manager):
+        _insert_satellite_with_last_restart(manager, "wz-esp", days_since_restart=30)
+
+        assert manager.check_and_restart_due_satellites() == 0
+
+    def test_due_and_free_triggers_restart(self, manager_with_users):
+        mgr, db = manager_with_users
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30)
+        triggered = []
+        mgr._trigger_restart = triggered.append
+        mgr._is_device_free = lambda _d: True
+        mgr._restart_interval_days = 7
+        due_hour = _due_hour_for("wz-esp")
+        now = datetime.datetime(2026, 7, 29, due_hour, 0, tzinfo=datetime.timezone.utc)
+
+        restarted = mgr.check_and_restart_due_satellites(now=now)
+
+        assert restarted == 1
+        assert triggered == ["wz-esp"]
+        assert mgr.get_satellite("wz-esp").last_restart_at is not None
+
+    def test_due_but_not_free_is_skipped(self, manager_with_users):
+        mgr, db = manager_with_users
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30)
+        triggered = []
+        mgr._trigger_restart = triggered.append
+        mgr._is_device_free = lambda _d: False
+        mgr._restart_interval_days = 7
+        due_hour = _due_hour_for("wz-esp")
+        now = datetime.datetime(2026, 7, 29, due_hour, 0, tzinfo=datetime.timezone.utc)
+        old_last_restart_at = mgr.get_satellite("wz-esp").last_restart_at
+
+        restarted = mgr.check_and_restart_due_satellites(now=now)
+
+        assert restarted == 0
+        assert triggered == []
+        assert mgr.get_satellite("wz-esp").last_restart_at == old_last_restart_at
+
+    def test_not_yet_due_is_skipped(self, manager_with_users):
+        mgr, db = manager_with_users
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=1)
+        triggered = []
+        mgr._trigger_restart = triggered.append
+        mgr._is_device_free = lambda _d: True
+        mgr._restart_interval_days = 7
+        due_hour = _due_hour_for("wz-esp")
+        now = datetime.datetime(2026, 7, 29, due_hour, 0, tzinfo=datetime.timezone.utc)
+
+        restarted = mgr.check_and_restart_due_satellites(now=now)
+
+        assert restarted == 0
+        assert triggered == []
+
+    def test_wrong_hour_is_skipped(self, manager_with_users):
+        mgr, db = manager_with_users
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30)
+        triggered = []
+        mgr._trigger_restart = triggered.append
+        mgr._is_device_free = lambda _d: True
+        mgr._restart_interval_days = 7
+        wrong_hour = (_due_hour_for("wz-esp") + 1) % 24
+        now = datetime.datetime(2026, 7, 29, wrong_hour, 0, tzinfo=datetime.timezone.utc)
+
+        restarted = mgr.check_and_restart_due_satellites(now=now)
+
+        assert restarted == 0
+        assert triggered == []
+
+
+class TestRestartReports:
+    """#165 — Neustart-Historie pro Satellit, dedupliziert gegen den zuletzt
+    gemeldeten restart_count (Schutz gegen retained-MQTT-Replay nach Core-Neustart)."""
+
+    def test_first_report_creates_entry(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        manager.record_restart_report("wz-esp", "watchdog", 5)
+
+        reports = manager.get_restart_reports("wz-esp")
+        assert len(reports) == 1
+        assert reports[0]["restart_reason"] == "watchdog"
+        assert reports[0]["restart_count"] == 5
+        assert manager.get_satellite("wz-esp").last_reported_restart_count == 5
+
+    def test_repeated_restart_count_is_not_duplicated(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.record_restart_report("wz-esp", "watchdog", 5)
+
+        manager.record_restart_report("wz-esp", "watchdog", 5)
+
+        assert len(manager.get_restart_reports("wz-esp")) == 1
+
+    def test_higher_restart_count_adds_new_entry(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.record_restart_report("wz-esp", "watchdog", 5)
+
+        manager.record_restart_report("wz-esp", "remote", 6)
+
+        reports = manager.get_restart_reports("wz-esp")
+        assert len(reports) == 2
+        assert reports[0]["restart_count"] == 6  # neueste zuerst
+        assert reports[1]["restart_count"] == 5
+
+    def test_unknown_device_gets_created(self, manager):
+        """Gleiches Muster wie set_satellite_firmware(): satellite_restarts hat eine
+        FK auf satellites, die Zeile muss also ggf. erst angelegt werden."""
+        manager.record_restart_report("new-esp", "watchdog", 1)
+
+        assert manager.get_satellite("new-esp") is not None
+        assert len(manager.get_restart_reports("new-esp")) == 1
 
 
 class TestPermissions:

@@ -69,10 +69,15 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_FALLBACK = "Das kann ich leider nicht beantworten."
 _CLASSIFY_PROMPT = (
-    "Antworte ausschließlich mit COMMAND oder SMALLTALK — kein anderes Wort.\n"
+    "Antworte ausschließlich mit COMMAND, SMALLTALK oder NOT_ADDRESSED — kein anderes Wort.\n"
     "COMMAND: der Nutzer will ein Gerät steuern ODER nach dem Status von Geräten oder Sensoren fragen "
     "(z.B. Licht, Heizung, Steckdose, Musik, Temperatur, Rolladen — auch Statusabfragen wie 'Welche Lichter sind an?').\n"
-    "SMALLTALK: alles andere (Konversation, Witze, persönliche Themen, allgemeine Wissensfragen, Wetter, ...)."
+    "SMALLTALK: alles andere, das erkennbar an dich (Hannah) gerichtet ist (Konversation, Witze, "
+    "persönliche Themen, allgemeine Wissensfragen, Wetter, ...).\n"
+    "NOT_ADDRESSED: die Äußerung ist erkennbar NICHT an dich gerichtet — z.B. ein Gespräch zwischen "
+    "anwesenden Personen, das zufällig aufgenommen wurde, weil dein Mikrofon nach einer vorherigen "
+    "Antwort kurz offen blieb. Falls ein Gesprächsverlauf mitgeschickt wird, nutze ihn, um zu beurteilen, "
+    "ob die neue Äußerung den Dialog mit dir fortsetzt oder thematisch/adressatisch davon abbricht."
 )
 
 
@@ -91,10 +96,17 @@ class LLMClient(ABC):
         history: optionale Nachrichtenhistorie [{role, content}, ...] vor user_message.
         """
 
-    def classify(self, text: str) -> bool:
-        """True = COMMAND (→ NLU), False = SMALLTALK (→ LLM-Chat)."""
-        result = self.chat(text, system_prompt=_CLASSIFY_PROMPT)
-        return "COMMAND" in result.upper()
+    def classify(self, text: str, history: list[dict] | None = None) -> str:
+        """Gibt "COMMAND" (→ NLU), "SMALLTALK" (→ LLM-Chat) oder "NOT_ADDRESSED" (#159 —
+        Äußerung erkennbar nicht an Hannah gerichtet, z.B. Fremdgespräch im offenen
+        Smalltalk-Follow-up-Mic-Fenster) zurück. history: optionaler Gesprächsverlauf
+        (#159), damit die Entscheidung den bisherigen Dialogkontext einbeziehen kann."""
+        result = self.chat(text, system_prompt=_CLASSIFY_PROMPT, history=history).upper()
+        if "NOT_ADDRESSED" in result:
+            return "NOT_ADDRESSED"
+        if "COMMAND" in result:
+            return "COMMAND"
+        return "SMALLTALK"
 
     def match(self, text: str, category: str) -> bool:
         """True wenn 'text' inhaltlich zur Kategorie passt (z.B. 'Zustimmung', 'Verneinung')."""
@@ -138,8 +150,8 @@ class DummyLLM(LLMClient):
     ) -> str:
         return self._response
 
-    def classify(self, text: str) -> bool:  # pyright: ignore[reportUnusedParameter]
-        return True  # Kein LLM → immer als Command routen
+    def classify(self, text: str, history: list[dict] | None = None) -> str:  # pyright: ignore[reportUnusedParameter]
+        return "COMMAND"  # Kein LLM → immer als Command routen
 
     def match(self, text: str, category: str) -> bool:  # pyright: ignore[reportUnusedParameter,reportUnusedParameter]
         return False  # Kein LLM → kein Matching möglich

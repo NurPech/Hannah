@@ -5,7 +5,8 @@ class Satellite(BaseModel):
     __primary_key__ = "device_id"
     __slots__ = (
         "device_id", "seed", "display_name", "room_id", "owner_user_id", "last_seen", "paired_at", "created_at",
-        "firmware_version", "update_available", "new_version", "smalltalk_followup_listen",
+        "firmware_version", "update_available", "new_version", "smalltalk_followup_listen", "last_restart_at",
+        "last_reported_restart_count",
         "_cached_owner",
     )
 

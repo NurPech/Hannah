@@ -115,3 +115,19 @@ void hannah_net_set_play_asset_callback(hannah_net_play_asset_cb_t cb);
  * Gibt true zurück wenn die Zeit erfolgreich synchronisiert wurde.
  * Im AP-Modus oder wenn SNTP noch nicht gestartet wurde: sofort false. */
 bool hannah_net_wait_sntp(uint32_t timeout_ms);
+
+/* Neustart-Diagnose (#165): Grund + persistenter Zähler, überlebt Neustarts (NVS).
+ * Grund ist "watchdog" (reaktiver Netzwerk-Watchdog), "remote" (MQTT .../restart-
+ * Kommando, #161 manuell oder #162 Scheduler), "ota" (nach erfolgreichem Update)
+ * oder der rohe ESP-IDF-Reset-Grund (z.B. "Brownout", "Panic", "Power-On") —
+ * esp_reset_reason() allein liefert für die ersten drei Fälle denselben Wert
+ * (ESP_RST_SW), daher der Marker-Mechanismus unten. */
+const char *hannah_net_get_restart_reason(void);
+uint32_t    hannah_net_get_restart_count(void);
+
+/* Markiert den Grund für den unmittelbar folgenden bewussten esp_restart()-Aufruf
+ * persistent in NVS — überlebt den Neustart, damit hannah_net_init() beim nächsten
+ * Boot zwischen "remote"/"ota" und dem reaktiven Watchdog unterscheiden kann. Vor
+ * jedem bewussten esp_restart()-Aufruf aufrufen (außer dem reaktiven Watchdog
+ * selbst — dessen Fehlen ist gerade das Unterscheidungsmerkmal). */
+void hannah_net_mark_restart_source(const char *source);

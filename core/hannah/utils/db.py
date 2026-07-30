@@ -1,3 +1,4 @@
+import datetime
 import os
 import secrets
 import logging
@@ -72,9 +73,21 @@ CREATE TABLE IF NOT EXISTS "satellites" (
 	"update_available"	INTEGER NOT NULL DEFAULT 0,
 	"new_version"	TEXT,
 	"smalltalk_followup_listen"	INTEGER NOT NULL DEFAULT 0,
+	"last_restart_at"	TEXT,
+	"last_reported_restart_count"	INTEGER,
 	PRIMARY KEY("device_id"),
 	FOREIGN KEY("room_id") REFERENCES "rooms"("room_id") ON DELETE SET NULL,
     FOREIGN KEY("owner_user_id") REFERENCES "users"("id") ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS "satellite_restarts" (
+	"id"	INTEGER NOT NULL,
+	"device_id"	TEXT NOT NULL,
+	"reported_at"	TEXT NOT NULL DEFAULT (datetime('now')),
+	"restart_reason"	TEXT,
+	"restart_count"	INTEGER,
+	PRIMARY KEY("id" AUTOINCREMENT),
+	FOREIGN KEY("device_id") REFERENCES "satellites"("device_id") ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "triggers" (
@@ -210,6 +223,20 @@ def init_db():
 
     if "name" not in _col_names(db, "cars"):
         db.execute('ALTER TABLE "cars" ADD COLUMN "name" TEXT')
+        db.commit()
+
+    if "last_restart_at" not in _col_names(db, "satellites"):
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "last_restart_at" TEXT')
+        # Bestandssatelliten auf "jetzt" statt NULL/überfällig setzen (#162) — sonst
+        # sieht die gesamte Flotte direkt nach diesem Deploy gleichzeitig überfällig aus.
+        db.execute(
+            'UPDATE "satellites" SET "last_restart_at" = ? WHERE "last_restart_at" IS NULL',
+            (datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),),
+        )
+        db.commit()
+
+    if "last_reported_restart_count" not in _col_names(db, "satellites"):
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "last_reported_restart_count" INTEGER')
         db.commit()
 
     if "smalltalk_followup_listen" not in _col_names(db, "satellites"):

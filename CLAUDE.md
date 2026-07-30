@@ -256,11 +256,12 @@ Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — al
 | Rev | Status | Größe | Anmerkung |
 |---|---|---|---|
 | Rev. 1 | Prototyp (nicht bestellt) | — | Machbarkeitsstudie |
-| Rev. 2 | Geleifert| 114mm rund | Maßfehler (57mm Radius statt 75mm Durchmesser); nur Elektrtest |
+| Rev. 2 | Geliefert | 114mm rund | Maßfehler (57mm Radius statt 75mm Durchmesser); nur Elektrotest |
 | Rev. 3 | Geliefert, enthält Bugs | 88mm rund | Zieldesign; nicht nutzbar |
-| Rev. 4 | Geliefert | 88mm rund | Zieldesign |
+| Rev. 4 | Geliefert, aktuell verbaut | 88mm rund | Zieldesign |
+| Rev. 5 | Bestellt bei PCBWay, Fertigung ausstehend | 88mm rund | 4× TDM-Mikrofone (ADAU7118), WROOM-1U (externe Antenne), USB-C→Lötpads, SD-Slot-Orientierung gefixt |
 
-### PCB Rev. 4 (`satellite-esp/hardware/Phase2/`)
+### PCB Rev. 4 (`hardware/Phase2/`)
 
 **Abmessungen:** 88mm Durchmesser, eine Seite leicht abgeflacht (USB-C). 4-lagig: F.Cu / In1.Cu (GND) / In2.Cu (3.3V) / B.Cu. ENIG.
 
@@ -284,9 +285,19 @@ Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — al
 **Geparkte Ideen:**
 - RP2350 als Co-Prozessor — **definitiv verworfen**, ESP32-S3 reicht
 
-**Rev 5 — geplante Erweiterungen:**
-- 4× PDM-Mikrofone (SPH0641) + **ADAU7118** (PDM→TDM-Converter, LFCSP-16 3×3mm, bei LCSC verfügbar) → TDM-Output direkt an ESP32-S3 I2S; ermöglicht Beamforming
-- USB-C-Connector entfällt; stattdessen **Lötpads 5V + GND** für externes Kabel zu Panel-Mount USB-C im Gehäuse; AMS1117 + Sicherungen bleiben; UART0 bleibt
+### PCB Rev. 5 (`hardware/Phase2/`) — bestellt bei PCBWay, Fertigung ausstehend
+
+Gleiche Grundabmessung wie Rev.4 (88mm rund), passt ins bestehende Gehäuse. Änderungen ggü. Rev.4, GPIO-Belegung siehe `satellite-esp/sdkconfig.defaults.rev5` (von Leonie bestätigt, Issue #160):
+
+- **Chip:** ESP32-S3-**WROOM-1U**-N16R8 (externe Antenne) — Rev.4 nutzte die interne-Antenne-Variante ohne "U"
+- **Mikrofone:** 4× SPH0641LU4H-1 (PDM) → **ADAU7118** (PDM→TDM-Wandler, LFCSP-16 3×3mm) → TDM direkt an ESP32-S3 I2S (Port 0, WS=GPIO12, BCK=GPIO13, DATA=GPIO14) — ermöglicht Beamforming. Ersetzt die 2× PDM-Mics mit gemeinsamer Clock/Data-Leitung von Rev.4
+- **Tasten neu belegt:** Die TDM-Mikrofonleitungen belegen jetzt GPIO12–14 (vorher PTT/Vol+/Vol− auf Rev.4) → umverdrahtet auf PTT=GPIO40, Vol+=GPIO39, Vol−=GPIO18 (Mute bleibt GPIO11)
+- **Status-LED:** eigener Pin GPIO1 (Rev.4-Default GPIO18 ist jetzt Vol−). Neue zweite, rein passive Power-LED (R12) fest an 3.3V/GND, kein GPIO nötig
+- **LED-Ring:** SK6812MINI-**RV** (Rev.4: SK6812MINI-E) — durch die neuen/umsortierten Komponenten mussten die LEDs neu verkabelt werden; 5V-Trace-Breite platinenweit auf 0,8mm vergrößert
+- **SD-Karten-Slot:** gleiche GPIOs wie Rev.4 (CS=4, MOSI=5, CLK=6, MISO=7), aber anderer Steckertyp — der auf Rev.4 verbaute Slot hatte seine Lötpads auf der offenen (nach innen zeigenden) Seite, was Traces unnötig unter der Karte durchlaufen ließ; neuer Slot hat die Lötpads auf der gegenüberliegenden Seite und vereinfacht dadurch das Routing
+- **USB-C entfällt:** stattdessen Lötpads 5V + GND für externes Kabel zu Panel-Mount USB-C im Gehäuse; AMS1117 + Sicherungen bleiben; UART0 (Debug-Header J4) bleibt fürs Erst-Flashen
+- **Unverändert ggü. Rev.4:** Speaker (MAX98357A), BME680-Sensor (teilt sich den I2C-Bus jetzt mit dem ADAU7118), LD2410-Radar
+- **OTA-Channel:** in `sdkconfig.defaults.rev5` bewusst nicht gesetzt — übernimmt den Server-Default `satellite-esp-stable`, sobald Rev.4 vollständig auf seinen eigenen Channel (`satellite-esp-stable-rev4`) umgezogen ist (Refs #160)
 
 ### Wichtige Bauteil-Entscheidungen
 

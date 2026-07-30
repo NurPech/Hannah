@@ -1,5 +1,6 @@
 # Hannah Satellite — PCB Rev.4 (88 mm, ESP32-S3-WROOM-1-N16R8)
-# Alle Pin-Belegungen gemäß satellite-esp/hardware/Phase2/GPIO_Map.md
+# Pin-Belegung: siehe Git-Historie von hardware/Phase2/GPIO_Map.md (Datei
+# wurde auf Rev.5 aktualisiert, dort steht jetzt die Rev.5-Belegung)
 
 # OTA-Update-Channel — explizit gesetzt im Zuge des Rev5-Channel-Umzugs
 # (Refs #160), damit Rev4-Geräte nach dem NVS-Migrationsfix in

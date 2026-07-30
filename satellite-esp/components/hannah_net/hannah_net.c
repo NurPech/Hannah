@@ -33,6 +33,7 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -68,6 +69,13 @@ static volatile bool           s_ap_mode        = false;
 static volatile bool           s_ap_pending_exit = false;  /* Recovery erfolgreich, wartet auf letzten AP-Client */
 static bool                    s_sntp_started   = false;
 static volatile int64_t        s_last_net_activity_ms = 0;  /* Netzwerk-Watchdog, siehe net_activity_mark() */
+
+/* Neustart-Diagnose (#165) — siehe hannah_net.h für die öffentliche API. */
+#define DIAG_NVS_NAMESPACE  "diag"
+#define DIAG_NVS_KEY_COUNT  "restart_count"
+#define DIAG_NVS_KEY_SRC    "restart_src"
+static uint32_t  s_restart_count  = 0;
+static char      s_restart_reason[16] = "unbekannt";
 
 static EventGroupHandle_t        s_wifi_event_group;
 static EventGroupHandle_t        s_net_events  = NULL;
@@ -528,6 +536,7 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                                          * (persist_log_to_flash() in hannah_webserver) durchläuft
                                          * statt in einen harten Panic-Reset zu laufen. */
                                         ESP_LOGW(TAG, "Remote-Neustart via MQTT angefordert.");
+                                        hannah_net_mark_restart_source("remote");
                                         esp_task_wdt_delete(NULL);
                                         esp_restart();
                                     }
@@ -776,8 +785,81 @@ static void *mbedtls_spiram_calloc(size_t n, size_t size)
     return heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
+/* Refs #86 Punkt 2 — hilft nachträglich zu verifizieren, ob ein Reset durch den
+ * Netzwerk-Watchdog tatsächlich greift statt an einem Brownout/Panic zu liegen.
+ * Nur für "harte" Reset-Gründe relevant — die drei bewussten esp_restart()-Aufrufer
+ * (Watchdog/remote/OTA) liefern hier alle denselben Wert (ESP_RST_SW), siehe
+ * diag_init() unten für die eigentliche Unterscheidung. */
+static const char *reset_reason_str(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON:   return "Power-On";
+    case ESP_RST_EXT:       return "Externer Reset";
+    case ESP_RST_SW:        return "Software (esp_restart)";
+    case ESP_RST_PANIC:     return "Panic";
+    case ESP_RST_INT_WDT:   return "Interrupt-Watchdog";
+    case ESP_RST_TASK_WDT:  return "Task-Watchdog";
+    case ESP_RST_WDT:       return "Sonstiger Watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep-Sleep-Wakeup";
+    case ESP_RST_BROWNOUT:  return "Brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "Unbekannt";
+    }
+}
+
+/* Liest+inkrementiert den persistenten Neustart-Zähler und den vor dem letzten
+ * bewussten esp_restart() gesetzten Marker (falls vorhanden, dann konsumiert/
+ * zurückgesetzt) — leitet daraus s_restart_reason ab (#165). Reihenfolge im Boot
+ * unkritisch, da hier bewusst nicht geloggt wird (siehe main.c-Kommentar zum
+ * Log-Ringpuffer, der erst nach hannah_webserver_start() nutzbar ist). */
+static void diag_init(void)
+{
+    esp_reset_reason_t reason = esp_reset_reason();
+
+    nvs_handle_t h;
+    if (nvs_open(DIAG_NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        uint32_t count = 0;
+        nvs_get_u32(h, DIAG_NVS_KEY_COUNT, &count);
+        count++;
+        nvs_set_u32(h, DIAG_NVS_KEY_COUNT, count);
+        s_restart_count = count;
+
+        char marker[16] = {0};
+        size_t len = sizeof(marker);
+        nvs_get_str(h, DIAG_NVS_KEY_SRC, marker, &len);
+        nvs_set_str(h, DIAG_NVS_KEY_SRC, "");  /* konsumiert — für den nächsten Boot zurückgesetzt */
+        nvs_commit(h);
+        nvs_close(h);
+
+        if (marker[0] != '\0') {
+            strncpy(s_restart_reason, marker, sizeof(s_restart_reason) - 1);
+        } else if (reason == ESP_RST_SW) {
+            /* Kein Marker + Software-Reset → einzige verbleibende Aufrufstelle
+             * ohne Marker ist der reaktive Netzwerk-Watchdog. */
+            strncpy(s_restart_reason, "watchdog", sizeof(s_restart_reason) - 1);
+        } else {
+            strncpy(s_restart_reason, reset_reason_str(reason), sizeof(s_restart_reason) - 1);
+        }
+        s_restart_reason[sizeof(s_restart_reason) - 1] = '\0';
+    }
+}
+
+const char *hannah_net_get_restart_reason(void) { return s_restart_reason; }
+uint32_t    hannah_net_get_restart_count(void)  { return s_restart_count; }
+
+void hannah_net_mark_restart_source(const char *source)
+{
+    nvs_handle_t h;
+    if (nvs_open(DIAG_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, DIAG_NVS_KEY_SRC, source);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 void hannah_net_init(void)
 {
+    diag_init();
+
     mbedtls_platform_set_calloc_free(mbedtls_spiram_calloc, free);
     wifi_driver_init();
 

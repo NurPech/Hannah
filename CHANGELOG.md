@@ -5,6 +5,16 @@
 -->
 
 
+## 0.65.0 (2026-07-30)
+### Hannah Core
+* Added: periodic preventive "rejuvenation" restart per satellite (`SatelliteManager.check_and_restart_due_satellites()`), configurable via `satellite_manager.restart_interval_days` (default 7). Reuses the existing `#161` remote-restart MQTT command, checked hourly alongside the existing seed-cleanup loop; per-device hash offset spreads restarts across the day instead of firing all at once, and a restart is only triggered while the satellite is actually idle (no active conversation/audio stream/TTS, and not in DND) — otherwise it's retried on the next hourly pass. A manual restart via `TriggerSatelliteRestart` now also resets the interval clock (Refs #162)
+* Added: real relevance check for the Smalltalk follow-up mic window (#158) — `llm.classify()` gained a third `NOT_ADDRESSED` category (plus conversation history as input) to catch utterances that aren't actually directed at Hannah (e.g. a conversation between people present, coincidentally picked up during the open mic window) instead of misrouting them into NLU as a device command. Replaces the `ConversationContext.is_addressed_to_hannah()` stub — folded into the existing classify() call instead of adding a second LLM round-trip per utterance (Refs #159)
+* Added: satellite restart history (`satellite_restarts` table, `SatelliteManager.record_restart_report()`/`get_restart_reports()`) — the `firmware`-topic MQTT payload now carries `restart_reason`/`restart_count` reported by the satellite (#165), persisted per report instead of only the single most recent value. Deduplicated against `Satellite.last_reported_restart_count` since the `firmware` topic is retained and would otherwise re-record a phantom entry on every Core reconnect (Refs #165)
+
+### Satellite Firmware
+* Fixed: `sdkconfig.defaults.rev4`'s header comment pointed at `satellite-esp/hardware/Phase2/GPIO_Map.md`, a path that no longer exists since `hardware/` moved to the repo root. Now points at the file's Git history instead, since `GPIO_Map.md` itself was updated to document Rev.5's pin-out rather than Rev.4's
+* Added: persistent restart counter + refined restart reason (`hannah_net_get_restart_count()`/`hannah_net_get_restart_reason()`), survives reboots via NVS. Distinguishes the reactive network watchdog, a remote-triggered restart (#161/#162) and a post-OTA restart — `esp_reset_reason()` alone reports the same "Software" reason for all three, so a small NVS marker (`hannah_net_mark_restart_source()`) is set right before each conscious `esp_restart()` call and consumed on the next boot. Reported to Core via the extended `firmware`-topic payload (Refs #165)
+
 ## 0.64.1 (2026-07-26)
 ### AutoDeploy
 * Fixed: `post_install` hooks (`autodeploy.yaml.example`, `autodeploy`/`core`/`voiceid` components) now run `pip install --upgrade -q -r requirements.txt` instead of plain `pip install -q -r requirements.txt` — the latter leaves an already-installed package untouched even when a newer version is actually required (e.g. a transitive floor bump like #163's `protobuf>=7.35.1`), so `hannah-core` deployed and restarted straight into a crash loop after v0.64.0 with no way to notice short of watching logs. `--upgrade` always resolves to the latest version satisfying declared constraints instead of "whatever already happens to satisfy the old one" (Refs #164)

@@ -87,6 +87,7 @@ hardware/Phase2/*.step
 /hardware/Phase2/production/*.zip
 /hardware/Phase2/production/netlist.ipc
 /hardware/Phase2/pcbway_production/
+/hardware/Phase2/*.zip
 /hardware/Phase2/*_drc_violations.json
 /core/config.yaml
 /webui/config.yaml
