@@ -5,4 +5,5 @@ idf_component_register(
         esp_common
         esp-tflite-micro
         microfrontend
+        hannah_asset
 )

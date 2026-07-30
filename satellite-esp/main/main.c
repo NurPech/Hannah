@@ -113,6 +113,14 @@ void app_main(void)
      * hier angelegt wird (hannah_sensors_get_i2c_bus()). */
     hannah_sensors_init();
 
+    /* Asset-Cache — vor Audio-Pipeline initialisieren: hannah_audio_init()
+     * ruft synchron hannah_wakeword_init() auf, das beim Start einen
+     * gecachten Wakeword-Modell-Override aus SPIFFS lesen will (#166).
+     * SPIFFS muss dafür schon gemountet sein. */
+    hannah_net_set_play_asset_callback(on_play_asset);
+    hannah_asset_set_play_result_callback(on_play_asset_result);
+    hannah_asset_init();
+
     /* Audio-Pipeline */
     hannah_audio_init();
 
@@ -121,11 +129,6 @@ void app_main(void)
 
     /* OTA-Update-Check (Poll im Hintergrund, kein Flash-Vorgang) */
     hannah_ota_init();
-
-    /* Asset-Cache (WAV-Sounds) */
-    hannah_net_set_play_asset_callback(on_play_asset);
-    hannah_asset_set_play_result_callback(on_play_asset_result);
-    hannah_asset_init();
 
     /* BLE-Scanner für Indoor-Lokalisierung */
     hannah_ble_init();

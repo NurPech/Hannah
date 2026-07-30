@@ -5,6 +5,10 @@
 -->
 
 
+## 0.66.0 (2026-07-30)
+### Satellite Firmware
+* Added: wakeword model override via the existing Asset-Server cache (`hannah_asset`, namespace `satellite`, asset ID `wakeword`) — lets a newly trained `.tflite` model be tested by upload alone, without a firmware release. `hannah_asset` generalized to cache assets by raw ID (dropped the hardcoded `.wav` suffix) and gained `hannah_asset_read_to_psram()` for non-audio consumers. `hannah_wakeword` loads the cached override into PSRAM at init if present and valid, otherwise falls back to the built-in default model. Asset-cache init moved earlier in `main.c` (before `hannah_audio_init()`, which synchronously triggers wakeword init) so SPIFFS is mounted in time. Takes effect on next boot, not a live hot-swap (Refs #166)
+
 ## 0.65.0 (2026-07-30)
 ### Hannah Core
 * Added: periodic preventive "rejuvenation" restart per satellite (`SatelliteManager.check_and_restart_due_satellites()`), configurable via `satellite_manager.restart_interval_days` (default 7). Reuses the existing `#161` remote-restart MQTT command, checked hourly alongside the existing seed-cleanup loop; per-device hash offset spreads restarts across the day instead of firing all at once, and a restart is only triggered while the satellite is actually idle (no active conversation/audio stream/TTS, and not in DND) — otherwise it's retried on the next hourly pass. A manual restart via `TriggerSatelliteRestart` now also resets the interval clock (Refs #162)

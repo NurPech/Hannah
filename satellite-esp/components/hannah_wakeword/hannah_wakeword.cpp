@@ -13,9 +13,16 @@
  * Modell: hey_hannah_int8.tflite (inception, streaming state_internal)
  *   Input:  (1, 1, 40) int8  — scale=0.10196, zero_point=−128
  *   Output: (1, 1)     uint8 — scale=1/256,   zero_point=0
+ *
+ * Modell-Override (#166): Liegt im Asset-Cache (hannah_asset, Asset-ID
+ * "wakeword") eine gültige .tflite-Datei, wird diese statt des eingebauten
+ * Default-Arrays geladen — erlaubt Testen neuer Modelle per Asset-Upload,
+ * ohne Firmware-Release. Fällt bei fehlendem/ungültigem Override automatisch
+ * auf das eingebaute Modell zurück.
  */
 
 #include "hannah_wakeword.h"
+#include "hannah_asset.h"
 #include "model/model.h"
 #include "esp_log.h"
 
@@ -49,6 +56,28 @@ static TfLiteTensor                      *s_output           = nullptr;
 
 /* ------------------------------------------------------------------ */
 
+/* Wakeword-Modell laden: Override aus dem Asset-Cache bevorzugen, sonst das
+ * eingebaute Default-Array (#166). */
+static const tflite::Model *load_model(void)
+{
+    uint8_t *override_buf  = nullptr;
+    size_t   override_size = 0;
+
+    if (hannah_asset_read_to_psram("wakeword", &override_buf, &override_size)) {
+        const tflite::Model *m = tflite::GetModel(override_buf);
+        if (m->version() == TFLITE_SCHEMA_VERSION) {
+            ESP_LOGI(TAG, "Wakeword-Override aus Asset-Cache geladen (%u Bytes).",
+                     (unsigned)override_size);
+            return m;
+        }
+        ESP_LOGW(TAG, "Wakeword-Override ungültig (Schema-Version) — "
+                      "falle zurück auf eingebautes Modell.");
+        heap_caps_free(override_buf);
+    }
+
+    return tflite::GetModel(hey_hannah_int8_tflite);
+}
+
 static void tflite_init(void)
 {
     s_arena = (uint8_t *)heap_caps_malloc(ARENA_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -74,7 +103,7 @@ static void tflite_init(void)
     s_resolver.AddAssignVariable();
     s_resolver.AddReadVariable();
 
-    const tflite::Model *model = tflite::GetModel(hey_hannah_int8_tflite);
+    const tflite::Model *model = load_model();
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         ESP_LOGE(TAG, "TFLite schema version mismatch: %lu vs %d",
                  (unsigned long)model->version(), TFLITE_SCHEMA_VERSION);

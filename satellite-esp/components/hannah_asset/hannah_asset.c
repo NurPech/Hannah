@@ -11,6 +11,7 @@
 #include "esp_spiffs.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "cJSON.h"
@@ -162,7 +163,7 @@ static bool download_asset(const char *asset_id)
     snprintf(url, sizeof(url), "%s/assets/%s", hcfg->asset_url, asset_id);
 
     char path[72];
-    snprintf(path, sizeof(path), ASSET_MOUNT "/%s.wav", asset_id);
+    snprintf(path, sizeof(path), ASSET_MOUNT "/%s", asset_id);
 
     esp_http_client_config_t cfg = {
         .url         = url,
@@ -292,7 +293,7 @@ static void update_task(void *arg)
                  * verhindert, dass abgebrochene Teildownloads als gültig gecacht
                  * werden. */
                 char path[72];
-                snprintf(path, sizeof(path), ASSET_MOUNT "/%s.wav", id);
+                snprintf(path, sizeof(path), ASSET_MOUNT "/%s", id);
                 char actual[65];
                 if (file_sha256_hex(path, actual) &&
                     strcmp(actual, jsha->valuestring) == 0) {
@@ -337,7 +338,7 @@ void hannah_asset_init(void)
 bool hannah_asset_play(const char *asset_id)
 {
     char path[72];
-    snprintf(path, sizeof(path), ASSET_MOUNT "/%s.wav", asset_id);
+    snprintf(path, sizeof(path), ASSET_MOUNT "/%s", asset_id);
 
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -390,4 +391,39 @@ void hannah_asset_play_async(const char *asset_id)
 void hannah_asset_set_play_result_callback(hannah_asset_play_result_cb_t cb)
 {
     s_play_result_cb = cb;
+}
+
+bool hannah_asset_read_to_psram(const char *asset_id, uint8_t **out_buf, size_t *out_size)
+{
+    char path[72];
+    snprintf(path, sizeof(path), ASSET_MOUNT "/%s", asset_id);
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size <= 0) {
+        fclose(f);
+        return false;
+    }
+
+    uint8_t *buf = (uint8_t *)heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) {
+        ESP_LOGE(TAG, "PSRAM-Allokation für Asset '%s' fehlgeschlagen (%ld Bytes)", asset_id, size);
+        fclose(f);
+        return false;
+    }
+
+    size_t read_len = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    if (read_len != (size_t)size) {
+        heap_caps_free(buf);
+        return false;
+    }
+
+    *out_buf  = buf;
+    *out_size = (size_t)size;
+    return true;
 }
