@@ -26,6 +26,7 @@
 #include "model/model.h"
 #include "esp_log.h"
 #include <new>
+#include <cstring>
 
 #include "tensorflow/lite/experimental/microfrontend/lib/frontend.h"
 #include "tensorflow/lite/experimental/microfrontend/lib/frontend_util.h"
@@ -56,6 +57,14 @@ static tflite::MicroResourceVariables    *s_resource_vars    = nullptr;
 static TfLiteTensor                      *s_input            = nullptr;
 static TfLiteTensor                      *s_output           = nullptr;
 static uint8_t                           *s_model_override_buf = nullptr;
+
+/* Debug-Snapshot des letzten process()-Aufrufs (#173) */
+static size_t   s_last_feat_size                                            = 0;
+static size_t   s_last_num_read                                             = 0;
+static int8_t   s_last_input_preview[HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN];
+static uint16_t s_last_mel_preview[HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN];    /* rohe Frontend-Werte vor der Quantisierung */
+static uint8_t  s_last_output_raw                                           = 0;
+static uint32_t s_invoke_fail_count                                        = 0;
 
 /* ------------------------------------------------------------------ */
 
@@ -241,6 +250,8 @@ float hannah_wakeword_process(const int16_t *pcm)
     struct FrontendOutput feat = FrontendProcessSamples(
         &s_frontend, pcm, WAKEWORD_STEP_SAMPLES, &num_read);
 
+    s_last_feat_size = feat.size;
+    s_last_num_read  = num_read;
     if (feat.size == 0) return 0.0f;   /* Noch kein vollständiger Frame */
 
     /* uint16 → int8 quantisieren */
@@ -249,9 +260,30 @@ float hannah_wakeword_process(const int16_t *pcm)
         if      (q < -128) q = -128;
         else if (q >  127) q =  127;
         s_input->data.int8[i] = (int8_t)q;
+        if (i < HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN) {
+            s_last_input_preview[i] = (int8_t)q;
+            s_last_mel_preview[i]   = feat.values[i];
+        }
     }
 
-    if (s_interpreter->Invoke() != kTfLiteOk) return 0.0f;
+    if (s_interpreter->Invoke() != kTfLiteOk) {
+        s_invoke_fail_count++;
+        /* Nicht bei jedem Fehlschlag loggen (könnte pro 10ms-Frame passieren und
+         * den Log fluten) — Zähler wird vom periodischen Debug-Log mitgeloggt. */
+        return 0.0f;
+    }
 
-    return (float)(uint8_t)s_output->data.uint8[0] * OUTPUT_SCALE;
+    s_last_output_raw = s_output->data.uint8[0];
+    return (float)s_last_output_raw * OUTPUT_SCALE;
+}
+
+void hannah_wakeword_last_debug(hannah_wakeword_debug_t *out)
+{
+    if (!out) return;
+    out->feat_size         = s_last_feat_size;
+    out->num_read          = s_last_num_read;
+    out->output_raw        = s_last_output_raw;
+    out->invoke_fail_count = s_invoke_fail_count;
+    memcpy(out->input_preview, s_last_input_preview, sizeof(out->input_preview));
+    memcpy(out->mel_preview,   s_last_mel_preview,   sizeof(out->mel_preview));
 }

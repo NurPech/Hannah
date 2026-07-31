@@ -52,6 +52,30 @@ void  hannah_wakeword_reinit(void);
  */
 float hannah_wakeword_process(const int16_t *pcm);
 
+/* Input-Tensor ist (1,1,40) — 40 deckt einen kompletten Feature-Frame ab. */
+#define HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN 40
+
+/**
+ * Komplette Diagnosekette eines hannah_wakeword_process()-Aufrufs (#173):
+ * on-device Confidence bleibt trotz offline validiertem Modell flach bei 0.0,
+ * ohne Instrumentierung war nicht unterscheidbar ob das Frontend überhaupt
+ * Frames liefert, die Quantisierung entartet, oder Invoke() selbst fehlschlägt.
+ */
+typedef struct {
+    size_t   feat_size;         /* AudioFrontend-Framegröße (0 = kein vollständiger Frame, Invoke() lief nicht) */
+    size_t   num_read;          /* von FrontendProcessSamples tatsächlich konsumierte PCM-Samples (soll == WAKEWORD_STEP_SAMPLES sein) */
+    uint16_t mel_preview[HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN];   /* rohe Frontend-Werte vor der Quantisierung — 1:1 vergleichbar mit pymicro_features */
+    int8_t   input_preview[HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN]; /* quantisierte int8-Werte, die tatsächlich in den Input-Tensor geschrieben wurden */
+    uint8_t  output_raw;        /* unskalierter uint8-Output-Tensor-Wert (confidence = output_raw / 256.0) */
+    uint32_t invoke_fail_count; /* kumulative Anzahl fehlgeschlagener Invoke()-Aufrufe seit Boot */
+} hannah_wakeword_debug_t;
+
+/**
+ * Schreibt die Debug-Info aus dem letzten hannah_wakeword_process()-Aufruf
+ * nach *out. Kein Storage nötig, nur für Live-Logging gedacht.
+ */
+void hannah_wakeword_last_debug(hannah_wakeword_debug_t *out);
+
 #ifdef __cplusplus
 }
 #endif

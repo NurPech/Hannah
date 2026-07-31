@@ -23,6 +23,7 @@
 #include "libhannah_audio.h"
 
 #include <string.h>
+#include <math.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -440,18 +441,49 @@ static void mic_task(void *arg)
                         s_noise_floor_ema = s_noise_floor_ema * 0.999f + rms_idle * 0.001f;
                 }
 
-                /* Wakeword-Debug: alle ~500ms Mic-Pegel + Spitzen-Confidence loggen —
-                 * zeigt ob überhaupt Audio ankommt (rms) und wie nah die Erkennung
-                 * ans Threshold kommt (confidence), unabhängig vom Detection-Event. */
-                static int   s_wakeword_debug_ctr = 0;
-                static float s_wakeword_debug_max = 0.0f;
+                /* Wakeword-Debug: alle ~500ms komplette Diagnosekette loggen (#173) —
+                 * rms/peak (kommt überhaupt Audio an, clippt es?), confidence (wie nah
+                 * ans Threshold?), feat_size/num_read (liefert das AudioFrontend
+                 * vollständige Frames?), mel_preview (rohe Frontend-Werte, 1:1 gegen
+                 * pymicro_features/test_inference.py vergleichbar), input_preview
+                 * (quantisierte Werte, die tatsächlich ins Modell gingen), output_raw
+                 * (unskalierter Modell-Output) und invoke_fail_count (falls Invoke()
+                 * selbst scheitert, aktuell sonst lautlos als confidence=0.0 sichtbar).
+                 * Bewusst viel auf einmal statt mehrerer Debug-Release-Runden. */
+                static int    s_wakeword_debug_ctr      = 0;
+                static float  s_wakeword_debug_max      = 0.0f;
+                static float  s_wakeword_debug_peak     = 0.0f;
+                static size_t s_wakeword_debug_min_feat = SIZE_MAX;
                 if (confidence > s_wakeword_debug_max) s_wakeword_debug_max = confidence;
+                for (size_t i = 0; i < mono_samples; i++) {
+                    float a = fabsf((float)mono[i]) / 32768.0f;
+                    if (a > s_wakeword_debug_peak) s_wakeword_debug_peak = a;
+                }
+                hannah_wakeword_debug_t wwdbg;
+                hannah_wakeword_last_debug(&wwdbg);
+                if (wwdbg.feat_size < s_wakeword_debug_min_feat) s_wakeword_debug_min_feat = wwdbg.feat_size;
                 if (++s_wakeword_debug_ctr >= 50) {
                     s_wakeword_debug_ctr = 0;
-                    ESP_LOGI(TAG, "Wakeword-Debug: rms=%.4f confidence(peak/500ms)=%.4f threshold=%.2f noise_ema=%.4f",
-                             rms_idle, s_wakeword_debug_max,
-                             hannah_config_get()->wakeword_threshold / 100.0f, s_noise_floor_ema);
-                    s_wakeword_debug_max = 0.0f;
+                    ESP_LOGI(TAG, "Wakeword-Debug: rms=%.4f peak=%.4f confidence(peak/500ms)=%.4f threshold=%.2f "
+                                  "noise_ema=%.4f feat_size(min/500ms)=%u num_read=%u output_raw=%u invoke_fails=%lu",
+                             rms_idle, s_wakeword_debug_peak, s_wakeword_debug_max,
+                             hannah_config_get()->wakeword_threshold / 100.0f, s_noise_floor_ema,
+                             (unsigned)s_wakeword_debug_min_feat, (unsigned)wwdbg.num_read,
+                             (unsigned)wwdbg.output_raw, (unsigned long)wwdbg.invoke_fail_count);
+                    ESP_LOGI(TAG, "Wakeword-Debug mel[0..9]=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+                             (unsigned)wwdbg.mel_preview[0], (unsigned)wwdbg.mel_preview[1],
+                             (unsigned)wwdbg.mel_preview[2], (unsigned)wwdbg.mel_preview[3],
+                             (unsigned)wwdbg.mel_preview[4], (unsigned)wwdbg.mel_preview[5],
+                             (unsigned)wwdbg.mel_preview[6], (unsigned)wwdbg.mel_preview[7],
+                             (unsigned)wwdbg.mel_preview[8], (unsigned)wwdbg.mel_preview[9]);
+                    ESP_LOGI(TAG, "Wakeword-Debug input[0..9]=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+                             wwdbg.input_preview[0], wwdbg.input_preview[1], wwdbg.input_preview[2],
+                             wwdbg.input_preview[3], wwdbg.input_preview[4], wwdbg.input_preview[5],
+                             wwdbg.input_preview[6], wwdbg.input_preview[7], wwdbg.input_preview[8],
+                             wwdbg.input_preview[9]);
+                    s_wakeword_debug_max      = 0.0f;
+                    s_wakeword_debug_peak     = 0.0f;
+                    s_wakeword_debug_min_feat = SIZE_MAX;
                 }
 
                 /* PTT oder Wake-Word → Streaming starten */

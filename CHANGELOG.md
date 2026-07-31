@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.5 (2026-07-31)
+### Satellite Firmware
+* Added: `hannah_wakeword_last_debug()` — exposes the AudioFrontend's `feat.size`/`num_read` (does it even produce complete feature frames?), a preview of both the raw pre-quantization mel values and the quantized int8 values actually fed to the model, the raw unscaled output tensor byte, and a cumulative `Invoke()` failure counter. Wired into the existing periodic idle debug log (#171), which also gained mic peak amplitude (clipping check) alongside the existing RMS. All in one release rather than iterating — on-device wakeword confidence stays flat at 0.0000 despite the model validating correctly offline (72.5% true-positive rate on real recordings via `test_inference.py`), and this is the full diagnostic chain needed to narrow it down without physical device access (Refs #173)
+
 ## 0.67.4 (2026-07-31)
 ### Satellite Firmware
 * Added: periodic wakeword debug log in `hannah_audio` (every ~500ms while idle) — mic RMS level and peak wakeword confidence, independent of whether detection actually fires. Lets a live device confirm whether audio is reaching the model at all and how close confidence gets to the threshold, without needing a detection event (Refs #171)
