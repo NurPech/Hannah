@@ -123,6 +123,14 @@ class MQTTHandler:
         self._client.publish(topic, json.dumps({"macs": macs}), qos=1, retain=True)
         log.debug(f"BLE-Watchlist → {device}: {len(macs)} MAC(s)")
 
+    def publish_asset_relevant(self, device: str, asset_ids: list[str]):
+        """Retained Relevanzliste für hannah_asset (#170) — ersetzt das vorherige
+        blinde "alles im Manifest laden" auf dem Satelliten durch eine von Core
+        gepflegte Liste der tatsächlich benötigten Asset-IDs."""
+        topic = f"hannah/satellite/{device}/assets/relevant"
+        self._client.publish(topic, json.dumps(asset_ids), qos=1, retain=True)
+        log.debug(f"Asset-Relevanzliste → {device}: {asset_ids}")
+
     def publish_ota_ok(self, device: str):
         self._client.publish(f"hannah/satellite/{device}/ota/ok", "", qos=1)
         log.info(f"OTA-OK → hannah/satellite/{device}/ota/ok")

@@ -93,6 +93,9 @@ static hannah_net_ota_ok_cb_t          s_ota_ok_cb          = NULL;
 static hannah_net_ble_watchlist_cb_t   s_ble_watchlist_cb   = NULL;
 static char s_ble_watchlist_cache[512];
 static int  s_ble_watchlist_cache_len = 0;
+static hannah_net_asset_relevant_cb_t  s_asset_relevant_cb  = NULL;
+static char s_asset_relevant_cache[512];
+static int  s_asset_relevant_cache_len = 0;
 static hannah_net_volume_cb_t          s_volume_cb          = NULL;
 static hannah_net_sampling_cb_t        s_sampling_cb        = NULL;
 static hannah_net_virtual_ptt_cb_t        s_virtual_ptt_cb        = NULL;
@@ -377,6 +380,9 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/ble/watchlist",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
+        snprintf(topic, sizeof(topic), "hannah/satellite/%s/assets/relevant",
+                 hannah_config_get()->device_id);
+        esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/sampling",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
@@ -466,79 +472,95 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                         ESP_LOGD(TAG, "BLE-Watchlist zwischengespeichert (%d Bytes).", len);
                     }
                 } else {
-                    char sampling_topic[128];
-                    snprintf(sampling_topic, sizeof(sampling_topic),
-                             "hannah/satellite/%s/sampling",
+                    char asset_relevant_topic[128];
+                    snprintf(asset_relevant_topic, sizeof(asset_relevant_topic),
+                             "hannah/satellite/%s/assets/relevant",
                              hannah_config_get()->device_id);
-                    if (strcmp(topic, sampling_topic) == 0 && s_sampling_cb) {
-                        /* Payload: {"enabled":true,"type":"noise"|"hey_hannah"} */
-                        bool enabled = false;
-                        char sample_type[32] = "noise";
-                        cJSON *sroot = cJSON_ParseWithLength(event->data, event->data_len);
-                        if (sroot) {
-                            const cJSON *jen = cJSON_GetObjectItemCaseSensitive(sroot, "enabled");
-                            const cJSON *jty = cJSON_GetObjectItemCaseSensitive(sroot, "type");
-                            if (cJSON_IsBool(jen))   enabled = cJSON_IsTrue(jen);
-                            if (cJSON_IsString(jty)) strncpy(sample_type, jty->valuestring, sizeof(sample_type) - 1);
-                            cJSON_Delete(sroot);
+                    if (strcmp(topic, asset_relevant_topic) == 0) {
+                        if (s_asset_relevant_cb) {
+                            s_asset_relevant_cb(event->data, event->data_len);
                         } else {
-                            enabled = (strstr(event->data, "\"enabled\":true") != NULL ||
-                                       strstr(event->data, "\"enabled\": true") != NULL);
+                            int len = event->data_len < (int)sizeof(s_asset_relevant_cache)
+                                      ? event->data_len : (int)sizeof(s_asset_relevant_cache);
+                            memcpy(s_asset_relevant_cache, event->data, len);
+                            s_asset_relevant_cache_len = len;
+                            ESP_LOGD(TAG, "Asset-Relevanzliste zwischengespeichert (%d Bytes).", len);
                         }
-                        ESP_LOGI(TAG, "Sampling-Modus: %s (type=%s)", enabled ? "an" : "aus", sample_type);
-                        s_sampling_cb(enabled, sample_type);
                     } else {
-                        char ptt_topic[128];
-                        snprintf(ptt_topic, sizeof(ptt_topic),
-                                 "hannah/satellite/%s/ptt",
+                        char sampling_topic[128];
+                        snprintf(sampling_topic, sizeof(sampling_topic),
+                                 "hannah/satellite/%s/sampling",
                                  hannah_config_get()->device_id);
-                        if (strcmp(topic, ptt_topic) == 0 && s_virtual_ptt_cb) {
-                            bool active = (strncmp(data, "true", 4) == 0 || data[0] == '1');
-                            ESP_LOGI(TAG, "Virtual PTT: %s", active ? "AN" : "AUS");
-                            s_virtual_ptt_cb(active);
-                        } else {
-                            char play_asset_topic[128];
-                            snprintf(play_asset_topic, sizeof(play_asset_topic),
-                                     "hannah/satellite/%s/play_asset",
-                                     hannah_config_get()->device_id);
-                            if (strcmp(topic, play_asset_topic) == 0 && s_play_asset_cb) {
-                                char asset_id[64] = {0};
-                                cJSON *proot = cJSON_ParseWithLength(event->data, event->data_len);
-                                if (proot) {
-                                    const cJSON *jid = cJSON_GetObjectItemCaseSensitive(proot, "asset_id");
-                                    if (cJSON_IsString(jid))
-                                        strncpy(asset_id, jid->valuestring, sizeof(asset_id) - 1);
-                                    cJSON_Delete(proot);
-                                }
-                                if (asset_id[0]) {
-                                    ESP_LOGI(TAG, "PlayAsset: %s", asset_id);
-                                    s_play_asset_cb(asset_id);
-                                }
+                        if (strcmp(topic, sampling_topic) == 0 && s_sampling_cb) {
+                            /* Payload: {"enabled":true,"type":"noise"|"hey_hannah"} */
+                            bool enabled = false;
+                            char sample_type[32] = "noise";
+                            cJSON *sroot = cJSON_ParseWithLength(event->data, event->data_len);
+                            if (sroot) {
+                                const cJSON *jen = cJSON_GetObjectItemCaseSensitive(sroot, "enabled");
+                                const cJSON *jty = cJSON_GetObjectItemCaseSensitive(sroot, "type");
+                                if (cJSON_IsBool(jen))   enabled = cJSON_IsTrue(jen);
+                                if (cJSON_IsString(jty)) strncpy(sample_type, jty->valuestring, sizeof(sample_type) - 1);
+                                cJSON_Delete(sroot);
                             } else {
-                                char listen_topic[128];
-                                snprintf(listen_topic, sizeof(listen_topic),
-                                         "hannah/satellite/%s/listen",
+                                enabled = (strstr(event->data, "\"enabled\":true") != NULL ||
+                                           strstr(event->data, "\"enabled\": true") != NULL);
+                            }
+                            ESP_LOGI(TAG, "Sampling-Modus: %s (type=%s)", enabled ? "an" : "aus", sample_type);
+                            s_sampling_cb(enabled, sample_type);
+                        } else {
+                            char ptt_topic[128];
+                            snprintf(ptt_topic, sizeof(ptt_topic),
+                                     "hannah/satellite/%s/ptt",
+                                     hannah_config_get()->device_id);
+                            if (strcmp(topic, ptt_topic) == 0 && s_virtual_ptt_cb) {
+                                bool active = (strncmp(data, "true", 4) == 0 || data[0] == '1');
+                                ESP_LOGI(TAG, "Virtual PTT: %s", active ? "AN" : "AUS");
+                                s_virtual_ptt_cb(active);
+                            } else {
+                                char play_asset_topic[128];
+                                snprintf(play_asset_topic, sizeof(play_asset_topic),
+                                         "hannah/satellite/%s/play_asset",
                                          hannah_config_get()->device_id);
-                                if (strcmp(topic, listen_topic) == 0) {
-                                    ESP_LOGI(TAG, "start_listening via MQTT.");
-                                    if (s_start_listening_cb) s_start_listening_cb();
+                                if (strcmp(topic, play_asset_topic) == 0 && s_play_asset_cb) {
+                                    char asset_id[64] = {0};
+                                    cJSON *proot = cJSON_ParseWithLength(event->data, event->data_len);
+                                    if (proot) {
+                                        const cJSON *jid = cJSON_GetObjectItemCaseSensitive(proot, "asset_id");
+                                        if (cJSON_IsString(jid))
+                                            strncpy(asset_id, jid->valuestring, sizeof(asset_id) - 1);
+                                        cJSON_Delete(proot);
+                                    }
+                                    if (asset_id[0]) {
+                                        ESP_LOGI(TAG, "PlayAsset: %s", asset_id);
+                                        s_play_asset_cb(asset_id);
+                                    }
                                 } else {
-                                    char restart_topic[128];
-                                    snprintf(restart_topic, sizeof(restart_topic),
-                                             "hannah/satellite/%s/restart",
+                                    char listen_topic[128];
+                                    snprintf(listen_topic, sizeof(listen_topic),
+                                             "hannah/satellite/%s/listen",
                                              hannah_config_get()->device_id);
-                                    if (strcmp(topic, restart_topic) == 0) {
-                                        /* Geordneter Neustart auf Zuruf (#161) — Diagnose-/
-                                         * Rejuvenation-Werkzeug für den Ressourcenerschöpfungs-
-                                         * Verdacht aus #150: läuft über denselben Pfad wie der
-                                         * Netzwerk-Watchdog oben (erst TWDT abmelden, dann
-                                         * esp_restart()), damit der Shutdown-Handler-Chain
-                                         * (persist_log_to_flash() in hannah_webserver) durchläuft
-                                         * statt in einen harten Panic-Reset zu laufen. */
-                                        ESP_LOGW(TAG, "Remote-Neustart via MQTT angefordert.");
-                                        hannah_net_mark_restart_source("remote");
-                                        esp_task_wdt_delete(NULL);
-                                        esp_restart();
+                                    if (strcmp(topic, listen_topic) == 0) {
+                                        ESP_LOGI(TAG, "start_listening via MQTT.");
+                                        if (s_start_listening_cb) s_start_listening_cb();
+                                    } else {
+                                        char restart_topic[128];
+                                        snprintf(restart_topic, sizeof(restart_topic),
+                                                 "hannah/satellite/%s/restart",
+                                                 hannah_config_get()->device_id);
+                                        if (strcmp(topic, restart_topic) == 0) {
+                                            /* Geordneter Neustart auf Zuruf (#161) — Diagnose-/
+                                             * Rejuvenation-Werkzeug für den Ressourcenerschöpfungs-
+                                             * Verdacht aus #150: läuft über denselben Pfad wie der
+                                             * Netzwerk-Watchdog oben (erst TWDT abmelden, dann
+                                             * esp_restart()), damit der Shutdown-Handler-Chain
+                                             * (persist_log_to_flash() in hannah_webserver) durchläuft
+                                             * statt in einen harten Panic-Reset zu laufen. */
+                                            ESP_LOGW(TAG, "Remote-Neustart via MQTT angefordert.");
+                                            hannah_net_mark_restart_source("remote");
+                                            esp_task_wdt_delete(NULL);
+                                            esp_restart();
+                                        }
                                     }
                                 }
                             }
@@ -969,6 +991,14 @@ void hannah_net_set_ble_watchlist_callback(hannah_net_ble_watchlist_cb_t cb)
     if (cb && s_ble_watchlist_cache_len > 0) {
         cb(s_ble_watchlist_cache, s_ble_watchlist_cache_len);
         s_ble_watchlist_cache_len = 0;
+    }
+}
+void hannah_net_set_asset_relevant_callback(hannah_net_asset_relevant_cb_t cb)
+{
+    s_asset_relevant_cb = cb;
+    if (cb && s_asset_relevant_cache_len > 0) {
+        cb(s_asset_relevant_cache, s_asset_relevant_cache_len);
+        s_asset_relevant_cache_len = 0;
     }
 }
 void hannah_net_set_volume_callback(hannah_net_volume_cb_t cb)        { s_volume_cb        = cb; }

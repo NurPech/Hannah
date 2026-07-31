@@ -12,11 +12,19 @@ extern "C" {
  * hannah_asset — generischer Asset-Cache via SPIFFS + Asset-Server (namespace "satellite")
  *
  * Ablauf:
- *   hannah_asset_init() — SPIFFS mounten, Manifest prüfen, fehlende/veraltete
- *                          Assets im Hintergrund herunterladen. Assets werden
- *                          unverändert (ohne Dateiendung) unter ihrer Asset-ID
- *                          gecacht — der Inhalt ist dem Cache egal, nur den
- *                          Konsumenten (Sound-Player, Wakeword-Modell, ...) nicht.
+ *   hannah_asset_init() — SPIFFS mounten, dann reaktiv warten: ein Sync-Durchlauf
+ *                          (Manifest prüfen, fehlende/veraltete Assets herunterladen,
+ *                          nicht mehr relevante Cache-Einträge löschen) läuft erst,
+ *                          wenn Core seine Relevanzliste über das retained MQTT-Topic
+ *                          hannah/satellite/<device>/assets/relevant publiziert (#170)
+ *                          — kein blindes "alles im Manifest laden" mehr und kein
+ *                          fester Boot-Timer. Zusätzlich zur Core-Relevanzliste bleibt
+ *                          eine kleine, fest im Firmware-Code verankerte Ausnahmeliste
+ *                          relevant, unabhängig von Core (aktuell nur "wakeword", #166
+ *                          Modell-Override). Assets werden unverändert (ohne
+ *                          Dateiendung) unter ihrer Asset-ID gecacht — der Inhalt ist
+ *                          dem Cache egal, nur den Konsumenten (Sound-Player,
+ *                          Wakeword-Modell, ...) nicht.
  *   hannah_asset_play() — Asset als WAV aus SPIFFS lesen und über hannah_audio
  *                          abspielen. Gibt false zurück wenn das Asset nicht im
  *                          Cache liegt oder der WAV-Header ungültig ist (#116).

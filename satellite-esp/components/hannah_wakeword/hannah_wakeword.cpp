@@ -148,7 +148,11 @@ void hannah_wakeword_init(void)
     }
 
     tflite_init();
-    ESP_LOGI(TAG, "Wakeword bereit (AudioFrontend + TFLite Micro).");
+    if (s_interpreter) {
+        ESP_LOGI(TAG, "Wakeword bereit (AudioFrontend + TFLite Micro).");
+    } else {
+        ESP_LOGE(TAG, "Wakeword-Init fehlgeschlagen — Erkennung deaktiviert (liefert konstant 0.0).");
+    }
 }
 
 float hannah_wakeword_process(const int16_t *pcm)

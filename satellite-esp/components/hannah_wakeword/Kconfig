@@ -41,11 +41,13 @@ menu "Hannah Wake Word"
 
     config HANNAH_TFLITE_ARENA_KB
         int "TFLite-Micro Arena-Größe (KB)"
-        default 256
-        range 64 512
+        default 512
+        range 64 1024
         help
             Arbeitsspeicher für den TFLite-Micro-Interpreter.
             Bei AllocateTensors-Fehler erhöhen.
-            128 KB reicht für das hey_hannah inception-Modell (55 KB).
+            256 KB reichte für ein früheres hey_hannah inception-Modell (55 KB),
+            reicht aber nicht für jeden Retrain — modellabhängig, nicht nur
+            von der reinen Dateigröße (#171).
 
 endmenu

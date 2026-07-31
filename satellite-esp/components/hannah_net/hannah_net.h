@@ -88,6 +88,13 @@ void hannah_net_set_ota_ok_callback(hannah_net_ota_ok_cb_t cb);
 typedef void (*hannah_net_ble_watchlist_cb_t)(const char *json, int len);
 void hannah_net_set_ble_watchlist_callback(hannah_net_ble_watchlist_cb_t cb);
 
+/* Asset-Relevanzlisten-Callback: wird aufgerufen wenn hannah/satellite/<device>/assets/relevant
+ * empfangen wird (retained, von Core gepflegt — #170). Payload: JSON-Array von Asset-IDs,
+ * z.B. ["alarm_ring","timer_jingle"]. json/len zeigen direkt auf den MQTT-Payload-Puffer
+ * (nur während des Callbacks gültig). */
+typedef void (*hannah_net_asset_relevant_cb_t)(const char *json, int len);
+void hannah_net_set_asset_relevant_callback(hannah_net_asset_relevant_cb_t cb);
+
 /* Virtual-PTT-Callback: wird aufgerufen wenn hannah/satellite/<device>/ptt empfangen.
  * active=true: PTT gedrückt (Aufnahme starten), active=false: PTT losgelassen. */
 typedef void (*hannah_net_virtual_ptt_cb_t)(bool active);

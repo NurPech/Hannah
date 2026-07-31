@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <dirent.h>
 
 #include "esp_log.h"
 #include "esp_spiffs.h"
@@ -18,12 +19,31 @@
 #include "psa/crypto.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 static const char *TAG        = "hannah_asset";
 #define ASSET_MOUNT   "/assets"
 #define ASSET_NVS_NS  "hna"   /* max 15 chars für nvs namespace */
 
 static hannah_asset_play_result_cb_t s_play_result_cb = NULL;
+
+/* ── Relevanzliste (#170) ────────────────────────────────────────────────── */
+
+/* Assets, die der Satellit selbst braucht, unabhängig von Cores Relevanzliste —
+ * aktuell nur der Wakeword-Modell-Override (#166). Einzelner Eintrag, daher kein
+ * Registrierungsmechanismus, nur eine feste Liste. */
+static const char *const s_fixed_assets[] = {
+    "wakeword",
+};
+#define FIXED_ASSET_COUNT (sizeof(s_fixed_assets) / sizeof(s_fixed_assets[0]))
+
+#define MAX_RELEVANT_ASSETS 16
+#define ASSET_ID_MAX        40
+
+static SemaphoreHandle_t s_relevant_mutex = NULL;
+static SemaphoreHandle_t s_sync_trigger   = NULL;
+static char s_relevant[MAX_RELEVANT_ASSETS][ASSET_ID_MAX];
+static int  s_relevant_count = 0;
 
 
 /* ── WAV-Chunk-Scanner ───────────────────────────────────────────────────── */
@@ -242,75 +262,199 @@ static void store_sha256(const char *asset_id, const char *sha256)
     nvs_close(h);
 }
 
-/* ── Update-Task ─────────────────────────────────────────────────────────── */
-
-static void update_task(void *arg)
+/* Löscht den sha256-Cache-Eintrag eines Assets — nötig bei der Garbage Collection
+ * (siehe unten), sonst hielte sha256_matches() ein längst aus dem Cache entferntes
+ * Asset fälschlich für aktuell, sobald es wieder relevant wird (Datei fehlt dann
+ * trotzdem, ohne dass ein Redownload ausgelöst würde). */
+static void clear_sha256(const char *asset_id)
 {
-    vTaskDelay(pdMS_TO_TICKS(50000));
+    char key[16];
+    make_nvs_key(asset_id, key);
+
+    nvs_handle_t h;
+    if (nvs_open(ASSET_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_key(h, key);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* ── Relevanzliste + Sync (#170) ─────────────────────────────────────────── */
+
+/* Kopiert die aktuelle Core-Relevanzliste (unter Mutex) plus die feste
+ * Firmware-Ausnahmeliste in `out` (Duplikate übersprungen) und gibt die
+ * Gesamtanzahl zurück. `out` muss mindestens MAX_RELEVANT_ASSETS + FIXED_ASSET_COUNT
+ * Einträge fassen. */
+static int build_wanted_list(char out[][ASSET_ID_MAX])
+{
+    int count = 0;
+
+    xSemaphoreTake(s_relevant_mutex, portMAX_DELAY);
+    for (int i = 0; i < s_relevant_count; i++) {
+        strncpy(out[count], s_relevant[i], ASSET_ID_MAX - 1);
+        out[count][ASSET_ID_MAX - 1] = '\0';
+        count++;
+    }
+    xSemaphoreGive(s_relevant_mutex);
+
+    for (size_t i = 0; i < FIXED_ASSET_COUNT; i++) {
+        bool dup = false;
+        for (int j = 0; j < count; j++) {
+            if (strcmp(out[j], s_fixed_assets[i]) == 0) { dup = true; break; }
+        }
+        if (!dup) {
+            strncpy(out[count], s_fixed_assets[i], ASSET_ID_MAX - 1);
+            out[count][ASSET_ID_MAX - 1] = '\0';
+            count++;
+        }
+    }
+    return count;
+}
+
+/* Entfernt alles aus dem SPIFFS-Cache, was weder in Cores Relevanzliste noch in
+ * der Firmware-Ausnahmeliste steht (z.B. nach Umbenennung/Entfernung eines
+ * Jingles) — inkl. des zugehörigen sha256-NVS-Eintrags. */
+static void garbage_collect(char wanted[][ASSET_ID_MAX], int wanted_count)
+{
+    DIR *dir = opendir(ASSET_MOUNT);
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        bool keep = false;
+        for (int i = 0; i < wanted_count; i++) {
+            if (strcmp(entry->d_name, wanted[i]) == 0) { keep = true; break; }
+        }
+        if (keep) continue;
+
+        /* Größe an sizeof(entry->d_name) gekoppelt statt der festen 72 Bytes,
+         * die download_asset()/hannah_asset_play() für bekannt kurze Asset-IDs
+         * nutzen — d_name kann laut struct dirent theoretisch deutlich länger
+         * sein, GCCs -Wformat-truncation rechnet mit diesem Worst-Case (#170 CI). */
+        char path[sizeof(ASSET_MOUNT) + 1 + sizeof(entry->d_name)];
+        snprintf(path, sizeof(path), ASSET_MOUNT "/%s", entry->d_name);
+        remove(path);
+        clear_sha256(entry->d_name);
+        ESP_LOGI(TAG, "Asset %s: nicht mehr relevant — aus Cache entfernt.", entry->d_name);
+    }
+    closedir(dir);
+}
+
+/* Ein Sync-Durchlauf: Manifest holen, nur die aktuell relevanten Assets
+ * (Core-Relevanzliste ∪ Firmware-Ausnahmeliste) gegen den Cache abgleichen,
+ * danach Garbage Collection. Läuft in sync_task, nie direkt im MQTT-Callback
+ * (HTTP/TLS-I/O). */
+static void do_sync(void)
+{
     hannah_net_wait_sntp(10000);
 
-    while (1) {
-        char *body = NULL;
-        for (int attempt = 1; attempt <= 3; attempt++) {
-            ESP_LOGI(TAG, "Manifest-Fetch Versuch %d/3 (free heap: %lu)",
-                     attempt, esp_get_free_heap_size());
-            body = fetch_manifest();
-            if (body) break;
-            ESP_LOGW(TAG, "Manifest nicht abrufbar (Versuch %d/3).", attempt);
-            if (attempt < 3) vTaskDelay(pdMS_TO_TICKS(30000));
-        }
-        if (!body) {
-            ESP_LOGW(TAG, "Manifest nach 3 Versuchen nicht abrufbar — Retry in 30 min.");
-            vTaskDelay(pdMS_TO_TICKS(1800000));
-            continue;
-        }
-
-        cJSON *root = cJSON_Parse(body);
-        free(body);
-        if (!root) {
-            ESP_LOGE(TAG, "Manifest-JSON ungültig.");
-            vTaskDelete(NULL);
-            return;
-        }
-
-        cJSON *assets = cJSON_GetObjectItemCaseSensitive(root, "assets");
-        if (cJSON_IsObject(assets)) {
-            cJSON *item;
-            cJSON_ArrayForEach(item, assets) {
-                const char *id    = item->string;
-                const cJSON *jsha = cJSON_GetObjectItemCaseSensitive(item, "sha256");
-                if (!cJSON_IsString(jsha)) continue;
-
-                if (sha256_matches(id, jsha->valuestring)) {
-                    ESP_LOGI(TAG, "Asset %s aktuell.", id);
-                    continue;
-                }
-
-                ESP_LOGI(TAG, "Asset %s herunterladen...", id);
-                if (!download_asset(id)) continue;
-
-                /* SHA256 der heruntergeladenen Datei gegen das Manifest prüfen —
-                 * verhindert, dass abgebrochene Teildownloads als gültig gecacht
-                 * werden. */
-                char path[72];
-                snprintf(path, sizeof(path), ASSET_MOUNT "/%s", id);
-                char actual[65];
-                if (file_sha256_hex(path, actual) &&
-                    strcmp(actual, jsha->valuestring) == 0) {
-                    store_sha256(id, jsha->valuestring);
-                    ESP_LOGI(TAG, "Asset %s verifiziert (sha256 ok).", id);
-                } else {
-                    ESP_LOGW(TAG, "Asset %s: sha256-Mismatch — verwerfe Datei.", id);
-                    remove(path);
-                }
-            }
-        }
-
-        cJSON_Delete(root);
-        ESP_LOGI(TAG, "Asset-Update abgeschlossen.");
-        vTaskDelete(NULL);
+    char *body = NULL;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        ESP_LOGI(TAG, "Manifest-Fetch Versuch %d/3 (free heap: %lu)",
+                 attempt, esp_get_free_heap_size());
+        body = fetch_manifest();
+        if (body) break;
+        ESP_LOGW(TAG, "Manifest nicht abrufbar (Versuch %d/3).", attempt);
+        if (attempt < 3) vTaskDelay(pdMS_TO_TICKS(30000));
+    }
+    if (!body) {
+        ESP_LOGW(TAG, "Manifest nach 3 Versuchen nicht abrufbar — Sync übersprungen.");
         return;
     }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        ESP_LOGE(TAG, "Manifest-JSON ungültig.");
+        return;
+    }
+
+    char wanted[MAX_RELEVANT_ASSETS + FIXED_ASSET_COUNT][ASSET_ID_MAX];
+    int  wanted_count = build_wanted_list(wanted);
+
+    cJSON *assets = cJSON_GetObjectItemCaseSensitive(root, "assets");
+    if (cJSON_IsObject(assets)) {
+        for (int i = 0; i < wanted_count; i++) {
+            const char  *id   = wanted[i];
+            const cJSON *item = cJSON_GetObjectItemCaseSensitive(assets, id);
+            const cJSON *jsha = cJSON_GetObjectItemCaseSensitive(item, "sha256");
+            if (!cJSON_IsString(jsha)) {
+                ESP_LOGW(TAG, "Asset %s: nicht im Manifest.", id);
+                continue;
+            }
+
+            if (sha256_matches(id, jsha->valuestring)) {
+                ESP_LOGI(TAG, "Asset %s aktuell.", id);
+                continue;
+            }
+
+            ESP_LOGI(TAG, "Asset %s herunterladen...", id);
+            if (!download_asset(id)) continue;
+
+            /* SHA256 der heruntergeladenen Datei gegen das Manifest prüfen —
+             * verhindert, dass abgebrochene Teildownloads als gültig gecacht
+             * werden. */
+            char path[72];
+            snprintf(path, sizeof(path), ASSET_MOUNT "/%s", id);
+            char actual[65];
+            if (file_sha256_hex(path, actual) &&
+                strcmp(actual, jsha->valuestring) == 0) {
+                store_sha256(id, jsha->valuestring);
+                ESP_LOGI(TAG, "Asset %s verifiziert (sha256 ok).", id);
+            } else {
+                ESP_LOGW(TAG, "Asset %s: sha256-Mismatch — verwerfe Datei.", id);
+                remove(path);
+            }
+        }
+    }
+    cJSON_Delete(root);
+
+    garbage_collect(wanted, wanted_count);
+    ESP_LOGI(TAG, "Asset-Sync abgeschlossen (%d relevant).", wanted_count);
+}
+
+/* Läuft für die Lebensdauer des Programms — löst pro empfangener Relevanzliste
+ * (retained Erstzustellung nach MQTT-Connect oder spätere Live-Änderung durch
+ * Core, #170) genau einen Sync-Durchlauf aus, statt wie vorher einmalig fix
+ * 50s nach dem Boot zu laufen. */
+static void sync_task(void *arg)
+{
+    while (1) {
+        xSemaphoreTake(s_sync_trigger, portMAX_DELAY);
+        do_sync();
+    }
+}
+
+/* MQTT-Callback (hannah_net) — läuft auf dem MQTT-Task, muss daher schnell sein:
+ * nur parsen + zwischenspeichern, der eigentliche Sync (HTTP/TLS) läuft in
+ * sync_task. */
+static void asset_relevant_cb(const char *json, int len)
+{
+    cJSON *root = cJSON_ParseWithLength(json, len);
+    if (!root) {
+        ESP_LOGW(TAG, "Relevanzliste-JSON ungültig.");
+        return;
+    }
+    if (!cJSON_IsArray(root)) {
+        ESP_LOGW(TAG, "Relevanzliste: kein JSON-Array.");
+        cJSON_Delete(root);
+        return;
+    }
+
+    xSemaphoreTake(s_relevant_mutex, portMAX_DELAY);
+    s_relevant_count = 0;
+    const cJSON *item;
+    cJSON_ArrayForEach(item, root) {
+        if (!cJSON_IsString(item)) continue;
+        if (s_relevant_count >= MAX_RELEVANT_ASSETS) break;
+        strncpy(s_relevant[s_relevant_count], item->valuestring, ASSET_ID_MAX - 1);
+        s_relevant[s_relevant_count][ASSET_ID_MAX - 1] = '\0';
+        s_relevant_count++;
+    }
+    ESP_LOGI(TAG, "Relevanzliste aktualisiert: %d Asset(s).", s_relevant_count);
+    xSemaphoreGive(s_relevant_mutex);
+    cJSON_Delete(root);
+
+    xSemaphoreGive(s_sync_trigger);
 }
 
 /* ── Öffentliche API ─────────────────────────────────────────────────────── */
@@ -332,7 +476,11 @@ void hannah_asset_init(void)
     esp_spiffs_info("spiffs", &total, &used);
     ESP_LOGI(TAG, "SPIFFS: %u/%u bytes", used, total);
 
-    xTaskCreate(update_task, "asset_upd", 16384, NULL, 3, NULL);
+    s_relevant_mutex = xSemaphoreCreateMutex();
+    s_sync_trigger   = xSemaphoreCreateBinary();
+    hannah_net_set_asset_relevant_callback(asset_relevant_cb);
+
+    xTaskCreate(sync_task, "asset_sync", 16384, NULL, 3, NULL);
 }
 
 bool hannah_asset_play(const char *asset_id)

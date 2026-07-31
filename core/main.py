@@ -53,6 +53,11 @@ from hannah.ble_location import BleLocationEngine, BleTag
 from hannah.alarms import AlarmManager, format_duration
 from hannah.__version__ import VERSION as HANNAH_VERSION
 
+# Asset-IDs, die Core per play_asset anfordern könnte (#170) — Grundlage für die
+# Relevanzliste, die hannah_asset auf dem Satelliten reaktiv statt blind alles im
+# Manifest lädt. Core braucht dafür nicht das satellite-Namespace-Manifest zu lesen.
+RELEVANT_ASSET_IDS = ["alarm_ring", "timer_jingle"]
+
 
 def setup_logging(level: str):
     logging.basicConfig(
@@ -1025,6 +1030,7 @@ def main():
                 mqtt_handler.publish_sampling_mode(device_id, False)
             if ble_macs:
                 mqtt_handler.publish_ble_watchlist(device_id, ble_macs)
+            mqtt_handler.publish_asset_relevant(device_id, RELEVANT_ASSET_IDS)
             if _connect_pcm:
                 threading.Thread(
                     target=_send_audio,

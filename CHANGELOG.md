@@ -5,6 +5,15 @@
 -->
 
 
+## 0.67.0 (2026-07-31)
+### Hannah Core
+* Added: `mqtt_handler.publish_asset_relevant()` — publishes a retained per-satellite MQTT topic (`hannah/satellite/{device}/assets/relevant`) listing the asset IDs Core actually needs on that satellite (currently `alarm_ring`, `timer_jingle`), sent whenever a satellite (re-)connects. Replaces `hannah_asset`'s previous blind "load everything in the manifest" behavior with a list Core derives from its own business logic, without reading the `satellite`-namespace manifest itself (Refs #170)
+
+### Satellite Firmware
+* Changed: `hannah_asset` now caches only what's actually relevant instead of blindly downloading everything listed in the `satellite`-namespace manifest. Reacts to Core's new retained `hannah/satellite/{device}/assets/relevant` MQTT topic (a JSON array of asset IDs) instead of running a single blind pass ~50s after boot — a fixed, firmware-internal exception list (currently just `wakeword`, #166's model override) stays relevant independent of Core. Assets no longer covered by either list are now garbage-collected from the SPIFFS cache (incl. their sha256 NVS entry) instead of accumulating forever (Refs #170)
+* Fixed: `hannah_wakeword_init()` logged "Wakeword bereit" unconditionally even when `AllocateTensors()` failed, silently leaving wake detection disabled (`hannah_wakeword_process()` always returning 0.0) with no indication in the log. Now only logs ready on actual success, otherwise a clear error (Refs #171)
+* Changed: `CONFIG_HANNAH_TFLITE_ARENA_KB` default raised 256 → 512 (Kconfig `range` widened to `64 1024`) — a newly retrained wakeword model needed more scratch memory than the previous default provided (Refs #171)
+
 ## 0.66.0 (2026-07-30)
 ### Satellite Firmware
 * Added: wakeword model override via the existing Asset-Server cache (`hannah_asset`, namespace `satellite`, asset ID `wakeword`) — lets a newly trained `.tflite` model be tested by upload alone, without a firmware release. `hannah_asset` generalized to cache assets by raw ID (dropped the hardcoded `.wav` suffix) and gained `hannah_asset_read_to_psram()` for non-audio consumers. `hannah_wakeword` loads the cached override into PSRAM at init if present and valid, otherwise falls back to the built-in default model. Asset-cache init moved earlier in `main.c` (before `hannah_audio_init()`, which synchronously triggers wakeword init) so SPIFFS is mounted in time. Takes effect on next boot, not a live hot-swap (Refs #166)
