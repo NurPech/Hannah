@@ -5,6 +5,11 @@
 -->
 
 
+## 0.67.2 (2026-07-31)
+### Satellite Firmware
+* Changed: `CONFIG_HANNAH_TFLITE_ARENA_KB` default raised 1024 → 4096 (Kconfig `range` widened to `64 4096`) — 1024 (set in v0.67.1) still wasn't enough for the retrained wakeword model, `AllocateTensors()` still failed. Jumping straight to a generous value instead of doubling again, PSRAM has ample headroom (8 MB on N16R8) (Refs #171)
+* Added: on `AllocateTensors()` failure, `hannah_wakeword` now also logs `arena_used_bytes()` — gives a concrete lower-bound data point instead of just "Arena zu klein?" if this ever needs to be raised again (Refs #171)
+
 ## 0.67.1 (2026-07-31)
 ### Satellite Firmware
 * Changed: `CONFIG_HANNAH_TFLITE_ARENA_KB` default raised 512 → 1024 — 512 (set in the v0.67.0 release) still wasn't enough for a newly retrained wakeword model, `AllocateTensors()` still failed (Refs #171)

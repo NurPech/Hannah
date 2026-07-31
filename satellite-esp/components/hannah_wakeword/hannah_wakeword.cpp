@@ -115,8 +115,9 @@ static void tflite_init(void)
 
     static tflite::MicroInterpreter interp(model, s_resolver, s_arena, ARENA_SIZE, s_resource_vars);
     if (interp.AllocateTensors() != kTfLiteOk) {
-        ESP_LOGE(TAG, "AllocateTensors fehlgeschlagen — Arena zu klein? (%u KB)",
-                 (unsigned)(ARENA_SIZE / 1024));
+        ESP_LOGE(TAG, "AllocateTensors fehlgeschlagen — Arena zu klein? (%u KB Arena, %u B davon belegt vor Abbruch)",
+                 (unsigned)(ARENA_SIZE / 1024),
+                 (unsigned)interp.arena_used_bytes());
         return;
     }
     s_interpreter = &interp;

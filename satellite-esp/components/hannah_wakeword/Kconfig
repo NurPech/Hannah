@@ -42,7 +42,7 @@ menu "Hannah Wake Word"
     config HANNAH_TFLITE_ARENA_KB
         int "TFLite-Micro Arena-Größe (KB)"
         default 512
-        range 64 1024
+        range 64 4096
         help
             Arbeitsspeicher für den TFLite-Micro-Interpreter.
             Bei AllocateTensors-Fehler erhöhen.
