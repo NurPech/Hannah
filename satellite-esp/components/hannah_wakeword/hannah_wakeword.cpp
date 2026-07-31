@@ -210,7 +210,13 @@ void hannah_wakeword_init(void)
     cfg.filterbank.lower_band_limit            = 125.0f;
     cfg.filterbank.upper_band_limit            = 7500.0f;
     cfg.pcan_gain_control.enable_pcan          = 1;
-    cfg.noise_reduction.min_signal_remaining = 1.0f;
+    /* noise_reduction.min_signal_remaining bewusst NICHT überschrieben (#174):
+     * FrontendFillConfigWithDefaults() setzt hier bereits 0.05, exakt der Wert,
+     * den auch die Trainings-Pipeline (pymicro-features, MicroFrontend() ohne
+     * Parameter) verwendet. Eine frühere IDF-6.0-Kompatibilitätsänderung hatte
+     * das versehentlich auf 1.0 überschrieben (= Rauschunterdrückung
+     * wirkungslos) und damit die Live-Features systematisch von den
+     * Trainings-Features abweichen lassen — Modell hat nie ausgelöst. */
 
     if (!FrontendPopulateState(&cfg, &s_frontend, 16000)) {
         ESP_LOGE(TAG, "FrontendPopulateState fehlgeschlagen");

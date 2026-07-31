@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.6 (2026-07-31)
+### Satellite Firmware
+* Fixed: root cause of on-device wakeword confidence staying flat at 0.0000 despite the model validating correctly offline — `hannah_wakeword_init()` explicitly set `noise_reduction.min_signal_remaining = 1.0f`, effectively neutering noise reduction in the AudioFrontend. The training pipeline (`pymicro-features`, `MicroFrontend()` with no parameters) uses the library default of `0.05`, verified directly against both `pymicro-features`' and TFLite Micro's own source. Live features were systematically shifted away from what the model was trained on. Traced to an IDF 6.0 compatibility change that replaced the removed `enable_noise_reduction = 0` field with this value to preserve "noise reduction disabled" — training never ran with it disabled, so the substitution introduced the mismatch. Fix: stop overriding the field, let `FrontendFillConfigWithDefaults()`'s 0.05 default apply, matching training exactly (Refs #173, #174)
+
 ## 0.67.5 (2026-07-31)
 ### Satellite Firmware
 * Added: `hannah_wakeword_last_debug()` — exposes the AudioFrontend's `feat.size`/`num_read` (does it even produce complete feature frames?), a preview of both the raw pre-quantization mel values and the quantized int8 values actually fed to the model, the raw unscaled output tensor byte, and a cumulative `Invoke()` failure counter. Wired into the existing periodic idle debug log (#171), which also gained mic peak amplitude (clipping check) alongside the existing RMS. All in one release rather than iterating — on-device wakeword confidence stays flat at 0.0000 despite the model validating correctly offline (72.5% true-positive rate on real recordings via `test_inference.py`), and this is the full diagnostic chain needed to narrow it down without physical device access (Refs #173)
