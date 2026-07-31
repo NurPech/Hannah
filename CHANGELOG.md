@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.7 (2026-07-31)
+### Satellite Firmware
+* Fixed: `/log`'s ring buffer was only 8KB and lived in internal DRAM — the periodic wakeword debug log (#173) alone produces ~1.2 KB/s, overwriting the buffer within ~7s and making one-time boot/asset-sync messages (e.g. wakeword model override confirmation) practically impossible to catch. Moved to PSRAM and grown to 64KB (Refs #175)
+
 ## 0.67.6 (2026-07-31)
 ### Satellite Firmware
 * Fixed: root cause of on-device wakeword confidence staying flat at 0.0000 despite the model validating correctly offline — `hannah_wakeword_init()` explicitly set `noise_reduction.min_signal_remaining = 1.0f`, effectively neutering noise reduction in the AudioFrontend. The training pipeline (`pymicro-features`, `MicroFrontend()` with no parameters) uses the library default of `0.05`, verified directly against both `pymicro-features`' and TFLite Micro's own source. Live features were systematically shifted away from what the model was trained on. Traced to an IDF 6.0 compatibility change that replaced the removed `enable_noise_reduction = 0` field with this value to preserve "noise reduction disabled" — training never ran with it disabled, so the substitution introduced the mismatch. Fix: stop overriding the field, let `FrontendFillConfigWithDefaults()`'s 0.05 default apply, matching training exactly (Refs #173, #174)

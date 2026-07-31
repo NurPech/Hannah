@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "freertos/portmacro.h"
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 
 #include "hannah_config.h"
@@ -48,9 +49,13 @@ static const char S_HEAD[] =
 
 /* ── Log-Ringpuffer ──────────────────────────────────────────────────────── */
 
-#define LOG_BUF_SIZE (8 * 1024)
+/* War 8 KB internes DRAM — reichte bei den periodischen Wakeword-Debug-Zeilen
+ * (#173, ~1,2 KB/s) für nur ~7s, bevor die interessanten Boot-/Asset-Sync-
+ * Zeilen schon überschrieben waren. Jetzt auf PSRAM (reichlich vorhanden,
+ * N16R8 hat 8 MB) und deutlich größer. */
+#define LOG_BUF_SIZE (64 * 1024)
 
-static char             s_log_buf[LOG_BUF_SIZE];
+static char             *s_log_buf  = NULL;
 static volatile size_t  s_log_wp   = 0;
 static volatile bool    s_log_full = false;
 static portMUX_TYPE     s_log_mux  = portMUX_INITIALIZER_UNLOCKED;
@@ -60,6 +65,8 @@ static int log_capture(const char *fmt, va_list args)
 {
     /* Erst Original-Handler (UART), dann in Ringpuffer */
     int ret = s_orig_vprintf ? s_orig_vprintf(fmt, args) : 0;
+
+    if (!s_log_buf) return ret;
 
     va_list copy;
     va_copy(copy, args);
@@ -82,6 +89,7 @@ static int log_capture(const char *fmt, va_list args)
 /* Kopiert Ringpuffer in der richtigen Reihenfolge nach out, gibt Länge zurück. */
 static size_t log_snapshot(char *out)
 {
+    if (!s_log_buf) return 0;
     size_t wp   = s_log_wp;
     bool   full = s_log_full;
     if (!full) {
@@ -106,7 +114,7 @@ static size_t log_snapshot(char *out)
  * Neustart hinweg, abrufbar danach über GET /log/last. */
 static void persist_log_to_flash(void)
 {
-    char *buf = malloc(LOG_BUF_SIZE);
+    char *buf = (char *)heap_caps_malloc(LOG_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return;
     size_t len = log_snapshot(buf);
 
@@ -594,7 +602,7 @@ static esp_err_t log_page_handler(httpd_req_t *req)
 
 static esp_err_t log_data_handler(httpd_req_t *req)
 {
-    char *buf = malloc(LOG_BUF_SIZE);
+    char *buf = (char *)heap_caps_malloc(LOG_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return ESP_ERR_NO_MEM;
     size_t len = log_snapshot(buf);
     httpd_resp_set_type(req, "text/plain");
@@ -783,6 +791,12 @@ void hannah_webserver_start(void)
     }
 
     /* Log-Ringpuffer aktivieren — ab jetzt werden alle ESP_LOG* Aufrufe gepuffert */
+    if (!s_log_buf) {
+        s_log_buf = (char *)heap_caps_malloc(LOG_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_log_buf)
+            ESP_LOGE(TAG, "Log-Ringpuffer: PSRAM-Allokation fehlgeschlagen (%u KB) — Log-Viewer bleibt leer.",
+                     (unsigned)(LOG_BUF_SIZE / 1024));
+    }
     if (!s_orig_vprintf)
         s_orig_vprintf = esp_log_set_vprintf(log_capture);
     esp_register_shutdown_handler(persist_log_to_flash);
