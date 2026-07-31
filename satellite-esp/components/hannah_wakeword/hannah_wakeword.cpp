@@ -102,6 +102,10 @@ static void tflite_init(void)
     s_resolver.AddVarHandle();
     s_resolver.AddAssignVariable();
     s_resolver.AddReadVariable();
+    s_resolver.AddTranspose();
+    s_resolver.AddSub();
+    s_resolver.AddSqrt();
+    s_resolver.AddDiv();
 
     const tflite::Model *model = load_model();
     if (model->version() != TFLITE_SCHEMA_VERSION) {

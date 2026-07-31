@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.3 (2026-07-31)
+### Satellite Firmware
+* Fixed: root cause of the wakeword `AllocateTensors()` failures (#171) was never arena size — the retrained model's `arena_used_bytes()` on failure was only ~1.9 KB out of 4096 KB available, way too little to be a capacity issue. Static analysis of the model's flatbuffer `operator_codes` showed it uses `TRANSPOSE`/`SUB`/`SQRT`/`DIV` ops (a LayerNorm-style architecture, no `CONV_2D`/`DEPTHWISE_CONV_2D` at all — a different network topology from the built-in inception/streaming model), none of which were registered in `hannah_wakeword`'s `MicroMutableOpResolver<20>`. Added the 4 missing ops — fits exactly at the existing capacity of 20 (Refs #171)
+
 ## 0.67.2 (2026-07-31)
 ### Satellite Firmware
 * Changed: `CONFIG_HANNAH_TFLITE_ARENA_KB` default raised 1024 → 4096 (Kconfig `range` widened to `64 4096`) — 1024 (set in v0.67.1) still wasn't enough for the retrained wakeword model, `AllocateTensors()` still failed. Jumping straight to a generous value instead of doubling again, PSRAM has ample headroom (8 MB on N16R8) (Refs #171)
