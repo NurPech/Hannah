@@ -47,6 +47,12 @@ extern "C" {
 typedef void (*hannah_asset_play_result_cb_t)(const char *asset_id, bool ok);
 
 void hannah_asset_init(void);
+
+/* SPIFFS erneut mounten, ohne den Rest von hannah_asset_init() zu wiederholen
+ * (Sync-Task/Callback nur einmal beim Boot). Für den Fall, dass OTA nach
+ * esp_vfs_spiffs_unregister() fehlschlägt und der Override-Zugriff
+ * (hannah_asset_read_to_psram) wieder funktionieren muss. */
+bool hannah_asset_remount(void);
 bool hannah_asset_play(const char *asset_id);
 void hannah_asset_play_async(const char *asset_id);
 void hannah_asset_set_play_result_callback(hannah_asset_play_result_cb_t cb);

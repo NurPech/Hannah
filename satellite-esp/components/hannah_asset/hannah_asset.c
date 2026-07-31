@@ -459,7 +459,7 @@ static void asset_relevant_cb(const char *json, int len)
 
 /* ── Öffentliche API ─────────────────────────────────────────────────────── */
 
-void hannah_asset_init(void)
+bool hannah_asset_remount(void)
 {
     esp_vfs_spiffs_conf_t conf = {
         .base_path              = ASSET_MOUNT,
@@ -470,11 +470,17 @@ void hannah_asset_init(void)
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "SPIFFS mount fehlgeschlagen: %s", esp_err_to_name(ret));
-        return;
+        return false;
     }
     size_t total = 0, used = 0;
     esp_spiffs_info("spiffs", &total, &used);
     ESP_LOGI(TAG, "SPIFFS: %u/%u bytes", used, total);
+    return true;
+}
+
+void hannah_asset_init(void)
+{
+    if (!hannah_asset_remount()) return;
 
     s_relevant_mutex = xSemaphoreCreateMutex();
     s_sync_trigger   = xSemaphoreCreateBinary();

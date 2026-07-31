@@ -440,6 +440,20 @@ static void mic_task(void *arg)
                         s_noise_floor_ema = s_noise_floor_ema * 0.999f + rms_idle * 0.001f;
                 }
 
+                /* Wakeword-Debug: alle ~500ms Mic-Pegel + Spitzen-Confidence loggen —
+                 * zeigt ob überhaupt Audio ankommt (rms) und wie nah die Erkennung
+                 * ans Threshold kommt (confidence), unabhängig vom Detection-Event. */
+                static int   s_wakeword_debug_ctr = 0;
+                static float s_wakeword_debug_max = 0.0f;
+                if (confidence > s_wakeword_debug_max) s_wakeword_debug_max = confidence;
+                if (++s_wakeword_debug_ctr >= 50) {
+                    s_wakeword_debug_ctr = 0;
+                    ESP_LOGI(TAG, "Wakeword-Debug: rms=%.4f confidence(peak/500ms)=%.4f threshold=%.2f noise_ema=%.4f",
+                             rms_idle, s_wakeword_debug_max,
+                             hannah_config_get()->wakeword_threshold / 100.0f, s_noise_floor_ema);
+                    s_wakeword_debug_max = 0.0f;
+                }
+
                 /* PTT oder Wake-Word → Streaming starten */
                 if ((s_ptt_active && !was_ptt) ||
                     confidence >= hannah_config_get()->wakeword_threshold / 100.0f) {
@@ -868,4 +882,10 @@ void hannah_audio_pause_wakeword(void)
 {
     s_wakeword_paused = true;
     ESP_LOGI(TAG, "Wakeword-Inference pausiert (OTA aktiv).");
+}
+
+void hannah_audio_resume_wakeword(void)
+{
+    s_wakeword_paused = false;
+    ESP_LOGI(TAG, "Wakeword-Inference fortgesetzt (OTA fehlgeschlagen).");
 }

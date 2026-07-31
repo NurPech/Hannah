@@ -5,6 +5,13 @@
 -->
 
 
+## 0.67.4 (2026-07-31)
+### Satellite Firmware
+* Added: periodic wakeword debug log in `hannah_audio` (every ~500ms while idle) — mic RMS level and peak wakeword confidence, independent of whether detection actually fires. Lets a live device confirm whether audio is reaching the model at all and how close confidence gets to the threshold, without needing a detection event (Refs #171)
+* Changed: `CONFIG_HANNAH_TFLITE_ARENA_KB` default lowered 4096 → 128 KB — a working retrain (correct op set, no hybrid quantization) actually loaded and reported `arena_used_bytes()` of 29332 B, the empirical number this whole saga (#171) was after from the start. 128 KB keeps a ~4.5× margin over that without wasting PSRAM; `range` stays at `64 4096` for future retrains that may need more (Refs #171)
+* Fixed: OTA download could fail with `esp-aes: Failed to allocate memory` — mbedTLS is globally pinned to PSRAM (`hannah_net.c`), and the wakeword TFLite arena stayed allocated in that same PSRAM pool for the whole OTA download (`hannah_audio_pause_wakeword()` only paused inference, never freed the arena). `hannah_wakeword` gained `hannah_wakeword_deinit()`/`hannah_wakeword_reinit()` (arena + interpreter now heap-allocated instead of a non-freeable function-local `static`); `hannah_ota` frees the arena right before `esp_https_ota()` for maximum PSRAM headroom (#172)
+* Fixed: a failed OTA left wakeword detection dead until a manual reboot — no code path ever un-paused it. Added `hannah_audio_resume_wakeword()` and `hannah_asset_remount()` (SPIFFS is unmounted for OTA, needed again for the asset-cache model override), wired into `hannah_ota`'s failure branch alongside `hannah_wakeword_reinit()` — recovers automatically, no manual intervention needed (#172)
+
 ## 0.67.3 (2026-07-31)
 ### Satellite Firmware
 * Fixed: root cause of the wakeword `AllocateTensors()` failures (#171) was never arena size — the retrained model's `arena_used_bytes()` on failure was only ~1.9 KB out of 4096 KB available, way too little to be a capacity issue. Static analysis of the model's flatbuffer `operator_codes` showed it uses `TRANSPOSE`/`SUB`/`SQRT`/`DIV` ops (a LayerNorm-style architecture, no `CONV_2D`/`DEPTHWISE_CONV_2D` at all — a different network topology from the built-in inception/streaming model), none of which were registered in `hannah_wakeword`'s `MicroMutableOpResolver<20>`. Added the 4 missing ops — fits exactly at the existing capacity of 20 (Refs #171)

@@ -48,5 +48,10 @@ void hannah_audio_start_listen_after_tts(void);
 
 /* Wakeword-Inference pausieren — mic_task schläft statt TFLite auszuführen.
  * Wird von OTA aufgerufen um IDLE0-Starvation während des Downloads zu vermeiden.
- * Nicht reversibel — OTA startet danach einen Neustart. */
+ * Bei Erfolg reboot't OTA danach ohnehin; bei Fehlschlag siehe
+ * hannah_audio_resume_wakeword(). */
 void hannah_audio_pause_wakeword(void);
+
+/* Gegenstück zu hannah_audio_pause_wakeword() — für den Fall, dass OTA
+ * fehlschlägt und kein Neustart folgt (kein manueller Eingriff nötig). */
+void hannah_audio_resume_wakeword(void);

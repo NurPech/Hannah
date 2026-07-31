@@ -14,6 +14,8 @@
 #include "hannah_net.h"
 #include "hannah_config.h"
 #include "hannah_audio.h"
+#include "hannah_wakeword.h"
+#include "hannah_asset.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -268,6 +270,7 @@ static void ota_update_task(void *arg)
 
         ESP_LOGI(TAG, "Starte OTA von %s", s_pending_url);
         hannah_audio_pause_wakeword();
+        hannah_wakeword_deinit();  /* PSRAM für mbedTLS-Download freigeben (#171) */
         esp_vfs_spiffs_unregister("spiffs");
         ESP_LOGI(TAG, "Free heap vor OTA: %lu", esp_get_free_heap_size());
 
@@ -296,6 +299,9 @@ static void ota_update_task(void *arg)
             esp_restart();
         } else {
             ESP_LOGE(TAG, "OTA fehlgeschlagen: %s", esp_err_to_name(err));
+            hannah_asset_remount();
+            hannah_wakeword_reinit();
+            hannah_audio_resume_wakeword();
         }
     }
 }

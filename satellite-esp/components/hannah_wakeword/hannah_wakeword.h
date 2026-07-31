@@ -32,6 +32,20 @@ extern "C" {
 void  hannah_wakeword_init(void);
 
 /**
+ * Gibt die TFLite-Arena (PSRAM) und den Interpreter frei. Danach liefert
+ * hannah_wakeword_process() konstant 0.0f, bis hannah_wakeword_reinit()
+ * läuft. Für OTA: gibt PSRAM für den mbedTLS-Download frei (siehe #171-Saga).
+ */
+void  hannah_wakeword_deinit(void);
+
+/**
+ * Gegenstück zu hannah_wakeword_deinit() — allokiert Arena + Interpreter neu
+ * (AudioFrontend-Zustand bleibt unangetastet). Für den Fall, dass OTA
+ * fehlschlägt und kein Neustart folgt.
+ */
+void  hannah_wakeword_reinit(void);
+
+/**
  * Verarbeitet einen 10ms-PCM-Frame und gibt die Wake-Word-Confidence zurück.
  * @param pcm   Zeiger auf WAKEWORD_STEP_SAMPLES int16-Samples (mono, 16kHz)
  * @return      Wahrscheinlichkeit [0.0, 1.0] — 0.0 im Placeholder-Modus

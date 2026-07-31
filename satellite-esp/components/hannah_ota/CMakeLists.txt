@@ -5,6 +5,8 @@ idf_component_register(
         hannah_config
         hannah_net
         hannah_audio
+        hannah_wakeword
+        hannah_asset
         esp_http_client
         esp_https_ota
         esp_app_format

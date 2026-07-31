@@ -25,6 +25,7 @@
 #include "hannah_asset.h"
 #include "model/model.h"
 #include "esp_log.h"
+#include <new>
 
 #include "tensorflow/lite/experimental/microfrontend/lib/frontend.h"
 #include "tensorflow/lite/experimental/microfrontend/lib/frontend_util.h"
@@ -49,10 +50,12 @@ static uint8_t  s_rv_arena[RV_ARENA_SIZE];
 
 static struct FrontendState               s_frontend;
 static tflite::MicroMutableOpResolver<20> s_resolver;
+static bool                               s_resolver_ready   = false;
 static tflite::MicroInterpreter          *s_interpreter      = nullptr;
 static tflite::MicroResourceVariables    *s_resource_vars    = nullptr;
 static TfLiteTensor                      *s_input            = nullptr;
 static TfLiteTensor                      *s_output           = nullptr;
+static uint8_t                           *s_model_override_buf = nullptr;
 
 /* ------------------------------------------------------------------ */
 
@@ -60,11 +63,10 @@ static TfLiteTensor                      *s_output           = nullptr;
  * eingebaute Default-Array (#166). */
 static const tflite::Model *load_model(void)
 {
-    uint8_t *override_buf  = nullptr;
-    size_t   override_size = 0;
+    size_t override_size = 0;
 
-    if (hannah_asset_read_to_psram("wakeword", &override_buf, &override_size)) {
-        const tflite::Model *m = tflite::GetModel(override_buf);
+    if (hannah_asset_read_to_psram("wakeword", &s_model_override_buf, &override_size)) {
+        const tflite::Model *m = tflite::GetModel(s_model_override_buf);
         if (m->version() == TFLITE_SCHEMA_VERSION) {
             ESP_LOGI(TAG, "Wakeword-Override aus Asset-Cache geladen (%u Bytes).",
                      (unsigned)override_size);
@@ -72,19 +74,16 @@ static const tflite::Model *load_model(void)
         }
         ESP_LOGW(TAG, "Wakeword-Override ungültig (Schema-Version) — "
                       "falle zurück auf eingebautes Modell.");
-        heap_caps_free(override_buf);
+        heap_caps_free(s_model_override_buf);
+        s_model_override_buf = nullptr;
     }
 
     return tflite::GetModel(hey_hannah_int8_tflite);
 }
 
-static void tflite_init(void)
+static void ensure_resolver(void)
 {
-    s_arena = (uint8_t *)heap_caps_malloc(ARENA_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_arena) {
-        ESP_LOGE(TAG, "PSRAM-Allokation fehlgeschlagen (%u KB)", (unsigned)(ARENA_SIZE / 1024));
-        return;
-    }
+    if (s_resolver_ready) return;
 
     s_resolver.AddConv2D();
     s_resolver.AddDepthwiseConv2D();
@@ -107,30 +106,87 @@ static void tflite_init(void)
     s_resolver.AddSqrt();
     s_resolver.AddDiv();
 
+    s_resolver_ready = true;
+}
+
+static void free_model_override(void)
+{
+    if (s_model_override_buf) {
+        heap_caps_free(s_model_override_buf);
+        s_model_override_buf = nullptr;
+    }
+}
+
+/* Allokiert Arena + Interpreter neu. Wiederholt aufrufbar (OTA-Reinit) —
+ * der Resolver wird dabei nur beim ersten Mal befüllt. */
+static void tflite_init(void)
+{
+    s_arena = (uint8_t *)heap_caps_malloc(ARENA_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_arena) {
+        ESP_LOGE(TAG, "PSRAM-Allokation fehlgeschlagen (%u KB)", (unsigned)(ARENA_SIZE / 1024));
+        return;
+    }
+
+    ensure_resolver();
+
     const tflite::Model *model = load_model();
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         ESP_LOGE(TAG, "TFLite schema version mismatch: %lu vs %d",
                  (unsigned long)model->version(), TFLITE_SCHEMA_VERSION);
+        free_model_override();
+        heap_caps_free(s_arena);
+        s_arena = nullptr;
         return;
     }
 
     auto *rv_allocator = tflite::MicroAllocator::Create(s_rv_arena, RV_ARENA_SIZE);
     s_resource_vars    = tflite::MicroResourceVariables::Create(rv_allocator, 20);
 
-    static tflite::MicroInterpreter interp(model, s_resolver, s_arena, ARENA_SIZE, s_resource_vars);
-    if (interp.AllocateTensors() != kTfLiteOk) {
-        ESP_LOGE(TAG, "AllocateTensors fehlgeschlagen — Arena zu klein? (%u KB Arena, %u B davon belegt vor Abbruch)",
-                 (unsigned)(ARENA_SIZE / 1024),
-                 (unsigned)interp.arena_used_bytes());
+    s_interpreter = new (std::nothrow) tflite::MicroInterpreter(
+        model, s_resolver, s_arena, ARENA_SIZE, s_resource_vars);
+    if (!s_interpreter) {
+        ESP_LOGE(TAG, "MicroInterpreter-Allokation fehlgeschlagen");
+        free_model_override();
+        heap_caps_free(s_arena);
+        s_arena = nullptr;
         return;
     }
-    s_interpreter = &interp;
-    s_input       = s_interpreter->input(0);
-    s_output      = s_interpreter->output(0);
+
+    if (s_interpreter->AllocateTensors() != kTfLiteOk) {
+        ESP_LOGE(TAG, "AllocateTensors fehlgeschlagen — Arena zu klein? (%u KB Arena, %u B davon belegt vor Abbruch)",
+                 (unsigned)(ARENA_SIZE / 1024),
+                 (unsigned)s_interpreter->arena_used_bytes());
+        delete s_interpreter;
+        s_interpreter = nullptr;
+        free_model_override();
+        heap_caps_free(s_arena);
+        s_arena = nullptr;
+        return;
+    }
+    s_input  = s_interpreter->input(0);
+    s_output = s_interpreter->output(0);
 
     ESP_LOGI(TAG, "TFLite geladen: Arena %u KB, verwendet %u B.",
              (unsigned)(ARENA_SIZE / 1024),
              (unsigned)s_interpreter->arena_used_bytes());
+}
+
+/* Gibt Arena, Interpreter und ggf. den Asset-Cache-Modell-Override frei. */
+static void tflite_deinit(void)
+{
+    if (s_interpreter) {
+        delete s_interpreter;
+        s_interpreter = nullptr;
+    }
+    s_input  = nullptr;
+    s_output = nullptr;
+
+    free_model_override();
+
+    if (s_arena) {
+        heap_caps_free(s_arena);
+        s_arena = nullptr;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -157,6 +213,23 @@ void hannah_wakeword_init(void)
         ESP_LOGI(TAG, "Wakeword bereit (AudioFrontend + TFLite Micro).");
     } else {
         ESP_LOGE(TAG, "Wakeword-Init fehlgeschlagen — Erkennung deaktiviert (liefert konstant 0.0).");
+    }
+}
+
+void hannah_wakeword_deinit(void)
+{
+    tflite_deinit();
+    ESP_LOGI(TAG, "Wakeword deinitialisiert — %u KB PSRAM freigegeben.",
+             (unsigned)(ARENA_SIZE / 1024));
+}
+
+void hannah_wakeword_reinit(void)
+{
+    tflite_init();
+    if (s_interpreter) {
+        ESP_LOGI(TAG, "Wakeword reaktiviert (Re-Init nach OTA-Fehlschlag).");
+    } else {
+        ESP_LOGE(TAG, "Wakeword-Reinit fehlgeschlagen — Erkennung bleibt deaktiviert.");
     }
 }
 
