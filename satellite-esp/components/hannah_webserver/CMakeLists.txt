@@ -12,4 +12,5 @@ idf_component_register(
         esp_system
         freertos
         espressif__cjson
+        lwip
 )

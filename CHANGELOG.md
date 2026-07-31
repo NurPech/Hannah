@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.8 (2026-07-31)
+### Satellite Firmware
+* Added: fire-and-forget UDP syslog client (RFC 5424), additive to the local `/log` ring buffer, not a replacement — `/settings` gained a "Syslog" section (`syslog_host` as IPv4 literal, `syslog_port`, default 514, empty host = disabled). Every captured log line is sent non-blocking to the configured receiver alongside the existing ring buffer / UART output, so the buffer's fixed size (#175) no longer risks losing early boot messages before anyone gets to look at `/log` (Refs #176)
+
 ## 0.67.7 (2026-07-31)
 ### Satellite Firmware
 * Fixed: `/log`'s ring buffer was only 8KB and lived in internal DRAM — the periodic wakeword debug log (#173) alone produces ~1.2 KB/s, overwriting the buffer within ~7s and making one-time boot/asset-sync messages (e.g. wakeword model override confirmation) practically impossible to catch. Moved to PSRAM and grown to 64KB (Refs #175)

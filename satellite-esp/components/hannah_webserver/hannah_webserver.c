@@ -17,6 +17,8 @@
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
 #include "cJSON.h"
+#include "lwip/sockets.h"
+#include <fcntl.h>
 
 #include "hannah_config.h"
 #include "hannah_net.h"
@@ -61,12 +63,72 @@ static volatile bool    s_log_full = false;
 static portMUX_TYPE     s_log_mux  = portMUX_INITIALIZER_UNLOCKED;
 static vprintf_like_t   s_orig_vprintf = NULL;
 
+/* ── Syslog (fire-and-forget UDP, RFC 5424) ─────────────────────────────────
+ * Läuft additiv zum Ringpuffer, nicht als Ersatz — für den Fall, dass jemand
+ * das Gerät nicht rechtzeitig unter /log erwischt (siehe #175). Host ist
+ * bewusst nur als IPv4-Literal erlaubt: log_capture() läuft im Hot-Path
+ * (potenziell jede 10ms während Wakeword-Inference), eine DNS-Auflösung dort
+ * wäre blockierend. */
+static int                s_syslog_sock        = -1;
+static struct sockaddr_in s_syslog_addr;
+static char               s_syslog_host_cached[64] = {0};
+static uint16_t           s_syslog_port_cached     = 0;
+
+static void syslog_send(const char *line, int len)
+{
+    const hannah_config_t *cfg = hannah_config_get();
+    if (cfg->syslog_host[0] == '\0') return;
+
+    if (strcmp(cfg->syslog_host, s_syslog_host_cached) != 0 ||
+        cfg->syslog_port != s_syslog_port_cached) {
+        struct sockaddr_in addr = {0};
+        addr.sin_family = AF_INET;
+        addr.sin_port   = htons(cfg->syslog_port);
+        if (inet_aton(cfg->syslog_host, &addr.sin_addr) == 0) {
+            /* Kein gültiges IPv4-Literal — deaktiviert bis sich die Config
+             * wieder ändert (kein Retry-Spam bei jedem Log-Aufruf). */
+            s_syslog_host_cached[0] = '\0';
+            return;
+        }
+        s_syslog_addr = addr;
+        snprintf(s_syslog_host_cached, sizeof(s_syslog_host_cached), "%s", cfg->syslog_host);
+        s_syslog_port_cached = cfg->syslog_port;
+
+        if (s_syslog_sock < 0) {
+            s_syslog_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (s_syslog_sock >= 0) {
+                int flags = fcntl(s_syslog_sock, F_GETFL, 0);
+                fcntl(s_syslog_sock, F_SETFL, flags | O_NONBLOCK);
+            }
+        }
+    }
+
+    if (s_syslog_sock < 0) return;
+
+    /* ESP-IDF-Log-Zeilen beginnen mit einem Level-Buchstaben (E/W/I/D/V) */
+    int severity;
+    switch (line[0]) {
+        case 'E': severity = 3; break;
+        case 'W': severity = 4; break;
+        case 'D': case 'V': severity = 7; break;
+        default:  severity = 6; break;   /* I und alles andere */
+    }
+    int pri = 16 * 8 + severity;   /* facility local0 */
+
+    char pkt[320];
+    int plen = snprintf(pkt, sizeof(pkt), "<%d>1 - %s hannah-esp - - - %.*s",
+                         pri, hannah_config_get()->device_id, len, line);
+    if (plen > 0) {
+        int send_len = plen < (int)sizeof(pkt) ? plen : (int)sizeof(pkt) - 1;
+        sendto(s_syslog_sock, pkt, send_len, 0,
+               (struct sockaddr *)&s_syslog_addr, sizeof(s_syslog_addr));
+    }
+}
+
 static int log_capture(const char *fmt, va_list args)
 {
-    /* Erst Original-Handler (UART), dann in Ringpuffer */
+    /* Erst Original-Handler (UART), dann in Ringpuffer + Syslog */
     int ret = s_orig_vprintf ? s_orig_vprintf(fmt, args) : 0;
-
-    if (!s_log_buf) return ret;
 
     va_list copy;
     va_copy(copy, args);
@@ -74,8 +136,10 @@ static int log_capture(const char *fmt, va_list args)
     int n = vsnprintf(line, sizeof(line), fmt, copy);
     va_end(copy);
 
-    if (n > 0) {
-        int actual = n < (int)sizeof(line) ? n : (int)sizeof(line) - 1;
+    if (n <= 0) return ret;
+    int actual = n < (int)sizeof(line) ? n : (int)sizeof(line) - 1;
+
+    if (s_log_buf) {
         portENTER_CRITICAL(&s_log_mux);
         for (int i = 0; i < actual; i++) {
             s_log_buf[s_log_wp] = line[i];
@@ -83,6 +147,8 @@ static int log_capture(const char *fmt, va_list args)
         }
         portEXIT_CRITICAL(&s_log_mux);
     }
+
+    syslog_send(line, actual);
     return ret;
 }
 
@@ -273,6 +339,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         "<h3>Asset Server</h3>"
         "<label>URL<input name=asset_url value='%s'></label>"
         "<label>Token<input type=password name=asset_token placeholder='(unverändert lassen)'></label>"
+        "<h3>Syslog</h3>"
+        "<label>Server (IPv4, leer = deaktiviert)<input name=syslog_host value='%s' placeholder='z.B. 192.168.1.10'></label>"
+        "<label>Port<input name=syslog_port value='%u'></label>"
         "<h3>NVS Update API</h3>"
         "<label>Bearer-Token für POST /nvs<input type=password name=nvs_token "
           "placeholder='(unverändert lassen, leer = deaktiviert)'></label>"
@@ -316,6 +385,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         cfg->ota_url,
         cfg->ota_channel,
         cfg->asset_url,
+        cfg->syslog_host, cfg->syslog_port,
         cfg->tls_skip_verify ? " checked" : "",
         S_FOOT);
 
@@ -364,6 +434,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     form_get(body, "ota_url",     new_cfg.ota_url,     sizeof(new_cfg.ota_url));
     form_get(body, "ota_channel", new_cfg.ota_channel, sizeof(new_cfg.ota_channel));
     form_get(body, "asset_url",   new_cfg.asset_url,   sizeof(new_cfg.asset_url));
+    form_get(body, "syslog_host", new_cfg.syslog_host, sizeof(new_cfg.syslog_host));
+
+    char syslog_port_str[8] = {0};
+    if (form_get(body, "syslog_port", syslog_port_str, sizeof(syslog_port_str))) {
+        int p = atoi(syslog_port_str);
+        if (p > 0 && p < 65536) new_cfg.syslog_port = (uint16_t)p;
+    }
 
     char tok[128] = {0};
     if (form_get(body, "ota_token",   tok, sizeof(tok)) && tok[0])
@@ -805,6 +882,12 @@ void hannah_webserver_start(void)
     hannah_net_get_ip_str(ip, sizeof(ip));
     ESP_LOGI(TAG, "Webserver gestartet — http://%s/",
              hannah_net_is_ap_mode() ? "192.168.4.1" : ip);
+
+    const hannah_config_t *cfg = hannah_config_get();
+    if (cfg->syslog_host[0])
+        ESP_LOGI(TAG, "Syslog aktiv -> %s:%u", cfg->syslog_host, cfg->syslog_port);
+    else
+        ESP_LOGI(TAG, "Syslog deaktiviert (kein Server konfiguriert).");
 }
 
 void hannah_webserver_stop(void)
