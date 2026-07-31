@@ -45,9 +45,19 @@ static constexpr int    INPUT_ZERO_POINT = -128;
 static constexpr float  OUTPUT_SCALE     = 1.0f / 256.0f;
 
 static constexpr size_t ARENA_SIZE    = CONFIG_HANNAH_TFLITE_ARENA_KB * 1024;
-static constexpr size_t RV_ARENA_SIZE = 4096;
+/* War 4096 B im internen DRAM, fix und unabhängig vom geladenen Modell (#166
+ * Asset-Override erlaubt ja beliebige Modelle) — #179: bei okay_nabu.tflite
+ * (Home-Assistant-Modell, zum Differenzialtest gegen hey_hannah geladen)
+ * brauchen allein die Streaming-Resource-Variablen ~8 KB (11 States, der
+ * größte einzelne 7104 B) — passte schon für dessen größte einzelne Variable
+ * nicht in die alte Arena. AllocateTensors()/Invoke() melden dabei keinen
+ * Fehler (Haupt-Arena ist groß genug), der Streaming-State selbst lief aber
+ * vermutlich über die zu kleine RV-Arena und blieb degeneriert — passt exakt
+ * zum beobachteten Symptom (Modell "läuft", Output bewegt sich aber nie
+ * sinnvoll). Jetzt großzügig auf PSRAM, analog zu ARENA_SIZE. */
+static constexpr size_t RV_ARENA_SIZE = 32 * 1024;
 static uint8_t *s_arena               = nullptr;
-static uint8_t  s_rv_arena[RV_ARENA_SIZE];
+static uint8_t *s_rv_arena            = nullptr;
 
 static struct FrontendState               s_frontend;
 static tflite::MicroMutableOpResolver<20> s_resolver;
@@ -136,6 +146,15 @@ static void tflite_init(void)
         return;
     }
 
+    s_rv_arena = (uint8_t *)heap_caps_malloc(RV_ARENA_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_rv_arena) {
+        ESP_LOGE(TAG, "PSRAM-Allokation (Resource-Variablen) fehlgeschlagen (%u KB)",
+                 (unsigned)(RV_ARENA_SIZE / 1024));
+        heap_caps_free(s_arena);
+        s_arena = nullptr;
+        return;
+    }
+
     ensure_resolver();
 
     const tflite::Model *model = load_model();
@@ -143,6 +162,8 @@ static void tflite_init(void)
         ESP_LOGE(TAG, "TFLite schema version mismatch: %lu vs %d",
                  (unsigned long)model->version(), TFLITE_SCHEMA_VERSION);
         free_model_override();
+        heap_caps_free(s_rv_arena);
+        s_rv_arena = nullptr;
         heap_caps_free(s_arena);
         s_arena = nullptr;
         return;
@@ -156,6 +177,8 @@ static void tflite_init(void)
     if (!s_interpreter) {
         ESP_LOGE(TAG, "MicroInterpreter-Allokation fehlgeschlagen");
         free_model_override();
+        heap_caps_free(s_rv_arena);
+        s_rv_arena = nullptr;
         heap_caps_free(s_arena);
         s_arena = nullptr;
         return;
@@ -168,6 +191,8 @@ static void tflite_init(void)
         delete s_interpreter;
         s_interpreter = nullptr;
         free_model_override();
+        heap_caps_free(s_rv_arena);
+        s_rv_arena = nullptr;
         heap_caps_free(s_arena);
         s_arena = nullptr;
         return;
@@ -187,10 +212,16 @@ static void tflite_deinit(void)
         delete s_interpreter;
         s_interpreter = nullptr;
     }
-    s_input  = nullptr;
-    s_output = nullptr;
+    s_input         = nullptr;
+    s_output        = nullptr;
+    s_resource_vars = nullptr;
 
     free_model_override();
+
+    if (s_rv_arena) {
+        heap_caps_free(s_rv_arena);
+        s_rv_arena = nullptr;
+    }
 
     if (s_arena) {
         heap_caps_free(s_arena);
