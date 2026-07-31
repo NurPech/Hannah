@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.1 (2026-07-31)
+### Satellite Firmware
+* Changed: `CONFIG_HANNAH_TFLITE_ARENA_KB` default raised 512 → 1024 — 512 (set in the v0.67.0 release) still wasn't enough for a newly retrained wakeword model, `AllocateTensors()` still failed (Refs #171)
+
 ## 0.67.0 (2026-07-31)
 ### Hannah Core
 * Added: `mqtt_handler.publish_asset_relevant()` — publishes a retained per-satellite MQTT topic (`hannah/satellite/{device}/assets/relevant`) listing the asset IDs Core actually needs on that satellite (currently `alarm_ring`, `timer_jingle`), sent whenever a satellite (re-)connects. Replaces `hannah_asset`'s previous blind "load everything in the manifest" behavior with a list Core derives from its own business logic, without reading the `satellite`-namespace manifest itself (Refs #170)
