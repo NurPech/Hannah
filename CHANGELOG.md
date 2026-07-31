@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.9 (2026-07-31)
+### Satellite Firmware
+* Fixed: the syslog client added in v0.67.8 (#176) called `socket()`/`fcntl()`/`sendto()` directly from `log_capture()`, the global `esp_log_set_vprintf()` hook that runs on the stack of whichever task happens to be logging — including small system/driver tasks never sized for extra socket-syscall stack usage. Caused a hard crash/boot loop (`restart_reason: Panic`) on any device with `syslog_host` configured, invisible in `/log`/`/log/last` since a real panic skips the graceful-shutdown log persistence entirely. `log_capture()` now only does a cheap queue copy; a dedicated task with its own 4KB stack does the actual socket work (#177)
+
 ## 0.67.8 (2026-07-31)
 ### Satellite Firmware
 * Added: fire-and-forget UDP syslog client (RFC 5424), additive to the local `/log` ring buffer, not a replacement — `/settings` gained a "Syslog" section (`syslog_host` as IPv4 literal, `syslog_port`, default 514, empty host = disabled). Every captured log line is sent non-blocking to the configured receiver alongside the existing ring buffer / UART output, so the buffer's fixed size (#175) no longer risks losing early boot messages before anyone gets to look at `/log` (Refs #176)

@@ -13,6 +13,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "freertos/portmacro.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
@@ -66,62 +67,97 @@ static vprintf_like_t   s_orig_vprintf = NULL;
 /* ── Syslog (fire-and-forget UDP, RFC 5424) ─────────────────────────────────
  * Läuft additiv zum Ringpuffer, nicht als Ersatz — für den Fall, dass jemand
  * das Gerät nicht rechtzeitig unter /log erwischt (siehe #175). Host ist
- * bewusst nur als IPv4-Literal erlaubt: log_capture() läuft im Hot-Path
- * (potenziell jede 10ms während Wakeword-Inference), eine DNS-Auflösung dort
- * wäre blockierend. */
-static int                s_syslog_sock        = -1;
-static struct sockaddr_in s_syslog_addr;
-static char               s_syslog_host_cached[64] = {0};
-static uint16_t           s_syslog_port_cached     = 0;
+ * bewusst nur als IPv4-Literal erlaubt: die Auflösung läuft trotzdem nicht im
+ * Hot-Path (s.u.), aber DNS wäre ein weiterer Fehlerkanal ohne echten Nutzen
+ * hier.
+ *
+ * WICHTIG (#177 — Postmortem eines Boot-Loops): eine erste Version rief
+ * socket()/fcntl()/sendto() direkt aus log_capture() heraus auf — das läuft
+ * als vprintf-Hook auf dem Stack des jeweils loggenden Tasks, potenziell
+ * jeder Task im System, inklusive kleiner System-/Treiber-Tasks. Der
+ * zusätzliche Stack-Bedarf für Socket-Syscalls hat einen von ihnen gesprengt
+ * → harter Crash statt sauberem Neustart (daher auch kein Eintrag in
+ * persist_log_to_flash()/`/log/last`, die nur bei geordnetem esp_restart()
+ * laufen). Jetzt: log_capture() kopiert nur noch günstig in eine Queue,
+ * ein eigener Task mit eigenem, ausreichend bemessenem Stack macht die
+ * eigentliche Socket-Arbeit. */
+#define SYSLOG_QUEUE_LEN   16
+#define SYSLOG_TASK_STACK  4096
 
-static void syslog_send(const char *line, int len)
+typedef struct {
+    int  len;
+    char data[256];
+} syslog_item_t;
+
+static QueueHandle_t s_syslog_queue = NULL;
+
+/* Günstiger Check + Kopie in die Queue — läuft im log_capture()-Hot-Path auf
+ * beliebigem Task-Stack, muss daher minimal und syscall-frei bleiben. */
+static void syslog_enqueue(const char *line, int len)
 {
-    const hannah_config_t *cfg = hannah_config_get();
-    if (cfg->syslog_host[0] == '\0') return;
+    if (!s_syslog_queue) return;
+    if (hannah_config_get()->syslog_host[0] == '\0') return;
 
-    if (strcmp(cfg->syslog_host, s_syslog_host_cached) != 0 ||
-        cfg->syslog_port != s_syslog_port_cached) {
-        struct sockaddr_in addr = {0};
-        addr.sin_family = AF_INET;
-        addr.sin_port   = htons(cfg->syslog_port);
-        if (inet_aton(cfg->syslog_host, &addr.sin_addr) == 0) {
-            /* Kein gültiges IPv4-Literal — deaktiviert bis sich die Config
-             * wieder ändert (kein Retry-Spam bei jedem Log-Aufruf). */
-            s_syslog_host_cached[0] = '\0';
-            return;
-        }
-        s_syslog_addr = addr;
-        snprintf(s_syslog_host_cached, sizeof(s_syslog_host_cached), "%s", cfg->syslog_host);
-        s_syslog_port_cached = cfg->syslog_port;
+    syslog_item_t item;
+    item.len = len < (int)sizeof(item.data) ? len : (int)sizeof(item.data) - 1;
+    memcpy(item.data, line, item.len);
+    xQueueSend(s_syslog_queue, &item, 0);  /* nicht blockieren, im Zweifel verwerfen */
+}
 
-        if (s_syslog_sock < 0) {
-            s_syslog_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-            if (s_syslog_sock >= 0) {
-                int flags = fcntl(s_syslog_sock, F_GETFL, 0);
-                fcntl(s_syslog_sock, F_SETFL, flags | O_NONBLOCK);
+/* Läuft auf eigenem Task/Stack — hier (und nur hier) passiert die eigentliche
+ * Socket-Arbeit (Auflösung, Verbindungsaufbau, Senden). */
+static void syslog_task(void *arg)
+{
+    int                sock        = -1;
+    struct sockaddr_in addr        = {0};
+    char               host_cached[64] = {0};
+    uint16_t           port_cached     = 0;
+    syslog_item_t      item;
+
+    while (1) {
+        if (xQueueReceive(s_syslog_queue, &item, portMAX_DELAY) != pdTRUE) continue;
+
+        const hannah_config_t *cfg = hannah_config_get();
+        if (cfg->syslog_host[0] == '\0') continue;
+
+        if (strcmp(cfg->syslog_host, host_cached) != 0 || cfg->syslog_port != port_cached) {
+            struct sockaddr_in a = {0};
+            a.sin_family = AF_INET;
+            a.sin_port   = htons(cfg->syslog_port);
+            if (inet_aton(cfg->syslog_host, &a.sin_addr) == 0) {
+                host_cached[0] = '\0';   /* ungültig — bis zur nächsten Config-Änderung ruhig */
+                continue;
+            }
+            addr = a;
+            snprintf(host_cached, sizeof(host_cached), "%s", cfg->syslog_host);
+            port_cached = cfg->syslog_port;
+            if (sock < 0) {
+                sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+                if (sock >= 0) {
+                    int flags = fcntl(sock, F_GETFL, 0);
+                    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+                }
             }
         }
-    }
+        if (sock < 0) continue;
 
-    if (s_syslog_sock < 0) return;
+        /* ESP-IDF-Log-Zeilen beginnen mit einem Level-Buchstaben (E/W/I/D/V) */
+        int severity;
+        switch (item.data[0]) {
+            case 'E': severity = 3; break;
+            case 'W': severity = 4; break;
+            case 'D': case 'V': severity = 7; break;
+            default:  severity = 6; break;   /* I und alles andere */
+        }
+        int pri = 16 * 8 + severity;   /* facility local0 */
 
-    /* ESP-IDF-Log-Zeilen beginnen mit einem Level-Buchstaben (E/W/I/D/V) */
-    int severity;
-    switch (line[0]) {
-        case 'E': severity = 3; break;
-        case 'W': severity = 4; break;
-        case 'D': case 'V': severity = 7; break;
-        default:  severity = 6; break;   /* I und alles andere */
-    }
-    int pri = 16 * 8 + severity;   /* facility local0 */
-
-    char pkt[320];
-    int plen = snprintf(pkt, sizeof(pkt), "<%d>1 - %s hannah-esp - - - %.*s",
-                         pri, hannah_config_get()->device_id, len, line);
-    if (plen > 0) {
-        int send_len = plen < (int)sizeof(pkt) ? plen : (int)sizeof(pkt) - 1;
-        sendto(s_syslog_sock, pkt, send_len, 0,
-               (struct sockaddr *)&s_syslog_addr, sizeof(s_syslog_addr));
+        char pkt[320];
+        int plen = snprintf(pkt, sizeof(pkt), "<%d>1 - %s hannah-esp - - - %.*s",
+                             pri, cfg->device_id, item.len, item.data);
+        if (plen > 0) {
+            int send_len = plen < (int)sizeof(pkt) ? plen : (int)sizeof(pkt) - 1;
+            sendto(sock, pkt, send_len, 0, (struct sockaddr *)&addr, sizeof(addr));
+        }
     }
 }
 
@@ -148,7 +184,7 @@ static int log_capture(const char *fmt, va_list args)
         portEXIT_CRITICAL(&s_log_mux);
     }
 
-    syslog_send(line, actual);
+    syslog_enqueue(line, actual);
     return ret;
 }
 
@@ -873,6 +909,14 @@ void hannah_webserver_start(void)
         if (!s_log_buf)
             ESP_LOGE(TAG, "Log-Ringpuffer: PSRAM-Allokation fehlgeschlagen (%u KB) — Log-Viewer bleibt leer.",
                      (unsigned)(LOG_BUF_SIZE / 1024));
+    }
+    if (!s_syslog_queue) {
+        s_syslog_queue = xQueueCreate(SYSLOG_QUEUE_LEN, sizeof(syslog_item_t));
+        if (s_syslog_queue) {
+            xTaskCreate(syslog_task, "syslog", SYSLOG_TASK_STACK, NULL, 3, NULL);
+        } else {
+            ESP_LOGE(TAG, "Syslog-Queue-Allokation fehlgeschlagen — Syslog bleibt deaktiviert.");
+        }
     }
     if (!s_orig_vprintf)
         s_orig_vprintf = esp_log_set_vprintf(log_capture);
