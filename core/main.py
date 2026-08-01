@@ -864,7 +864,8 @@ def main():
             log.info(f"Lautstärke {device}: {level}%")
             all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}
             room = all_devices.get(device, "")
-            grpc_servicer.agent_satellite_update(device, room, "", True, volume=level)
+            display_name = satellite_manager.resolve_satellite_name(device) or ""
+            grpc_servicer.agent_satellite_update(device, room, "", True, volume=level, display_name=display_name)
         else:
             _global_volume = level
             for d in _resolve_targets("all"):
@@ -879,7 +880,8 @@ def main():
         log.info(f"Mute {device}: {muted}")
         all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}
         room = all_devices.get(device, "")
-        grpc_servicer.agent_satellite_update(device, room, "", True, mute=muted)
+        display_name = satellite_manager.resolve_satellite_name(device) or ""
+        grpc_servicer.agent_satellite_update(device, room, "", True, mute=muted, display_name=display_name)
         if room:
             for sibling, sibling_room in all_devices.items():
                 if sibling != device and sibling_room.lower() == room.lower():

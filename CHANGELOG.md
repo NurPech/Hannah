@@ -4,6 +4,9 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.67.14 (2026-08-01)
+### Hannah Core
+* Fixed: a satellite's display name reverted to its MAC in ioBroker's Device Manager within seconds of being set correctly, because the recurring proxy heartbeat push and the volume/mute-change pushes to the adapter never carried `display_name` — only the one-time "newly seen" transition and `GetSatellites()` resolved it. All `agent_satellite_update()` call sites now resolve and pass the display name consistently (Refs #186)
 
 ## 0.67.13 (2026-08-01)
 ### Satellite Firmware

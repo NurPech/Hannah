@@ -213,7 +213,10 @@ def test_register_proxy_heartbeat_pushes_last_seen_to_adapter():
     NotifySatelliteRegistered/Gone pushed agent_satellite_update, never the recurring
     proxy heartbeat — GetSatellites' last_seen kept advancing in Core's DB, but nothing
     told the adapter. The heartbeat loop must now push a live keep-alive too."""
-    servicer = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+    servicer = _make_server(
+        resolve_satellite_room=lambda _d: "wohnzimmer",
+        get_db_satellites=lambda: [{"device_id": "wz-sat", "display_name": "Wohnzimmer01"}],
+    )
     servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
     servicer.agent_satellite_update = MagicMock()
 
@@ -227,7 +230,9 @@ def test_register_proxy_heartbeat_pushes_last_seen_to_adapter():
 
     list(servicer.RegisterProxy(iter([ProxyHeartbeat(proxy_id="proxy-1")]), _FakeContext()))
 
-    servicer.agent_satellite_update.assert_called_once_with("wz-sat", "wohnzimmer", "192.168.1.50", True)
+    servicer.agent_satellite_update.assert_called_once_with(
+        "wz-sat", "wohnzimmer", "192.168.1.50", True, display_name="Wohnzimmer01",
+    )
 
 class TestRoomsGroupsRpcs:
     """#27 Phase 1 — reine Verdrahtung, RoomManager selbst ist in test_room_manager.py

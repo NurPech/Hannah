@@ -931,9 +931,14 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     # "gesehen"-Signal, der Adapter stempelt seine eigene Ankunftszeit.
                     with self._proxy_sat_lock:
                         proxy_satellites_snapshot = dict(self._proxy_satellites)
+                    db_sats = {s["device_id"]: s for s in self._get_db_satellites()}
                     for device_id, info in proxy_satellites_snapshot.items():
                         self._upsert_satellite(device_id)
-                        self.agent_satellite_update(device_id, info.get("room", ""), info.get("addr", ""), True)
+                        display_name = db_sats.get(device_id, {}).get("display_name") or ""
+                        self.agent_satellite_update(
+                            device_id, info.get("room", ""), info.get("addr", ""), True,
+                            display_name=display_name,
+                        )
                     if not discovery_published and hb.udp_host and hb.udp_port:
                         log.info(
                             f"[grpc] Proxy-Discovery: {hb.udp_host}:{hb.udp_port}"
