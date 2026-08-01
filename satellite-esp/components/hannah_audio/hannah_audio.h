@@ -55,3 +55,9 @@ void hannah_audio_pause_wakeword(void);
 /* Gegenstück zu hannah_audio_pause_wakeword() — für den Fall, dass OTA
  * fehlschlägt und kein Neustart folgt (kein manueller Eingriff nötig). */
 void hannah_audio_resume_wakeword(void);
+
+/* Debug (#180): letzter per Tastenkombi (Vol+ und Vol- gleichzeitig ~700ms
+ * gehalten) eingefrorener Roh-PCM-Snapshot als fertige WAV (inkl. Header).
+ * Läuft unabhängig vom Sampling-/Capture-Modus im normalen Wakeword-Betrieb
+ * mit. Liefert false, wenn seit Boot noch keine Aufnahme ausgelöst wurde. */
+bool hannah_audio_get_debug_wav(const uint8_t **out_buf, size_t *out_len);

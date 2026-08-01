@@ -25,6 +25,7 @@
 #include <string.h>
 #include <math.h>
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
@@ -68,6 +69,15 @@ static const char *TAG = "hannah_audio";
 /* Sampling-Mode "noise": Auto-Flush-Intervall (Dauerstrom-Aufnahme) */
 #define NOISE_AUTOFLUSH_FRAMES 5000  /* 5000 × 10ms = 50s */
 
+/* Debug-WAV-Snapshot (#180): Ringpuffer-Länge + Halte-Schwelle für die
+ * Vol+/Vol--Tastenkombi. Auslösung per GPIO-Poll im mic_task, ~10ms/Iteration
+ * (siehe WARMUP_FRAMES) — bewusst kein Wanduhr-Timer, gleiche Konvention wie
+ * die übrigen Frame-Zähler in dieser Datei. */
+#define DEBUG_WAV_CAPTURE_SECONDS 4
+#define DEBUG_WAV_RING_SAMPLES    (SAMPLE_RATE * DEBUG_WAV_CAPTURE_SECONDS)
+#define DEBUG_WAV_HOLD_FRAMES     70  /* 70 × 10ms = 700ms */
+#define WAV_HEADER_BYTES          44
+
 /* ------------------------------------------------------------------ */
 /* Typen                                                                 */
 
@@ -100,6 +110,18 @@ static volatile int      s_volume                 = CONFIG_HANNAH_VOLUME_DEFAULT
 static hannah_webrtc_vad_state_t s_webrtc_vad;
 static float              s_noise_floor_ema = 0.020f; /* adaptiver Noise-Floor-Schätzer */
 static int                s_stream_frames   = 0;
+
+/* Debug-WAV-Snapshot (#180) — s_debug_ring wird ausschließlich vom mic_task
+ * beschrieben (Schreiber + Trigger-Auswertung laufen im selben Task, keine
+ * Synchronisierung nötig). s_debug_wav_snapshot wird vom mic_task bei
+ * Trigger neu befüllt und vom Webserver-Handler (anderer Task) gelesen —
+ * bewusst ohne Lock: einmaliger, manuell ausgelöster Debug-Snapshot, ein
+ * Download während eines Re-Triggers ist ein irrelevantes Randrisiko. */
+static int16_t  *s_debug_ring          = NULL;
+static size_t     s_debug_ring_wp       = 0;
+static bool        s_debug_ring_full     = false;
+static uint8_t   *s_debug_wav_snapshot = NULL;
+static volatile size_t s_debug_wav_len = 0;
 
 /* ------------------------------------------------------------------ */
 /* Button ISRs                                                           */
@@ -275,6 +297,70 @@ static esp_err_t speaker_init(void)
 #endif /* CONFIG_HANNAH_SPEAKER_ENABLED */
 
 /* ------------------------------------------------------------------ */
+/* Debug-WAV-Snapshot (#180)                                             */
+
+#if !CONFIG_HANNAH_MIC_TYPE_NONE
+/* Schreibt einen kompletten 44-Byte-RIFF/WAV-Header (16-bit PCM mono) nach *p. */
+static void write_wav_header(uint8_t *p, uint32_t pcm_bytes)
+{
+    uint32_t riff_len   = 36 + pcm_bytes;
+    uint32_t fmt_len    = 16;
+    uint16_t audio_fmt  = 1;   /* PCM */
+    uint16_t channels   = 1;
+    uint32_t rate       = SAMPLE_RATE;
+    uint32_t byte_rate  = SAMPLE_RATE * 2;
+    uint16_t block_align = 2;
+    uint16_t bits       = 16;
+
+    memcpy(p, "RIFF", 4);        p += 4;
+    memcpy(p, &riff_len, 4);     p += 4;
+    memcpy(p, "WAVE", 4);        p += 4;
+    memcpy(p, "fmt ", 4);        p += 4;
+    memcpy(p, &fmt_len, 4);      p += 4;
+    memcpy(p, &audio_fmt, 2);    p += 2;
+    memcpy(p, &channels, 2);     p += 2;
+    memcpy(p, &rate, 4);         p += 4;
+    memcpy(p, &byte_rate, 4);    p += 4;
+    memcpy(p, &block_align, 2);  p += 2;
+    memcpy(p, &bits, 2);         p += 2;
+    memcpy(p, "data", 4);        p += 4;
+    memcpy(p, &pcm_bytes, 4);
+}
+
+/* Friert den aktuellen Ringpuffer als fertige WAV im Snapshot-Puffer ein.
+ * Läuft im mic_task, ausgelöst durch die Vol+/Vol--Kombi. */
+static void debug_wav_snapshot(void)
+{
+    if (!s_debug_ring || !s_debug_wav_snapshot) return;
+
+    size_t samples   = s_debug_ring_full ? DEBUG_WAV_RING_SAMPLES : s_debug_ring_wp;
+    size_t pcm_bytes = samples * 2;
+    uint8_t *pcm_out = s_debug_wav_snapshot + WAV_HEADER_BYTES;
+
+    if (s_debug_ring_full) {
+        /* Älteste Samples liegen ab s_debug_ring_wp (nächster Schreibpunkt) */
+        size_t tail = DEBUG_WAV_RING_SAMPLES - s_debug_ring_wp;
+        memcpy(pcm_out,               s_debug_ring + s_debug_ring_wp, tail * 2);
+        memcpy(pcm_out + tail * 2,    s_debug_ring,                   s_debug_ring_wp * 2);
+    } else {
+        memcpy(pcm_out, s_debug_ring, pcm_bytes);
+    }
+
+    write_wav_header(s_debug_wav_snapshot, (uint32_t)pcm_bytes);
+    s_debug_wav_len = WAV_HEADER_BYTES + pcm_bytes;
+}
+#endif /* !CONFIG_HANNAH_MIC_TYPE_NONE */
+
+bool hannah_audio_get_debug_wav(const uint8_t **out_buf, size_t *out_len)
+{
+    size_t len = s_debug_wav_len;
+    if (!s_debug_wav_snapshot || len == 0) return false;
+    *out_buf = s_debug_wav_snapshot;
+    *out_len = len;
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
 /* Mic-Task                                                              */
 
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
@@ -326,6 +412,28 @@ static void mic_task(void *arg)
             hannah_net_publish_volume(s_volume);
         }
 
+        /* Debug-WAV-Trigger (#180): Vol+ und Vol- gleichzeitig gehalten.
+         * Bewusst per GPIO-Poll statt eigener ISR — läuft unabhängig vom
+         * Sampling-/Capture-Modus im normalen Wakeword-Betrieb mit, ohne
+         * dessen Zustand anzufassen. */
+        {
+            static int  s_debug_hold_frames = 0;
+            static bool s_debug_armed       = true;  /* verhindert Re-Trigger solange gehalten */
+            bool both_down = (gpio_get_level(CONFIG_HANNAH_VOL_UP_GPIO) == 0) &&
+                             (gpio_get_level(CONFIG_HANNAH_VOL_DOWN_GPIO) == 0);
+            if (both_down) {
+                if (s_debug_armed && ++s_debug_hold_frames >= DEBUG_WAV_HOLD_FRAMES) {
+                    s_debug_armed = false;
+                    debug_wav_snapshot();
+                    ESP_LOGI(TAG, "Debug-WAV-Snapshot ausgelöst (%u B) — abrufbar unter /debug/wav.",
+                             (unsigned)s_debug_wav_len);
+                }
+            } else {
+                s_debug_hold_frames = 0;
+                s_debug_armed       = true;
+            }
+        }
+
         size_t bytes_read = 0;
         i2s_channel_read(s_rx_chan, raw, STEP_BYTES_RAW,
                          &bytes_read, pdMS_TO_TICKS(200));
@@ -354,6 +462,18 @@ static void mic_task(void *arg)
         }
 #endif
         size_t mono_samples = frames;
+
+        /* Debug-Ringpuffer (#180): läuft immer mit, unabhängig vom State —
+         * erfasst exakt das PCM, das auch durch die Wakeword-Pipeline läuft. */
+        if (s_debug_ring) {
+            for (size_t i = 0; i < mono_samples; i++) {
+                s_debug_ring[s_debug_ring_wp] = mono[i];
+                if (++s_debug_ring_wp >= DEBUG_WAV_RING_SAMPLES) {
+                    s_debug_ring_wp   = 0;
+                    s_debug_ring_full = true;
+                }
+            }
+        }
 
         /* Warmup: Frontend füttern aber nicht triggern */
         if (warmup_remaining > 0) {
@@ -760,6 +880,14 @@ void hannah_audio_init(void)
 #endif
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
     mic_init();
+
+    /* Debug-WAV-Snapshot (#180): Ringpuffer + Ausgabepuffer auf PSRAM. */
+    s_debug_ring = (int16_t *)heap_caps_malloc(
+        DEBUG_WAV_RING_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_debug_wav_snapshot = (uint8_t *)heap_caps_malloc(
+        WAV_HEADER_BYTES + DEBUG_WAV_RING_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_debug_ring || !s_debug_wav_snapshot)
+        ESP_LOGE(TAG, "Debug-WAV-Puffer: PSRAM-Allokation fehlgeschlagen — /debug/wav bleibt leer.");
 #endif
 
     /* Mute-Button: Input mit Pull-up, Interrupt auf fallende Flanke */

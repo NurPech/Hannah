@@ -8,6 +8,7 @@ idf_component_register(
         hannah_config
         hannah_net
         hannah_sensors
+        hannah_audio
         esp_wifi
         esp_system
         freertos

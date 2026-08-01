@@ -5,6 +5,11 @@
 -->
 
 
+## 0.67.11 (2026-08-01)
+### Satellite Firmware
+* Added: `GET /debug/wav` on the satellite's web server — dumps the last ~4s of raw mic PCM as a WAV file, frozen by holding Vol+ and Vol- simultaneously for ~700ms. Runs passively alongside normal wakeword listening (no sampling/capture-mode switch, no behavior change) so the exact audio the wakeword pipeline sees can be pulled off-device and replayed through `test_inference.py` — needed after #179's arena fix didn't resolve on-device wakeword confidence staying flat at 0.0000 even with a model independently verified at >98% TPR/3% FPR offline, narrowing the search to hardware/on-device pipeline vs. model quality (Refs #180)
+* Fixed: `hannah_wakeword_process()` always wrote exactly one 40-value AudioFrontend frame into the model's input tensor, regardless of the tensor's actual size — correct for `hey_hannah_int8.tflite` (shape `(1,1,40)`) but any model expecting multiple aggregated frames as one input (e.g. `okay_nabu`, used as a differential-test reference model) would only ever get its first frame's worth of real data, the rest left as stale/garbage bytes from the last allocation. Frame count is now derived from the input tensor's actual byte size at load time; multi-frame inputs get a sliding window (oldest frame shifted out, newest appended) before each `Invoke()`. No behavior change for single-frame models (Refs #181)
+
 ## 0.67.10 (2026-07-31)
 ### Satellite Firmware
 * Fixed: wakeword's streaming resource-variable arena (`RV_ARENA_SIZE`) was a fixed 4KB in internal DRAM, independent of the loaded model — a differential test against `okay_nabu.tflite` (Home Assistant) showed its 11 streaming states need ~8KB total (largest single state alone: 7104 bytes), already exceeding the whole arena. `AllocateTensors()`/`Invoke()` reported no error since the separate main tensor arena was large enough, but the streaming context itself likely never accumulated correctly, leaving `output_raw` stuck (matches the symptom exactly: model "runs", output never moves meaningfully). Grown to 32KB and moved to PSRAM, matching the main arena's lifecycle including freeing on every `tflite_init()` failure path and `tflite_deinit()` (Refs #179)

@@ -43,6 +43,7 @@ static const char *TAG = "wakeword";
 static constexpr float  FEATURE_SCALE    = 128.0f * 0.10196078568696976f;  /* ≈ 13.051 */
 static constexpr int    INPUT_ZERO_POINT = -128;
 static constexpr float  OUTPUT_SCALE     = 1.0f / 256.0f;
+static constexpr size_t FRONTEND_NUM_CHANNELS = 40;  /* Mel-Bänder pro AudioFrontend-Frame */
 
 static constexpr size_t ARENA_SIZE    = CONFIG_HANNAH_TFLITE_ARENA_KB * 1024;
 /* War 4096 B im internen DRAM, fix und unabhängig vom geladenen Modell (#166
@@ -67,6 +68,7 @@ static tflite::MicroResourceVariables    *s_resource_vars    = nullptr;
 static TfLiteTensor                      *s_input            = nullptr;
 static TfLiteTensor                      *s_output           = nullptr;
 static uint8_t                           *s_model_override_buf = nullptr;
+static size_t                             s_input_frame_count = 1;  /* #181: aggregierte Frames pro Invoke */
 
 /* Debug-Snapshot des letzten process()-Aufrufs (#173) */
 static size_t   s_last_feat_size                                            = 0;
@@ -136,6 +138,8 @@ static void free_model_override(void)
     }
 }
 
+static void tflite_deinit(void);
+
 /* Allokiert Arena + Interpreter neu. Wiederholt aufrufbar (OTA-Reinit) —
  * der Resolver wird dabei nur beim ersten Mal befüllt. */
 static void tflite_init(void)
@@ -203,6 +207,23 @@ static void tflite_init(void)
     ESP_LOGI(TAG, "TFLite geladen: Arena %u KB, verwendet %u B.",
              (unsigned)(ARENA_SIZE / 1024),
              (unsigned)s_interpreter->arena_used_bytes());
+
+    /* #181: Frame-Anzahl aus der tatsächlichen Input-Tensor-Größe ableiten
+     * statt einen einzelnen 10ms-Streaming-Schritt anzunehmen — manche Modelle
+     * (z.B. okay_nabu) erwarten mehrere aggregierte AudioFrontend-Frames als
+     * einen Input. hey_hannah (Shape (1,1,40)) ergibt 1 — unverändertes
+     * Verhalten. */
+    if (s_input->bytes == 0 || s_input->bytes % FRONTEND_NUM_CHANNELS != 0) {
+        ESP_LOGE(TAG, "Wakeword-Input-Tensor unerwartete Größe (%u B, nicht durch %u teilbar) — "
+                      "Erkennung bleibt deaktiviert.",
+                 (unsigned)s_input->bytes, (unsigned)FRONTEND_NUM_CHANNELS);
+        tflite_deinit();
+        return;
+    }
+    s_input_frame_count = s_input->bytes / FRONTEND_NUM_CHANNELS;
+    ESP_LOGI(TAG, "Wakeword-Input: %u Frame(s) à %u Werte (%u B gesamt).",
+             (unsigned)s_input_frame_count, (unsigned)FRONTEND_NUM_CHANNELS,
+             (unsigned)s_input->bytes);
 }
 
 /* Gibt Arena, Interpreter und ggf. den Asset-Cache-Modell-Override frei. */
@@ -215,6 +236,7 @@ static void tflite_deinit(void)
     s_input         = nullptr;
     s_output        = nullptr;
     s_resource_vars = nullptr;
+    s_input_frame_count = 1;
 
     free_model_override();
 
@@ -291,12 +313,22 @@ float hannah_wakeword_process(const int16_t *pcm)
     s_last_num_read  = num_read;
     if (feat.size == 0) return 0.0f;   /* Noch kein vollständiger Frame */
 
-    /* uint16 → int8 quantisieren */
+    /* #181: bei Modellen mit mehr als einem Frame pro Input (z.B. okay_nabu)
+     * ältere Frames nach vorne schieben, neuesten Frame hinten anhängen
+     * (Sliding Window). Bei s_input_frame_count==1 (hey_hannah) ist der
+     * memmove ein No-Op — identisch zum bisherigen Verhalten. Annahme:
+     * Frame-Reihenfolge im Tensor ist zeitlich aufsteigend (älteste zuerst). */
+    size_t tail_offset = (s_input_frame_count - 1) * feat.size;
+    if (s_input_frame_count > 1) {
+        memmove(s_input->data.int8, s_input->data.int8 + feat.size, tail_offset);
+    }
+
+    /* uint16 → int8 quantisieren, neuesten Frame ans Ende schreiben */
     for (size_t i = 0; i < feat.size; i++) {
         int32_t q = (int32_t)roundf((float)feat.values[i] / FEATURE_SCALE) + INPUT_ZERO_POINT;
         if      (q < -128) q = -128;
         else if (q >  127) q =  127;
-        s_input->data.int8[i] = (int8_t)q;
+        s_input->data.int8[tail_offset + i] = (int8_t)q;
         if (i < HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN) {
             s_last_input_preview[i] = (int8_t)q;
             s_last_mel_preview[i]   = feat.values[i];

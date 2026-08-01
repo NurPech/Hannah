@@ -24,6 +24,7 @@
 #include "hannah_config.h"
 #include "hannah_net.h"
 #include "hannah_sensors.h"
+#include "hannah_audio.h"
 
 static const char *TAG = "webserver";
 static httpd_handle_t s_server = NULL;
@@ -755,6 +756,25 @@ static esp_err_t log_last_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── Handler: GET /debug/wav (#180) ──────────────────────────────────────── */
+
+/* Letzter per Vol+/Vol--Tastenkombi eingefrorener Roh-PCM-Snapshot aus
+ * hannah_audio, zum Offline-Testen gegen test_inference.py. */
+static esp_err_t debug_wav_handler(httpd_req_t *req)
+{
+    const uint8_t *buf;
+    size_t len;
+    if (!hannah_audio_get_debug_wav(&buf, &len)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+            "Noch keine Aufnahme — Vol+ und Vol- am Satelliten ~1s gleichzeitig halten.");
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, "audio/wav");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"wakeword_debug.wav\"");
+    httpd_resp_send(req, (const char *)buf, (ssize_t)len);
+    return ESP_OK;
+}
+
 /* ── Handler: POST /nvs (Refs #36) ───────────────────────────────────────── */
 
 /* Nur diese Keys sind über /nvs schreibbar. Alles andere wird abgelehnt —
@@ -894,6 +914,7 @@ void hannah_webserver_start(void)
         { .uri = "/log/data",  .method = HTTP_GET,  .handler = log_data_handler     },
         { .uri = "/log/clear", .method = HTTP_POST, .handler = log_clear_handler    },
         { .uri = "/log/last",  .method = HTTP_GET,  .handler = log_last_handler     },
+        { .uri = "/debug/wav", .method = HTTP_GET,  .handler = debug_wav_handler    },
         { .uri = "/nvs",       .method = HTTP_POST, .handler = nvs_post_handler     },
     };
     for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++) {
