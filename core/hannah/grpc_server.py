@@ -924,10 +924,16 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     # einen Stream-Heartbeat für die ganze Verbindung) — bei jedem davon
                     # last_seen für alle aktuell bekannten Proxy-Satelliten mitziehen,
                     # sonst friert er nach der ersten Registrierung für immer ein.
+                    # Zusätzlich auch an den Adapter pushen (#185) — GetSatellites liefert
+                    # last_seen nur einmalig beim Connect, ohne diesen Push friert es dort
+                    # analog ein. Bewusst über den bestehenden agent_satellite_update-Kanal
+                    # statt eines neuen Proto-Felds: der Push selbst ist bereits das
+                    # "gesehen"-Signal, der Adapter stempelt seine eigene Ankunftszeit.
                     with self._proxy_sat_lock:
-                        proxy_satellite_ids = list(self._proxy_satellites)
-                    for device_id in proxy_satellite_ids:
+                        proxy_satellites_snapshot = dict(self._proxy_satellites)
+                    for device_id, info in proxy_satellites_snapshot.items():
                         self._upsert_satellite(device_id)
+                        self.agent_satellite_update(device_id, info.get("room", ""), info.get("addr", ""), True)
                     if not discovery_published and hb.udp_host and hb.udp_port:
                         log.info(
                             f"[grpc] Proxy-Discovery: {hb.udp_host}:{hb.udp_port}"

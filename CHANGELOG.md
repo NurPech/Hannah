@@ -5,6 +5,18 @@
 -->
 
 
+## 0.67.13 (2026-08-01)
+### Satellite Firmware
+* Fixed: loading a wakeword model using an op not registered in the TFLite Micro resolver (e.g. `okay_nabu_v2.tflite`'s `SplitV`, a different microWakeWord architecture than `hey_hannah`) boot-looped a live satellite — `AllocateTensors()` correctly failed and was caught, but the existing cleanup path (`delete` on a MicroInterpreter with a partially-built op graph) crashed hard (`Guru Meditation Error`), with no remote recovery path reachable (OTA/asset-resync both run later in boot than wakeword init). Now validates every op code the model uses against the resolver *before* ever constructing the interpreter or calling `AllocateTensors()` — an incompatible model logs which op is missing and disables detection cleanly instead. Also stopped deleting the interpreter on any `AllocateTensors()` failure at all (small internal-heap leak instead, PSRAM arena still freed normally) as a second line of defense, in case some other failure mode leaves the graph partially built. `SplitV` itself is now registered too, so `okay_nabu_v2.tflite` actually loads (Refs #183)
+* Changed: `models/hannah.tflite` re-synced with the model actually compiled into `model.h` (was stale since 2026-04-18 while `model.h` moved on) — reference copy only, not read by the build
+
+## 0.67.12 (2026-08-01)
+### Hannah Core
+* Fixed: satellite `last_seen` shown in ioBroker froze right after a satellite (re-)registered instead of tracking real liveness — `GetSatellites()` only pushes `last_seen` to the adapter once, at `AgentConnect` time, while Core's own DB kept advancing on every proxy heartbeat (`RegisterProxy`, ~10s). The heartbeat loop now also pushes `agent_satellite_update` for every currently known proxy satellite, so the adapter's `last_seen` stays live instead of freezing at the last connect/reconnect (Refs #185)
+
+### Satellite Firmware
+* Fixed: `/debug/wav`'s Vol+/Vol- snapshot trigger fired the instant the 700ms hold threshold was reached, not on release — anyone pressing the combo at the same time as speaking the test phrase (the natural way to use it) got a recording cut off mid-word (observed: "Okay Nabu" → only "Okay" audible). Hold now only arms the trigger (debounce against accidental presses); the snapshot itself fires on release, so it captures whatever was said for the whole duration the combo was held, regardless of hold length (Refs #182)
+
 ## 0.67.11 (2026-08-01)
 ### Satellite Firmware
 * Added: `GET /debug/wav` on the satellite's web server — dumps the last ~4s of raw mic PCM as a WAV file, frozen by holding Vol+ and Vol- simultaneously for ~700ms. Runs passively alongside normal wakeword listening (no sampling/capture-mode switch, no behavior change) so the exact audio the wakeword pipeline sees can be pulled off-device and replayed through `test_inference.py` — needed after #179's arena fix didn't resolve on-device wakeword confidence staying flat at 0.0000 even with a model independently verified at >98% TPR/3% FPR offline, narrowing the search to hardware/on-device pipeline vs. model quality (Refs #180)

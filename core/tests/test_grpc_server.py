@@ -208,6 +208,27 @@ def test_register_proxy_heartbeat_upserts_known_satellites():
 
     upsert.assert_called_once_with("wz-sat")
 
+def test_register_proxy_heartbeat_pushes_last_seen_to_adapter():
+    """#185: last_seen in ioBroker froze after the initial registration because only
+    NotifySatelliteRegistered/Gone pushed agent_satellite_update, never the recurring
+    proxy heartbeat — GetSatellites' last_seen kept advancing in Core's DB, but nothing
+    told the adapter. The heartbeat loop must now push a live keep-alive too."""
+    servicer = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+    servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
+    servicer.agent_satellite_update = MagicMock()
+
+    class _FakeContext:
+        def __init__(self):
+            self._active = True
+        def is_active(self):
+            active = self._active
+            self._active = False
+            return active
+
+    list(servicer.RegisterProxy(iter([ProxyHeartbeat(proxy_id="proxy-1")]), _FakeContext()))
+
+    servicer.agent_satellite_update.assert_called_once_with("wz-sat", "wohnzimmer", "192.168.1.50", True)
+
 class TestRoomsGroupsRpcs:
     """#27 Phase 1 — reine Verdrahtung, RoomManager selbst ist in test_room_manager.py
     abgedeckt. Hier nur: ruft die RPC den richtigen Callback auf und baut die richtige

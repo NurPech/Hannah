@@ -36,6 +36,7 @@
 #include "tensorflow/lite/micro/micro_resource_variable.h"
 #include "tensorflow/lite/micro/micro_allocator.h"
 #include "tensorflow/lite/schema/schema_generated.h"
+#include "tensorflow/lite/schema/schema_utils.h"
 
 static const char *TAG = "wakeword";
 
@@ -61,7 +62,7 @@ static uint8_t *s_arena               = nullptr;
 static uint8_t *s_rv_arena            = nullptr;
 
 static struct FrontendState               s_frontend;
-static tflite::MicroMutableOpResolver<20> s_resolver;
+static tflite::MicroMutableOpResolver<21> s_resolver;
 static bool                               s_resolver_ready   = false;
 static tflite::MicroInterpreter          *s_interpreter      = nullptr;
 static tflite::MicroResourceVariables    *s_resource_vars    = nullptr;
@@ -126,6 +127,7 @@ static void ensure_resolver(void)
     s_resolver.AddSub();
     s_resolver.AddSqrt();
     s_resolver.AddDiv();
+    s_resolver.AddSplitV();  /* #183: okay_nabu_v2 (DepthwiseConv2D+SplitV-Architektur) */
 
     s_resolver_ready = true;
 }
@@ -136,6 +138,43 @@ static void free_model_override(void)
         heap_caps_free(s_model_override_buf);
         s_model_override_buf = nullptr;
     }
+}
+
+/* #183: prüft, ob alle im Modell verwendeten Ops im Resolver registriert sind
+ * — VOR Interpreter-Konstruktion/AllocateTensors(). Ein Modell mit einem
+ * fehlenden Op (z.B. okay_nabu_v2s SplitV, damals nicht registriert) ließ
+ * AllocateTensors() mitten im Op-Graph-Aufbau abbrechen; der anschließende
+ * Cleanup (delete auf einem nur teilweise aufgebauten Interpreter) stürzte
+ * dabei selbst hart ab (Guru Meditation Error, Boot-Loop, nur per physischem
+ * Download-Modus behebbar — siehe #183). Diese Prüfung lässt ein
+ * inkompatibles Modell sauber ablehnen, bevor der gefährliche Pfad überhaupt
+ * erreicht wird. */
+static bool validate_ops_supported(const tflite::Model *model)
+{
+    auto *op_codes = model->operator_codes();
+    if (!op_codes) return true;
+
+    bool all_supported = true;
+    for (unsigned i = 0; i < op_codes->size(); i++) {
+        const tflite::OperatorCode *oc = op_codes->Get(i);
+        tflite::BuiltinOperator builtin = tflite::GetBuiltinCode(oc);
+
+        if (builtin == tflite::BuiltinOperator_CUSTOM) {
+            const char *custom = oc->custom_code() ? oc->custom_code()->c_str() : "?";
+            if (s_resolver.FindOp(custom) == nullptr) {
+                ESP_LOGE(TAG, "Wakeword-Modell nutzt nicht registrierten Custom-Op '%s'.", custom);
+                all_supported = false;
+            }
+            continue;
+        }
+
+        if (s_resolver.FindOp(builtin) == nullptr) {
+            ESP_LOGE(TAG, "Wakeword-Modell nutzt nicht registrierten Op '%s' (Code %d).",
+                     tflite::EnumNameBuiltinOperator(builtin), (int)builtin);
+            all_supported = false;
+        }
+    }
+    return all_supported;
 }
 
 static void tflite_deinit(void);
@@ -173,12 +212,26 @@ static void tflite_init(void)
         return;
     }
 
+    /* #183: Op-Kompatibilität VOR Interpreter-Konstruktion/AllocateTensors()
+     * prüfen — verhindert, dass ein Modell mit fehlendem Op überhaupt in den
+     * gefährlichen Teilweise-aufgebaut-dann-Cleanup-Pfad läuft. */
+    if (!validate_ops_supported(model)) {
+        ESP_LOGE(TAG, "Wakeword-Modell inkompatibel (siehe obige Op-Meldung(en)) — "
+                      "Erkennung bleibt deaktiviert.");
+        free_model_override();
+        heap_caps_free(s_rv_arena);
+        s_rv_arena = nullptr;
+        heap_caps_free(s_arena);
+        s_arena = nullptr;
+        return;
+    }
+
     auto *rv_allocator = tflite::MicroAllocator::Create(s_rv_arena, RV_ARENA_SIZE);
     s_resource_vars    = tflite::MicroResourceVariables::Create(rv_allocator, 20);
 
-    s_interpreter = new (std::nothrow) tflite::MicroInterpreter(
+    auto *interpreter = new (std::nothrow) tflite::MicroInterpreter(
         model, s_resolver, s_arena, ARENA_SIZE, s_resource_vars);
-    if (!s_interpreter) {
+    if (!interpreter) {
         ESP_LOGE(TAG, "MicroInterpreter-Allokation fehlgeschlagen");
         free_model_override();
         heap_caps_free(s_rv_arena);
@@ -188,12 +241,18 @@ static void tflite_init(void)
         return;
     }
 
-    if (s_interpreter->AllocateTensors() != kTfLiteOk) {
+    if (interpreter->AllocateTensors() != kTfLiteOk) {
         ESP_LOGE(TAG, "AllocateTensors fehlgeschlagen — Arena zu klein? (%u KB Arena, %u B davon belegt vor Abbruch)",
                  (unsigned)(ARENA_SIZE / 1024),
-                 (unsigned)s_interpreter->arena_used_bytes());
-        delete s_interpreter;
-        s_interpreter = nullptr;
+                 (unsigned)interpreter->arena_used_bytes());
+        /* #183: bewusst KEIN delete hier — bei einem nur teilweise
+         * aufgebauten Op-Graphen kann der Destruktor selbst hart abstürzen
+         * (beobachtet: Guru Meditation Error beim Aufräumen nach fehlendem
+         * Op, Boot-Loop, nur per physischem Download-Modus behebbar). Der
+         * verwaiste Interpreter (paar hundert Byte internes Heap) bleibt bis
+         * zum nächsten Reboot liegen — sicherer Trade-off gegenüber einem
+         * Crash. Arena/RV-Arena (PSRAM, die eigentlich relevante Größe)
+         * werden weiterhin sauber freigegeben. */
         free_model_override();
         heap_caps_free(s_rv_arena);
         s_rv_arena = nullptr;
@@ -201,8 +260,9 @@ static void tflite_init(void)
         s_arena = nullptr;
         return;
     }
-    s_input  = s_interpreter->input(0);
-    s_output = s_interpreter->output(0);
+    s_interpreter = interpreter;
+    s_input       = s_interpreter->input(0);
+    s_output      = s_interpreter->output(0);
 
     ESP_LOGI(TAG, "TFLite geladen: Arena %u KB, verwendet %u B.",
              (unsigned)(ARENA_SIZE / 1024),

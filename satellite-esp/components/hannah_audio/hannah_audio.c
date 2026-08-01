@@ -412,25 +412,33 @@ static void mic_task(void *arg)
             hannah_net_publish_volume(s_volume);
         }
 
-        /* Debug-WAV-Trigger (#180): Vol+ und Vol- gleichzeitig gehalten.
+        /* Debug-WAV-Trigger (#180, #182): Vol+ und Vol- gleichzeitig gehalten.
          * Bewusst per GPIO-Poll statt eigener ISR — läuft unabhängig vom
          * Sampling-/Capture-Modus im normalen Wakeword-Betrieb mit, ohne
-         * dessen Zustand anzufassen. */
+         * dessen Zustand anzufassen. Snapshot löst erst beim LOSLASSEN aus
+         * (700ms Halten dient nur als Debounce/"scharf machen") — sonst
+         * schneidet der Snapshot mitten in die Testphrase, wenn Tasten und
+         * Sprechen gleichzeitig beginnen (#182: "Okay Nabu" → nur "Okay" in
+         * der WAV, weil vorher exakt beim Erreichen der Halteschwelle
+         * ausgelöst wurde statt beim Loslassen). */
         {
             static int  s_debug_hold_frames = 0;
-            static bool s_debug_armed       = true;  /* verhindert Re-Trigger solange gehalten */
+            static bool s_debug_ready       = false;  /* Halteschwelle erreicht, wartet auf Loslassen */
             bool both_down = (gpio_get_level(CONFIG_HANNAH_VOL_UP_GPIO) == 0) &&
                              (gpio_get_level(CONFIG_HANNAH_VOL_DOWN_GPIO) == 0);
             if (both_down) {
-                if (s_debug_armed && ++s_debug_hold_frames >= DEBUG_WAV_HOLD_FRAMES) {
-                    s_debug_armed = false;
+                if (!s_debug_ready && ++s_debug_hold_frames >= DEBUG_WAV_HOLD_FRAMES) {
+                    s_debug_ready = true;
+                    ESP_LOGI(TAG, "Debug-WAV-Trigger scharf — jetzt sprechen, Tasten danach loslassen.");
+                }
+            } else {
+                if (s_debug_ready) {
                     debug_wav_snapshot();
                     ESP_LOGI(TAG, "Debug-WAV-Snapshot ausgelöst (%u B) — abrufbar unter /debug/wav.",
                              (unsigned)s_debug_wav_len);
                 }
-            } else {
                 s_debug_hold_frames = 0;
-                s_debug_armed       = true;
+                s_debug_ready       = false;
             }
         }
 
