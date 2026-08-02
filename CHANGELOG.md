@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.67.16 (2026-08-02)
+### Satellite Firmware
+* Fixed: OTA updates reliably failed (`esp-aes: Failed to allocate memory`) shortly after the download started, even with no wake-word/streaming activity happening at the same time. Root cause: `sdkconfig.defaults` set `CONFIG_MBEDTLS_PLATFORM_MEMORY=y` intending to route mbedTLS's buffers into PSRAM — but that Kconfig symbol doesn't exist in this ESP-IDF version and was a silent no-op, so every TLS buffer (including OTA's) had always been allocated from the small internal DRAM pool, which is permanently under pressure from the always-on audio pipeline (mic/speaker tasks + I2S DMA, running since boot). Replaced with `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`, the option that actually does this (Refs #188)
+
 ## 0.67.15 (2026-08-02)
 ### Satellite Firmware
 * Added: `asset_namespace` — optional per-device NVS override for the asset-manifest namespace (settable via `/settings` or `POST /nvs`), defaults to the hardcoded `"satellite"` when empty. Lets a single satellite be pointed at an isolated namespace (e.g. `satellite-test`) to trial risky assets like a new wakeword model without exposing the rest of the fleet (Refs #187)
