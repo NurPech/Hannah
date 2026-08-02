@@ -314,10 +314,15 @@ static void heartbeat_task(void *arg)
          * verarbeiten (bereits offener Socket, keine neue Allokation nötig),
          * während OTA (HTTPS/TLS) oder der Webserver (neue eingehende
          * Verbindung) an einem fragmentierten/erschöpften Heap scheitern.
-         * Landet im Ringpuffer und damit in /log/last. */
-        ESP_LOGI(TAG, "Heap: frei=%lu min_je=%lu",
+         * Landet im Ringpuffer und damit in /log/last. intern=... zeigt
+         * zusätzlich gezielt das MALLOC_CAP_INTERNAL-Freiheap (#184) — der
+         * kombinierte Wert (frei=) ist seit #191 von PSRAM dominiert und
+         * damit für die Kalibrierung des Heap-Watchdog-Schwellwerts unten
+         * nutzlos, da er selbst bei fast leerem internen DRAM kaum sinkt. */
+        ESP_LOGI(TAG, "Heap: frei=%lu min_je=%lu intern=%lu",
                  (unsigned long)esp_get_free_heap_size(),
-                 (unsigned long)esp_get_minimum_free_heap_size());
+                 (unsigned long)esp_get_minimum_free_heap_size(),
+                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
         /* GOT_IP/MQTT_CONNECTED feuern nur einmal pro Verbindung, MQTT_DATA nur
          * bei eingehenden Befehlen — im ruhigen Idle-Betrieb kommt sonst über
@@ -347,6 +352,28 @@ static void heartbeat_task(void *arg)
                  * auslösen und landet als harter Panic-Reset statt eines
                  * sauberen esp_restart(), der den Shutdown-Handler-Chain
                  * überspringt (persist_log_to_flash() liefe dann nie durch). */
+                esp_task_wdt_delete(NULL);
+                esp_restart();
+            }
+        }
+
+        /* Heap-Watchdog (#184, Follow-up zu #150/#161): der Netzwerk-Watchdog
+         * oben deckt nur Netzwerk-Liveness ab — genau die blieb in allen drei
+         * bisherigen Vorfällen intakt, während ressourcenlastige Pfade
+         * (Webserver, TLS/OTA, zuletzt auch MQTT-Befehlsverarbeitung, siehe
+         * #184) bereits an einem erschöpften internen Heap scheiterten.
+         * Reagiert direkt auf das interne (MALLOC_CAP_INTERNAL) Freiheap,
+         * bevor der Satellit komplett unerreichbar wird — über denselben
+         * geordneten Neustart-Pfad wie oben, damit anders als beim
+         * EN-Pin-Hard-Reset in #184 der Log-Trail (persist_log_to_flash())
+         * diesmal erhalten bleibt. Reine Diagnose-/Rejuvenation-Maßnahme,
+         * kein Fix der eigentlichen Fragmentierungsursache. */
+        if (CONFIG_HANNAH_HEAP_WATCHDOG_THRESHOLD_BYTES > 0) {
+            size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            if (free_internal < CONFIG_HANNAH_HEAP_WATCHDOG_THRESHOLD_BYTES) {
+                ESP_LOGE(TAG, "Heap-Watchdog: %lu Byte internes Freiheap < Schwellwert %d — Neustart.",
+                         (unsigned long)free_internal, CONFIG_HANNAH_HEAP_WATCHDOG_THRESHOLD_BYTES);
+                hannah_net_mark_restart_source("heap");
                 esp_task_wdt_delete(NULL);
                 esp_restart();
             }
@@ -809,8 +836,8 @@ static void *mbedtls_spiram_calloc(size_t n, size_t size)
 
 /* Refs #86 Punkt 2 — hilft nachträglich zu verifizieren, ob ein Reset durch den
  * Netzwerk-Watchdog tatsächlich greift statt an einem Brownout/Panic zu liegen.
- * Nur für "harte" Reset-Gründe relevant — die drei bewussten esp_restart()-Aufrufer
- * (Watchdog/remote/OTA) liefern hier alle denselben Wert (ESP_RST_SW), siehe
+ * Nur für "harte" Reset-Gründe relevant — die vier bewussten esp_restart()-Aufrufer
+ * (Watchdog/remote/OTA/heap) liefern hier alle denselben Wert (ESP_RST_SW), siehe
  * diag_init() unten für die eigentliche Unterscheidung. */
 static const char *reset_reason_str(esp_reset_reason_t r)
 {

@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from hannah.nlu import NLU, resolve_yes_no
+from hannah.nlu import NLU, resolve_clarification_answer, resolve_yes_no
 
 
 @pytest.fixture
@@ -128,3 +128,29 @@ class TestResolveYesNo:
 
     def test_unrecognized(self):
         assert resolve_yes_no("was meinst du") is None
+
+    def test_trailing_punctuation(self):
+        """#190 — STT-Transkript "Ja." darf nicht an der Satzzeichen-Klebung scheitern."""
+        assert resolve_yes_no("Ja.") is True
+        assert resolve_yes_no("Nein.") is False
+
+
+class TestResolveClarificationAnswer:
+    """#190 — Live-Vorfall: 'OK, Zimmer Süd.' wurde fälschlich 'OG Zimmer Ost' zugeordnet."""
+
+    _candidates = [("og_zimmer_ost", "OG Zimmer Ost"), ("og_zimmer_sued", "OG Zimmer Süd")]
+
+    def test_trailing_punctuation_matches_correct_candidate(self):
+        resolved = resolve_clarification_answer("OK, Zimmer Süd.", self._candidates)
+        assert resolved == ("og_zimmer_sued", "OG Zimmer Süd")
+
+    def test_true_tie_returns_none_instead_of_first_candidate(self):
+        # "Zimmer" matcht beide Kandidaten gleich stark, kein Wort grenzt ein.
+        assert resolve_clarification_answer("Zimmer.", self._candidates) is None
+
+    def test_no_match_returns_none(self):
+        assert resolve_clarification_answer("Küche bitte.", self._candidates) is None
+
+    def test_ordinal_still_works_with_punctuation(self):
+        resolved = resolve_clarification_answer("die erste.", self._candidates)
+        assert resolved == ("og_zimmer_ost", "OG Zimmer Ost")

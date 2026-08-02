@@ -33,6 +33,17 @@ CONFIG_MBEDTLS_KEY_EXCHANGE_RSA=n
 # wirksame Option dafür)
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
+# PSRAM als malloc()-Default statt Ausnahme: nur echte Realtime-/DMA-/ISR-
+# Anforderungen (I2S-DMA-Buffer via MALLOC_CAP_DMA, FreeRTOS-Task-Stacks)
+# bleiben intern erzwungen und sind von diesem Wert unberührt — alles andere
+# (TLS, Webserver, generische Buffer) geht ab jetzt standardmäßig auf PSRAM
+# statt Subsystem für Subsystem einzeln umgezogen werden zu müssen (Refs #191)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
+# Reserve für Fälle, in denen internes Memory zwingend gebraucht wird (DMA,
+# Task-Stacks) — entspricht dem bisherigen impliziten IDF-Default, hier nur
+# explizit dokumentiert
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
 

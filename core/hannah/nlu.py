@@ -825,8 +825,15 @@ def build_clarification_question(candidates: list[tuple[str, str]]) -> str:
 def resolve_clarification_answer(
     text: str, candidates: list[tuple[str, str]]
 ) -> Optional[tuple[str, str]]:
-    """Gibt (room_id, room_name) zurück oder None wenn keine Zuordnung möglich."""
-    norm = _normalize(text)
+    """Gibt (room_id, room_name) zurück oder None wenn keine Zuordnung möglich.
+
+    Rückfrage-Antworten kommen als STT-Rohtranskript (z.B. "OK, Zimmer Süd.")
+    statt über den üblichen Tokenizer (_STRIP_CHARS an der Haupt-NLU-Stelle,
+    Zeile ~237) — Satzzeichen müssen daher hier explizit weg, sonst klebt z.B.
+    der Punkt an "Süd." und das Wort matcht nie gegen den satzzeichenfreien
+    Kandidatennamen (#190).
+    """
+    norm = _STRIP_CHARS.sub(" ", _normalize(text))
     words = set(norm.split())
 
     for word, idx in _ORDINALS.items():
@@ -835,14 +842,23 @@ def resolve_clarification_answer(
 
     best: Optional[tuple[str, str]] = None
     best_score = 0
+    tied = False
     for room_id, room_name in candidates:
         score = sum(1 for w in _normalize(room_id).split() if w in words)
         score += sum(1 for w in _normalize(room_name).split() if w in words)
         if score > best_score:
             best_score = score
             best = (room_id, room_name)
+            tied = False
+        elif score == best_score and score > 0:
+            # Echter Gleichstand zwischen mehreren Kandidaten — nicht mehr
+            # stillschweigend den zuerst iterierten gewinnen lassen (#190).
+            # Ruft resolve_clarification_answer() als "keine Übereinstimmung"
+            # auf, der Aufrufer (main.py) verwirft die Rückfrage dann und
+            # verarbeitet den Text stattdessen normal weiter.
+            tied = True
 
-    return best if best_score > 0 else None
+    return best if (best_score > 0 and not tied) else None
 
 
 _YES_WORDS = {"ja", "jep", "jup", "jo", "klar", "gerne", "genau", "positiv", "mach"}
@@ -852,8 +868,11 @@ _NO_WORDS  = {"nein", "ne", "nee", "negativ", "lass"}
 def resolve_yes_no(text: str) -> Optional[bool]:
     """Gibt True/False zurück, oder None wenn weder eindeutig Ja noch Nein erkannt wurde.
     Für Ja/Nein-Rückfragen (z.B. Wecker-Serie-Erweiterung/-Löschung, #4) — NICHT für
-    Raum-Klarifizierung, siehe resolve_clarification_answer."""
-    words = set(_normalize(text).split())
+    Raum-Klarifizierung, siehe resolve_clarification_answer.
+
+    Gleiches Satzzeichen-Problem wie dort (#190): STT-Rohtranskript wie "Ja."
+    matcht ohne _STRIP_CHARS nicht gegen "ja" in _YES_WORDS."""
+    words = set(_STRIP_CHARS.sub(" ", _normalize(text)).split())
     if words & _NO_WORDS:
         return False
     if words & _YES_WORDS:

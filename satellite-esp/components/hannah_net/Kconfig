@@ -76,4 +76,21 @@ menu "Hannah Network"
             STA→AP-Mode-Übergang (HANNAH_WIFI_MAX_RETRY Reconnect-Versuche)
             braucht, sonst überholt der Watchdog einen legitimen Reconnect.
 
+    config HANNAH_HEAP_WATCHDOG_THRESHOLD_BYTES
+        int "Heap-Watchdog Schwellwert für internes DRAM (Byte, 0 = aus)"
+        default 20480
+        range 0 131072
+        help
+            Unterschreitet das freie interne DRAM (MALLOC_CAP_INTERNAL — nicht
+            der kombinierte Freiheap inkl. PSRAM) diesen Wert, löst der
+            Heartbeat-Task denselben geordneten esp_restart()-Pfad wie der
+            Netzwerk-Watchdog aus. Deckt Fälle ab, in denen das Netzwerk
+            (WiFi/MQTT/UDP-Heartbeat) noch lebt, aber ressourcenlastige Pfade
+            (Webserver, TLS/OTA, MQTT-Befehlsverarbeitung) an einem
+            erschöpften internen Heap bereits scheitern (#150/#161/#184) —
+            der Netzwerk-Watchdog oben prüft nur Netzwerk-Liveness und greift
+            in diesem Fall nachweislich nicht. Heuristischer Startwert, noch
+            nicht anhand von Heap-Logs aus echten Vorfällen kalibriert.
+            0 deaktiviert den Heap-Watchdog vollständig.
+
 endmenu
