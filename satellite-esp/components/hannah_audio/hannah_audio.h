@@ -56,6 +56,17 @@ void hannah_audio_pause_wakeword(void);
  * fehlschlägt und kein Neustart folgt (kein manueller Eingriff nötig). */
 void hannah_audio_resume_wakeword(void);
 
+/* Baut die I2S-Kanäle (Mic-RX, Speaker-TX) komplett ab und gibt deren
+ * DMA-Puffer (internes DRAM) frei — für mehr Headroom während OTA (#193).
+ * Blockiert bis mic_task/speaker_task sicher geparkt sind. Bei Erfolg
+ * reboot't OTA danach ohnehin; bei Fehlschlag siehe
+ * hannah_audio_reinit_after_ota_failure(). */
+void hannah_audio_deinit_for_ota(void);
+
+/* Gegenstück zu hannah_audio_deinit_for_ota() — für den Fall, dass OTA
+ * fehlschlägt und kein Neustart folgt. */
+void hannah_audio_reinit_after_ota_failure(void);
+
 /* Debug (#180): letzter per Tastenkombi (Vol+ und Vol- gleichzeitig ~700ms
  * gehalten) eingefrorener Roh-PCM-Snapshot als fertige WAV (inkl. Header).
  * Läuft unabhängig vom Sampling-/Capture-Modus im normalen Wakeword-Betrieb

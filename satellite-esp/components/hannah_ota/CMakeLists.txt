@@ -7,6 +7,7 @@ idf_component_register(
         hannah_audio
         hannah_wakeword
         hannah_asset
+        hannah_webserver
         esp_http_client
         esp_https_ota
         esp_app_format

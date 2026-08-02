@@ -29,6 +29,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #if CONFIG_HANNAH_MIC_TYPE_PDM
@@ -101,6 +102,19 @@ static RingbufHandle_t   s_spk_ringbuf = NULL;
 static volatile bool     s_ptt_active        = false;
 static volatile bool     s_streaming_paused  = false;
 static volatile bool     s_wakeword_paused   = false;
+/* Vollständige Hardware-Pause für OTA (#193) — anders als s_wakeword_paused
+ * (nur TFLite-Inference übersprungen, I2S-Read läuft unverändert weiter)
+ * verhindert das hier jeden i2s_channel_read()/i2s_channel_write()-Aufruf,
+ * damit die Kanäle sicher abgebaut werden können (deren DMA-Puffer sind der
+ * größte ungenutzte interne-DRAM-Hebel während OTA — s_wakeword_paused gibt
+ * nur PSRAM frei). s_{mic,speaker}_parked_sem lassen hannah_audio_deinit_for_ota()
+ * warten, bis beide Tasks bestätigt haben, dass sie gerade keinen I2S-Call in
+ * Flight haben, bevor die Kanäle gelöscht werden (reine Flag-Prüfung hätte
+ * eine Race — ein Task könnte mitten in einem bis zu 500-1000ms blockierenden
+ * i2s_channel_write()/xRingbufferReceive() stecken). */
+static volatile bool         s_hw_paused          = false;
+static SemaphoreHandle_t     s_mic_parked_sem     = NULL;
+static SemaphoreHandle_t     s_speaker_parked_sem = NULL;
 static volatile bool     s_vol_up_req        = false;
 static volatile bool     s_vol_down_req      = false;
 static volatile bool     s_speaking_active        = false;
@@ -442,6 +456,13 @@ static void mic_task(void *arg)
             }
         }
 
+        if (s_hw_paused) {
+            /* OTA baut die I2S-Kanäle gerade ab/wieder auf — s_rx_chan nicht anfassen. */
+            xSemaphoreGive(s_mic_parked_sem);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         size_t bytes_read = 0;
         i2s_channel_read(s_rx_chan, raw, STEP_BYTES_RAW,
                          &bytes_read, pdMS_TO_TICKS(200));
@@ -753,6 +774,15 @@ static void speaker_task(void *arg)
             }
             continue;
         }
+
+        if (s_hw_paused) {
+            /* OTA baut die I2S-Kanäle gerade ab/wieder auf — s_tx_chan nicht
+             * anfassen, Item ungeschrieben zurückgeben (siehe mic_task). */
+            xSemaphoreGive(s_speaker_parked_sem);
+            vRingbufferReturnItem(s_spk_ringbuf, item);
+            continue;
+        }
+
         if (item->len == 0) {
             /* End-Sentinel: DMA-Buffer drainieren */
             static const uint8_t silence[8 * STEP_SAMPLES * 4 * 2] = {0};
@@ -965,11 +995,13 @@ void hannah_audio_init(void)
     hannah_net_set_sampling_callback(on_sampling_mode);
     hannah_net_set_virtual_ptt_callback(on_virtual_ptt);
     hannah_net_set_start_listening_callback(hannah_audio_start_listen_after_tts);
+    s_mic_parked_sem = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);
 #else
     hannah_led_set_state(LED_STATE_IDLE);
 #endif
 #if CONFIG_HANNAH_SPEAKER_ENABLED
+    s_speaker_parked_sem = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(speaker_task, "speaker", 4096, NULL, 5, NULL, 1);
 #endif
 
@@ -1056,4 +1088,58 @@ void hannah_audio_resume_wakeword(void)
 {
     s_wakeword_paused = false;
     ESP_LOGI(TAG, "Wakeword-Inference fortgesetzt (OTA fehlgeschlagen).");
+}
+
+/* Baut die I2S-Kanäle (Mic-RX, Speaker-TX) komplett ab und gibt deren
+ * DMA-Puffer frei — anders als hannah_audio_pause_wakeword() (nur PSRAM)
+ * betrifft das echtes internes DRAM (#193). Blockiert bis mic_task/
+ * speaker_task bestätigt haben, dass sie gerade keinen I2S-Call in Flight
+ * haben (s_hw_paused wird von beiden Tasks vor jedem i2s_channel_read()/
+ * -write() geprüft), damit kein Kanal während eines laufenden Calls
+ * gelöscht wird. Wird von hannah_ota.c vor esp_https_ota() aufgerufen. */
+void hannah_audio_deinit_for_ota(void)
+{
+    s_hw_paused = true;
+
+#if !CONFIG_HANNAH_MIC_TYPE_NONE
+    xSemaphoreTake(s_mic_parked_sem, portMAX_DELAY);
+    if (s_rx_chan) {
+        esp_err_t err = i2s_channel_disable(s_rx_chan);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "i2s_channel_disable(rx) fehlgeschlagen: %s", esp_err_to_name(err));
+        err = i2s_del_channel(s_rx_chan);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "i2s_del_channel(rx) fehlgeschlagen: %s", esp_err_to_name(err));
+        s_rx_chan = NULL;
+    }
+#endif
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+    xSemaphoreTake(s_speaker_parked_sem, portMAX_DELAY);
+    if (s_tx_chan) {
+        esp_err_t err = i2s_channel_disable(s_tx_chan);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "i2s_channel_disable(tx) fehlgeschlagen: %s", esp_err_to_name(err));
+        err = i2s_del_channel(s_tx_chan);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "i2s_del_channel(tx) fehlgeschlagen: %s", esp_err_to_name(err));
+        s_tx_chan = NULL;
+    }
+#endif
+    ESP_LOGI(TAG, "Audio-Hardware deinitialisiert (OTA aktiv) — I2S-DMA-Puffer freigegeben.");
+}
+
+/* Gegenstück zu hannah_audio_deinit_for_ota() — für den Fall, dass OTA
+ * fehlschlägt und kein Neustart folgt. Baut die I2S-Kanäle über dieselben
+ * (bisher nur beim Boot genutzten) mic_init()/speaker_init() wieder auf und
+ * gibt mic_task/speaker_task frei. */
+void hannah_audio_reinit_after_ota_failure(void)
+{
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+    speaker_init();
+#endif
+#if !CONFIG_HANNAH_MIC_TYPE_NONE
+    mic_init();
+#endif
+    s_hw_paused = false;
+    ESP_LOGI(TAG, "Audio-Hardware re-initialisiert (OTA fehlgeschlagen).");
 }

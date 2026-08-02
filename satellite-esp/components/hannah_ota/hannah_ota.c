@@ -16,6 +16,7 @@
 #include "hannah_audio.h"
 #include "hannah_wakeword.h"
 #include "hannah_asset.h"
+#include "hannah_webserver.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -272,6 +273,13 @@ static void ota_update_task(void *arg)
         hannah_audio_pause_wakeword();
         hannah_wakeword_deinit();  /* PSRAM für mbedTLS-Download freigeben (#171) */
         esp_vfs_spiffs_unregister("spiffs");
+        /* Business-Logik komplett abschalten (#193) — Satellit ist während OTA
+         * ohnehin schon "taub" (Wakeword pausiert), vollständig offline für die
+         * paar Sekunden ist kein zusätzlicher UX-Verlust. Gibt echtes internes
+         * DRAM frei (I2S-DMA-Puffer), nicht nur PSRAM wie der Wakeword-Schritt
+         * oben — der größte bislang ungenutzte Headroom-Hebel während OTA. */
+        hannah_webserver_stop();
+        hannah_audio_deinit_for_ota();
         ESP_LOGI(TAG, "Free heap vor OTA: %lu", esp_get_free_heap_size());
 
         esp_http_client_config_t http_cfg = {
@@ -301,7 +309,9 @@ static void ota_update_task(void *arg)
             ESP_LOGE(TAG, "OTA fehlgeschlagen: %s", esp_err_to_name(err));
             hannah_asset_remount();
             hannah_wakeword_reinit();
+            hannah_audio_reinit_after_ota_failure();
             hannah_audio_resume_wakeword();
+            hannah_webserver_start();
         }
     }
 }

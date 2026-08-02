@@ -33,6 +33,17 @@ CONFIG_MBEDTLS_KEY_EXCHANGE_RSA=n
 # wirksame Option dafür)
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
+# Hardware-AES deaktivieren (Refs #192): die AES-DMA-Engine allokiert ihre
+# Deskriptoren/Alignment-Buffer selbst, direkt mit MALLOC_CAP_DMA|
+# MALLOC_CAP_INTERNAL (esp_aes_dma_core.c) — komplett vorbei an
+# mbedtls_platform_set_calloc_free() oben, DMA-fähiger Speicher für die
+# Krypto-Hardware muss zwingend intern liegen und lässt sich nicht per
+# Policy auf PSRAM umbiegen. Software-AES läuft dagegen über den normalen,
+# PSRAM-fähigen Allocator. Laut ESP-IDF-Doku bringt Hardware-AES bei
+# 240MHz CPU-Takt ohnehin keinen Geschwindigkeitsvorteil — für die
+# gelegentliche OTA-/Asset-HTTPS-Nutzung hier kein relevanter Tradeoff.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+
 # PSRAM als malloc()-Default statt Ausnahme: nur echte Realtime-/DMA-/ISR-
 # Anforderungen (I2S-DMA-Buffer via MALLOC_CAP_DMA, FreeRTOS-Task-Stacks)
 # bleiben intern erzwungen und sind von diesem Wert unberührt — alles andere
