@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.19 (2026-08-02)
+### Satellite Firmware
+* Fixed: wakeword model override (#166) quantized/dequantized every loaded model using hardcoded scale/zero_point/dtype constants taken from `hey_hannah_int8.tflite`, regardless of what the actually-loaded override model's own tensors specified. Now read dynamically from the model's `TfLiteTensor` metadata after `AllocateTensors()`, with a clean rejection (detection stays disabled) if a model uses a tensor type other than int8/uint8 instead of silently computing garbage (Refs #195)
+* Added: remote-triggerable debug WAV capture (`GET /debug/wav/capture`) — same 4s microphone ring-buffer snapshot as the existing Vol+/Vol- button combo (#180/#182), but triggerable from the satellite's web UI (works from phone/PC on the same LAN, no JavaScript) instead of requiring physical proximity to hold both buttons. A single blocking request arms the capture (LED switches to the existing purple CAPTURE state), waits out a 3.5s speaking window, then returns the WAV directly — useful for testing wakeword models from realistic conversational distance instead of arm's-length button range (Refs #194)
 
 ## 0.67.18 (2026-08-02)
 ### Satellite Firmware

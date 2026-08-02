@@ -79,6 +79,12 @@ static const char *TAG = "hannah_audio";
 #define DEBUG_WAV_HOLD_FRAMES     70  /* 70 × 10ms = 700ms */
 #define WAV_HEADER_BYTES          44
 
+/* Remote-Trigger (#194): kein Loslassen-Event wie bei der Tastenkombi, daher
+ * fixes Sprechfenster nach Aufruf. 350 Frames = 3.5s, bewusst etwas unter
+ * DEBUG_WAV_CAPTURE_SECONDS (4s) — die Aufnahme soll komplett im Ringpuffer
+ * liegen, nicht am Anfang schon rausgerotiert sein. */
+#define DEBUG_WAV_REMOTE_TRIGGER_FRAMES 350
+
 /* ------------------------------------------------------------------ */
 /* Typen                                                                 */
 
@@ -136,6 +142,14 @@ static size_t     s_debug_ring_wp       = 0;
 static bool        s_debug_ring_full     = false;
 static uint8_t   *s_debug_wav_snapshot = NULL;
 static volatile size_t s_debug_wav_len = 0;
+
+/* Remote-Trigger (#194) — s_debug_wav_remote_trigger wird vom Webserver-Task
+ * gesetzt, ausschließlich vom mic_task wieder auf false gesetzt (einfaches
+ * Request/Ack-Flag, kein Lock nötig). s_debug_wav_done_sem lässt den
+ * aufrufenden Task (Webserver-Handler) blockieren, bis der mic_task den
+ * Snapshot fertiggestellt hat. */
+static volatile bool     s_debug_wav_remote_trigger = false;
+static SemaphoreHandle_t s_debug_wav_done_sem       = NULL;
 
 /* ------------------------------------------------------------------ */
 /* Button ISRs                                                           */
@@ -374,6 +388,22 @@ bool hannah_audio_get_debug_wav(const uint8_t **out_buf, size_t *out_len)
     return true;
 }
 
+bool hannah_audio_trigger_debug_wav_capture(void)
+{
+    if (!s_debug_wav_done_sem) return false;  /* Mic deaktiviert (CONFIG_HANNAH_MIC_TYPE_NONE) */
+
+    /* Sem vor dem Trigger leeren — falls ein vorheriger Aufruf timeoutete und
+     * der mic_task danach doch noch xSemaphoreGive() nachholte, würde sonst
+     * dieser Aufruf sofort fälschlich "fertig" zurückmelden. */
+    xSemaphoreTake(s_debug_wav_done_sem, 0);
+
+    s_debug_wav_remote_trigger = true;
+
+    /* Sprechfenster + Marge, falls der mic_task gerade pausiert ist (OTA). */
+    const TickType_t timeout = pdMS_TO_TICKS(DEBUG_WAV_REMOTE_TRIGGER_FRAMES * 10 + 5000);
+    return xSemaphoreTake(s_debug_wav_done_sem, timeout) == pdTRUE;
+}
+
 /* ------------------------------------------------------------------ */
 /* Mic-Task                                                              */
 
@@ -453,6 +483,31 @@ static void mic_task(void *arg)
                 }
                 s_debug_hold_frames = 0;
                 s_debug_ready       = false;
+            }
+        }
+
+        /* Debug-WAV-Remote-Trigger (#194): Gegenstück zur Tastenkombi oben,
+         * ausgelöst per Webserver-Endpoint statt physischem Tastendruck — für
+         * Tests aus normalem Nutzungsabstand. Kein Loslassen-Event verfügbar,
+         * daher festes Sprechfenster (DEBUG_WAV_REMOTE_TRIGGER_FRAMES) statt
+         * Halten-bis-fertig. */
+        {
+            static int  s_remote_countdown = -1;  /* -1 = kein Capture aktiv */
+            if (s_debug_wav_remote_trigger && s_remote_countdown < 0) {
+                s_debug_wav_remote_trigger = false;
+                s_remote_countdown = DEBUG_WAV_REMOTE_TRIGGER_FRAMES;
+                hannah_led_set_state(LED_STATE_CAPTURE);
+                ESP_LOGI(TAG, "Debug-WAV-Remote-Trigger — jetzt sprechen (%.1fs Fenster).",
+                         DEBUG_WAV_REMOTE_TRIGGER_FRAMES / 100.0f);
+            } else if (s_remote_countdown == 0) {
+                debug_wav_snapshot();
+                ESP_LOGI(TAG, "Debug-WAV-Snapshot (remote) ausgelöst (%u B) — abrufbar unter /debug/wav.",
+                         (unsigned)s_debug_wav_len);
+                hannah_led_set_state(hannah_net_is_muted() ? LED_STATE_MUTE : LED_STATE_IDLE);
+                xSemaphoreGive(s_debug_wav_done_sem);
+                s_remote_countdown = -1;
+            } else if (s_remote_countdown > 0) {
+                s_remote_countdown--;
             }
         }
 
@@ -996,6 +1051,7 @@ void hannah_audio_init(void)
     hannah_net_set_virtual_ptt_callback(on_virtual_ptt);
     hannah_net_set_start_listening_callback(hannah_audio_start_listen_after_tts);
     s_mic_parked_sem = xSemaphoreCreateBinary();
+    s_debug_wav_done_sem = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);
 #else
     hannah_led_set_state(LED_STATE_IDLE);

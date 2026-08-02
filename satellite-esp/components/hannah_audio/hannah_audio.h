@@ -72,3 +72,12 @@ void hannah_audio_reinit_after_ota_failure(void);
  * Läuft unabhängig vom Sampling-/Capture-Modus im normalen Wakeword-Betrieb
  * mit. Liefert false, wenn seit Boot noch keine Aufnahme ausgelöst wurde. */
 bool hannah_audio_get_debug_wav(const uint8_t **out_buf, size_t *out_len);
+
+/* Debug (#194): löst denselben Snapshot wie die Vol+/Vol--Tastenkombi aus,
+ * aber remote (z.B. per Webserver-Endpoint) statt per physischem Tastendruck
+ * — für Tests aus normalem Nutzungsabstand, wo man nicht gleichzeitig die
+ * Tasten halten und auf Abstand gehen kann. Blockiert für das Sprechfenster
+ * (siehe DEBUG_WAV_REMOTE_TRIGGER_FRAMES) und liefert danach true, sobald der
+ * Snapshot fertig ist (per hannah_audio_get_debug_wav() abrufbar). Liefert
+ * false bei Timeout (mic_task nicht erreichbar, z.B. während OTA-Pause). */
+bool hannah_audio_trigger_debug_wav_capture(void);

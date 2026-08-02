@@ -388,6 +388,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
           "TLS-Zertifikatsprüfung deaktivieren <span style='color:#c00'>(unsicher)</span></label>"
         "<br><button type=submit class=btn>Speichern &amp; Neustart</button>"
         "</form>"
+        "<h3>Debug</h3>"
+        "<p>Startet eine ~3.5s Aufnahme (Mikrofon-Ringpuffer) und lädt sie danach "
+          "automatisch als WAV herunter, zum Offline-Testen des Wakeword-Modells. "
+          "Nach Klick sofort sprechen.</p>"
+        "<a class=btn href=/debug/wav/capture>Wakeword-Debug-Aufnahme starten</a>"
         "<script>"
         "async function scanWifi(){"
           "const sb=document.getElementById('sb');"
@@ -778,6 +783,24 @@ static esp_err_t debug_wav_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── Handler: GET /debug/wav/capture (#194) ──────────────────────────────── */
+
+/* Remote-Gegenstück zur Vol+/Vol--Tastenkombi — ein einziger, blockierender
+ * Request statt getrennter Arm-/Download-Schritte: löst das Sprechfenster
+ * aus, wartet bis der mic_task den Snapshot fertiggestellt hat, liefert die
+ * WAV dann direkt als Response. Bewusst kein JavaScript nötig — ein simpler
+ * <a href> auf der Settings-Seite reicht, der Browser zeigt währenddessen
+ * einfach "lädt..." an. */
+static esp_err_t debug_wav_capture_handler(httpd_req_t *req)
+{
+    if (!hannah_audio_trigger_debug_wav_capture()) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+            "Aufnahme fehlgeschlagen oder Timeout (Mic deaktiviert oder gerade pausiert, z.B. während OTA).");
+        return ESP_OK;
+    }
+    return debug_wav_handler(req);
+}
+
 /* ── Handler: POST /nvs (Refs #36) ───────────────────────────────────────── */
 
 /* Nur diese Keys sind über /nvs schreibbar. Alles andere wird abgelehnt —
@@ -920,6 +943,7 @@ void hannah_webserver_start(void)
         { .uri = "/log/clear", .method = HTTP_POST, .handler = log_clear_handler    },
         { .uri = "/log/last",  .method = HTTP_GET,  .handler = log_last_handler     },
         { .uri = "/debug/wav", .method = HTTP_GET,  .handler = debug_wav_handler    },
+        { .uri = "/debug/wav/capture", .method = HTTP_GET, .handler = debug_wav_capture_handler },
         { .uri = "/nvs",       .method = HTTP_POST, .handler = nvs_post_handler     },
     };
     for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++) {

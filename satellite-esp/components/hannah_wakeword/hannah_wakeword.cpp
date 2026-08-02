@@ -40,11 +40,17 @@
 
 static const char *TAG = "wakeword";
 
-/* Skalierungskonstante: uint16_C / (128 × model_input_scale) → float-Äquivalent */
-static constexpr float  FEATURE_SCALE    = 128.0f * 0.10196078568696976f;  /* ≈ 13.051 */
-static constexpr int    INPUT_ZERO_POINT = -128;
-static constexpr float  OUTPUT_SCALE     = 1.0f / 256.0f;
-static constexpr size_t FRONTEND_NUM_CHANNELS = 40;  /* Mel-Bänder pro AudioFrontend-Frame */
+static constexpr size_t FRONTEND_NUM_CHANNELS = 40;  /* Mel-Bänder pro AudioFrontend-Frame — Frontend-Konfiguration, modellunabhängig */
+
+/* Input-/Output-Quantisierung wird NICHT mehr hartkodiert angenommen, sondern
+ * nach AllocateTensors() direkt aus dem geladenen Modell gelesen (TfLiteTensor::params
+ * bzw. ::type) — jedes Override-Modell kann eigene scale/zero_point/dtype mitbringen. */
+static float   s_input_scale       = 1.0f;
+static int32_t s_input_zero_point  = 0;
+static bool    s_input_is_int8     = true;   /* sonst uint8 */
+static float   s_output_scale      = 1.0f;
+static int32_t s_output_zero_point = 0;
+static bool    s_output_is_int8    = false;  /* sonst uint8 */
 
 static constexpr size_t ARENA_SIZE    = CONFIG_HANNAH_TFLITE_ARENA_KB * 1024;
 /* War 4096 B im internen DRAM, fix und unabhängig vom geladenen Modell (#166
@@ -264,9 +270,35 @@ static void tflite_init(void)
     s_input       = s_interpreter->input(0);
     s_output      = s_interpreter->output(0);
 
-    ESP_LOGI(TAG, "TFLite geladen: Arena %u KB, verwendet %u B.",
+    /* Quantisierung dynamisch aus dem geladenen Modell übernehmen, statt sie
+     * hartkodiert für hey_hannah anzunehmen — jedes Override-Modell (z.B.
+     * okay_nabu_v2, oder neu trainierte hey_hannah-Varianten) kann eigene
+     * scale/zero_point/dtype für Input und Output mitbringen. */
+    if (s_input->type != kTfLiteInt8 && s_input->type != kTfLiteUInt8) {
+        ESP_LOGE(TAG, "Wakeword-Input-Tensor-Typ nicht unterstützt (%d, erwartet int8/uint8) — "
+                      "Erkennung bleibt deaktiviert.", (int)s_input->type);
+        tflite_deinit();
+        return;
+    }
+    if (s_output->type != kTfLiteInt8 && s_output->type != kTfLiteUInt8) {
+        ESP_LOGE(TAG, "Wakeword-Output-Tensor-Typ nicht unterstützt (%d, erwartet int8/uint8) — "
+                      "Erkennung bleibt deaktiviert.", (int)s_output->type);
+        tflite_deinit();
+        return;
+    }
+    s_input_is_int8     = (s_input->type == kTfLiteInt8);
+    s_input_scale       = s_input->params.scale;
+    s_input_zero_point  = s_input->params.zero_point;
+    s_output_is_int8    = (s_output->type == kTfLiteInt8);
+    s_output_scale      = s_output->params.scale;
+    s_output_zero_point = s_output->params.zero_point;
+
+    ESP_LOGI(TAG, "TFLite geladen: Arena %u KB, verwendet %u B. Input %s scale=%.6f zp=%ld, "
+                  "Output %s scale=%.6f zp=%ld.",
              (unsigned)(ARENA_SIZE / 1024),
-             (unsigned)s_interpreter->arena_used_bytes());
+             (unsigned)s_interpreter->arena_used_bytes(),
+             s_input_is_int8 ? "int8" : "uint8", s_input_scale, (long)s_input_zero_point,
+             s_output_is_int8 ? "int8" : "uint8", s_output_scale, (long)s_output_zero_point);
 
     /* #181: Frame-Anzahl aus der tatsächlichen Input-Tensor-Größe ableiten
      * statt einen einzelnen 10ms-Streaming-Schritt anzunehmen — manche Modelle
@@ -380,15 +412,25 @@ float hannah_wakeword_process(const int16_t *pcm)
      * Frame-Reihenfolge im Tensor ist zeitlich aufsteigend (älteste zuerst). */
     size_t tail_offset = (s_input_frame_count - 1) * feat.size;
     if (s_input_frame_count > 1) {
-        memmove(s_input->data.int8, s_input->data.int8 + feat.size, tail_offset);
+        memmove(s_input->data.raw, s_input->data.raw + feat.size, tail_offset);
     }
 
-    /* uint16 → int8 quantisieren, neuesten Frame ans Ende schreiben */
+    /* uint16 → int8/uint8 quantisieren (je nach Modell-Input-Dtype), neuesten
+     * Frame ans Ende schreiben. Kombinierte Skala: FrontendOutput-Werte sind
+     * bereits durch 128 geteilte uint16-Fixpunktwerte (siehe Header-Kommentar),
+     * hier noch durch die modellspezifische Input-Scale teilen. */
+    const float input_combined_scale = 128.0f * s_input_scale;
+    const int32_t input_min = s_input_is_int8 ? -128 : 0;
+    const int32_t input_max = s_input_is_int8 ?  127 : 255;
     for (size_t i = 0; i < feat.size; i++) {
-        int32_t q = (int32_t)roundf((float)feat.values[i] / FEATURE_SCALE) + INPUT_ZERO_POINT;
-        if      (q < -128) q = -128;
-        else if (q >  127) q =  127;
-        s_input->data.int8[tail_offset + i] = (int8_t)q;
+        int32_t q = (int32_t)roundf((float)feat.values[i] / input_combined_scale) + s_input_zero_point;
+        if      (q < input_min) q = input_min;
+        else if (q > input_max) q = input_max;
+        if (s_input_is_int8) {
+            s_input->data.int8[tail_offset + i] = (int8_t)q;
+        } else {
+            s_input->data.uint8[tail_offset + i] = (uint8_t)q;
+        }
         if (i < HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN) {
             s_last_input_preview[i] = (int8_t)q;
             s_last_mel_preview[i]   = feat.values[i];
@@ -402,8 +444,10 @@ float hannah_wakeword_process(const int16_t *pcm)
         return 0.0f;
     }
 
-    s_last_output_raw = s_output->data.uint8[0];
-    return (float)s_last_output_raw * OUTPUT_SCALE;
+    int32_t raw = s_output_is_int8 ? (int32_t)s_output->data.int8[0]
+                                    : (int32_t)s_output->data.uint8[0];
+    s_last_output_raw = (uint8_t)raw;  /* Debug-Rohbyte, siehe hannah_wakeword_debug_t */
+    return (float)(raw - s_output_zero_point) * s_output_scale;
 }
 
 void hannah_wakeword_last_debug(hannah_wakeword_debug_t *out)

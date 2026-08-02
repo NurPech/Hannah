@@ -2,6 +2,7 @@
 forum_post.md
 __pycache__/
 venv/
+venv-tflite/
 core/venv/
 core/.venv-test/
 telegram/venv/
