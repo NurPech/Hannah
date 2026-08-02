@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.67.15 (2026-08-02)
+### Satellite Firmware
+* Added: `asset_namespace` — optional per-device NVS override for the asset-manifest namespace (settable via `/settings` or `POST /nvs`), defaults to the hardcoded `"satellite"` when empty. Lets a single satellite be pointed at an isolated namespace (e.g. `satellite-test`) to trial risky assets like a new wakeword model without exposing the rest of the fleet (Refs #187)
+* Changed: asset downloads (`GET /assets/{key}`) now also send `?namespace=` (same value as the manifest fetch), matching the effective `asset_namespace` (Refs #187)
+
 ## 0.67.14 (2026-08-01)
 ### Hannah Core
 * Fixed: a satellite's display name reverted to its MAC in ioBroker's Device Manager within seconds of being set correctly, because the recurring proxy heartbeat push and the volume/mute-change pushes to the adapter never carried `display_name` — only the one-time "newly seen" transition and `GetSatellites()` resolved it. All `agent_satellite_update()` call sites now resolve and pass the display name consistently (Refs #186)

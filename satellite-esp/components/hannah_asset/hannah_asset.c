@@ -139,7 +139,8 @@ static char *fetch_manifest(void)
 {
     const hannah_config_t *hcfg = hannah_config_get();
     char url[256];
-    snprintf(url, sizeof(url), "%s/manifest?namespace=satellite", hcfg->asset_url);
+    snprintf(url, sizeof(url), "%s/manifest?namespace=%s", hcfg->asset_url,
+             hcfg->asset_namespace[0] ? hcfg->asset_namespace : "satellite");
     ESP_LOGI(TAG, "Manifest abrufen: %s", url);
 
     esp_http_client_config_t cfg = {
@@ -180,7 +181,8 @@ static bool download_asset(const char *asset_id)
 {
     char url[256];
     const hannah_config_t *hcfg = hannah_config_get();
-    snprintf(url, sizeof(url), "%s/assets/%s", hcfg->asset_url, asset_id);
+    snprintf(url, sizeof(url), "%s/assets/%s?namespace=%s", hcfg->asset_url, asset_id,
+             hcfg->asset_namespace[0] ? hcfg->asset_namespace : "satellite");
 
     char path[72];
     snprintf(path, sizeof(path), ASSET_MOUNT "/%s", asset_id);

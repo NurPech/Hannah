@@ -9,7 +9,8 @@ extern "C" {
 #endif
 
 /**
- * hannah_asset — generischer Asset-Cache via SPIFFS + Asset-Server (namespace "satellite")
+ * hannah_asset — generischer Asset-Cache via SPIFFS + Asset-Server (Namespace per NVS
+ * überschreibbar, Default "satellite" — Refs #187)
  *
  * Ablauf:
  *   hannah_asset_init() — SPIFFS mounten, dann reaktiv warten: ein Sync-Durchlauf

@@ -18,6 +18,7 @@ typedef struct {
     char     ota_channel[32];
     char     asset_url[128];
     char     asset_token[128];
+    char     asset_namespace[32]; /* Override für Asset-Manifest-Namespace — leer = Default "satellite" (Refs #187) */
     bool     tls_skip_verify;  /* Skip TLS certificate validation (insecure, for self-signed certs) */
     char     seed[64];         /* one-time pairing token written by WebFlash; cleared after "paired" ACK */
     char     nvs_token[128];   /* shared secret for the inbound POST /nvs endpoint (Refs #36) */

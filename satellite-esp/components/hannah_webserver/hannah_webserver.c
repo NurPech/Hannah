@@ -376,6 +376,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         "<h3>Asset Server</h3>"
         "<label>URL<input name=asset_url value='%s'></label>"
         "<label>Token<input type=password name=asset_token placeholder='(unverändert lassen)'></label>"
+        "<label>Namespace<input name=asset_namespace value='%s' placeholder='(leer = satellite)'></label>"
         "<h3>Syslog</h3>"
         "<label>Server (IPv4, leer = deaktiviert)<input name=syslog_host value='%s' placeholder='z.B. 192.168.1.10'></label>"
         "<label>Port<input name=syslog_port value='%u'></label>"
@@ -422,6 +423,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         cfg->ota_url,
         cfg->ota_channel,
         cfg->asset_url,
+        cfg->asset_namespace,
         cfg->syslog_host, cfg->syslog_port,
         cfg->tls_skip_verify ? " checked" : "",
         S_FOOT);
@@ -471,6 +473,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     form_get(body, "ota_url",     new_cfg.ota_url,     sizeof(new_cfg.ota_url));
     form_get(body, "ota_channel", new_cfg.ota_channel, sizeof(new_cfg.ota_channel));
     form_get(body, "asset_url",   new_cfg.asset_url,   sizeof(new_cfg.asset_url));
+    form_get(body, "asset_namespace", new_cfg.asset_namespace, sizeof(new_cfg.asset_namespace));
     form_get(body, "syslog_host", new_cfg.syslog_host, sizeof(new_cfg.syslog_host));
 
     char syslog_port_str[8] = {0};
@@ -783,7 +786,7 @@ static esp_err_t debug_wav_handler(httpd_req_t *req)
  * verbundene Satelliten, Re-Pairing bleibt Sache des WebSerial-Flashs (Refs #136). */
 static const char *NVS_ALLOWED_KEYS[] = {
     "wifi_ssid", "wifi_pass", "mqtt_broker", "mqtt_port",
-    "ota_channel", "ota_token", "asset_token", "ww_threshold",
+    "ota_channel", "ota_token", "asset_token", "asset_namespace", "ww_threshold",
 };
 
 static esp_err_t nvs_post_handler(httpd_req_t *req)
@@ -869,6 +872,8 @@ static esp_err_t nvs_post_handler(httpd_req_t *req)
         strncpy(new_cfg.ota_token, v->valuestring, sizeof(new_cfg.ota_token) - 1);
     if ((v = cJSON_GetObjectItemCaseSensitive(root, "asset_token")) && cJSON_IsString(v))
         strncpy(new_cfg.asset_token, v->valuestring, sizeof(new_cfg.asset_token) - 1);
+    if ((v = cJSON_GetObjectItemCaseSensitive(root, "asset_namespace")) && cJSON_IsString(v))
+        strncpy(new_cfg.asset_namespace, v->valuestring, sizeof(new_cfg.asset_namespace) - 1);
     if ((v = cJSON_GetObjectItemCaseSensitive(root, "ww_threshold")) && cJSON_IsNumber(v)) {
         int t = v->valueint;
         if (t >= 0 && t <= 100) new_cfg.wakeword_threshold = (uint8_t)t;
