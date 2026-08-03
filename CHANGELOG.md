@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.23 (2026-08-03)
+### Satellite Firmware
+* Added: `CONFIG_HANNAH_WAKEWORD_DEBUG` Kconfig option (default `y` for now, see #199) gating the wakeword debug infrastructure built up across #173/#180/#194/#197 — the periodic `Wakeword-Debug` log line (rms/peak/confidence/mel-/input-preview), the 4s raw-PCM ring buffer, and both the Vol+/Vol- button-combo and remote (`GET /debug/wav/capture`) snapshot triggers. `GET /debug/wav`/`/debug/wav/capture` stay registered either way and just report "no capture available" when the flag is off, so `hannah_webserver.c` didn't need to change. Kept default `y` deliberately — this tooling was decisive in finding #198, and we don't want to lose it until that fix has proven itself over a longer stretch of live use. Flip to `n` once confident, to skip the log spam and ~125 KB PSRAM ring-buffer allocation (Refs #199)
+
 ## 0.67.22 (2026-08-03)
 ### Satellite Firmware
 * Fixed: OTA hung forever (no crash, no restart, but webserver/wakeword already torn down and download never starting) whenever the satellite was idle — not actively playing TTS/an announcement — at the moment an automatic OTA check triggered, which is the normal case. `speaker_task()`'s `s_hw_paused` check (used to synchronize I2S teardown before the download, #193) sat behind the `if (!item) continue;` branch of its ring-buffer receive loop, so it was never reached while `xRingbufferReceive()` kept timing out with nothing queued — `s_speaker_parked_sem` was never given, and `hannah_audio_deinit_for_ota()` blocked forever on it. Moved the check to the top of the loop, unconditional of the receive result, matching the already-correct `mic_task` pattern (Refs #200)

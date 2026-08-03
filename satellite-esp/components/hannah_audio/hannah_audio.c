@@ -144,7 +144,16 @@ static int                s_stream_frames   = 0;
  * Synchronisierung nötig). s_debug_wav_snapshot wird vom mic_task bei
  * Trigger neu befüllt und vom Webserver-Handler (anderer Task) gelesen —
  * bewusst ohne Lock: einmaliger, manuell ausgelöster Debug-Snapshot, ein
- * Download während eines Re-Triggers ist ein irrelevantes Randrisiko. */
+ * Download während eines Re-Triggers ist ein irrelevantes Randrisiko.
+ *
+ * #199: die komplette Debug-Infrastruktur (Ringpuffer, periodische
+ * Wakeword-Debug-Logzeile, Tastenkombi-/Remote-Snapshot) hinter
+ * CONFIG_HANNAH_WAKEWORD_DEBUG. hannah_audio_get_debug_wav()/
+ * hannah_audio_trigger_debug_wav_capture() bleiben immer kompiliert und
+ * geben bei "n" einfach false zurück — die Webserver-Handler degradieren
+ * dadurch von selbst sauber (404/500 "keine Aufnahme"), ohne dass
+ * hannah_webserver.c selbst etwas vom Flag wissen muss. */
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
 static int16_t  *s_debug_ring          = NULL;
 static size_t     s_debug_ring_wp       = 0;
 /* #197: Zähler, ein Inkrement pro mic_task-Iteration (=10ms), synchron zum
@@ -165,6 +174,7 @@ static volatile size_t s_debug_wav_len = 0;
  * Snapshot fertiggestellt hat. */
 static volatile bool     s_debug_wav_remote_trigger = false;
 static SemaphoreHandle_t s_debug_wav_done_sem       = NULL;
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
 /* ------------------------------------------------------------------ */
 /* Button ISRs                                                           */
@@ -370,6 +380,7 @@ static void write_wav_header(uint8_t *p, uint32_t pcm_bytes)
     memcpy(p, &pcm_bytes, 4);
 }
 
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
 /* Friert den aktuellen Ringpuffer als fertige WAV im Snapshot-Puffer ein.
  * Läuft im mic_task, ausgelöst durch die Vol+/Vol--Kombi. */
 static void debug_wav_snapshot(void)
@@ -392,19 +403,25 @@ static void debug_wav_snapshot(void)
     write_wav_header(s_debug_wav_snapshot, (uint32_t)pcm_bytes);
     s_debug_wav_len = WAV_HEADER_BYTES + pcm_bytes;
 }
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 #endif /* !CONFIG_HANNAH_MIC_TYPE_NONE */
 
 bool hannah_audio_get_debug_wav(const uint8_t **out_buf, size_t *out_len)
 {
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
     size_t len = s_debug_wav_len;
     if (!s_debug_wav_snapshot || len == 0) return false;
     *out_buf = s_debug_wav_snapshot;
     *out_len = len;
     return true;
+#else
+    return false;
+#endif
 }
 
 bool hannah_audio_trigger_debug_wav_capture(void)
 {
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
     if (!s_debug_wav_done_sem) return false;  /* Mic deaktiviert (CONFIG_HANNAH_MIC_TYPE_NONE) */
 
     /* Sem vor dem Trigger leeren — falls ein vorheriger Aufruf timeoutete und
@@ -417,6 +434,9 @@ bool hannah_audio_trigger_debug_wav_capture(void)
     /* Sprechfenster + Marge, falls der mic_task gerade pausiert ist (OTA). */
     const TickType_t timeout = pdMS_TO_TICKS(DEBUG_WAV_REMOTE_TRIGGER_FRAMES * 10 + 5000);
     return xSemaphoreTake(s_debug_wav_done_sem, timeout) == pdTRUE;
+#else
+    return false;
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -471,6 +491,7 @@ static void mic_task(void *arg)
             hannah_net_publish_volume(s_volume);
         }
 
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
         /* Debug-WAV-Trigger (#180, #182): Vol+ und Vol- gleichzeitig gehalten.
          * Bewusst per GPIO-Poll statt eigener ISR — läuft unabhängig vom
          * Sampling-/Capture-Modus im normalen Wakeword-Betrieb mit, ohne
@@ -525,6 +546,7 @@ static void mic_task(void *arg)
                 s_remote_countdown--;
             }
         }
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
         if (s_hw_paused) {
             /* OTA baut die I2S-Kanäle gerade ab/wieder auf — s_rx_chan nicht anfassen. */
@@ -562,6 +584,7 @@ static void mic_task(void *arg)
 #endif
         size_t mono_samples = frames;
 
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
         /* Debug-Ringpuffer (#180): läuft immer mit, unabhängig vom State —
          * erfasst exakt das PCM, das auch durch die Wakeword-Pipeline läuft. */
         if (s_debug_ring) {
@@ -574,6 +597,7 @@ static void mic_task(void *arg)
             }
             s_debug_ring_frame_no++;
         }
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
         /* Warmup: Frontend füttern aber nicht triggern */
         if (warmup_remaining > 0) {
@@ -665,6 +689,7 @@ static void mic_task(void *arg)
                         s_noise_floor_ema = s_noise_floor_ema * 0.999f + rms_idle * 0.001f;
                 }
 
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
                 /* Wakeword-Debug: alle ~500ms komplette Diagnosekette loggen (#173) —
                  * rms/peak (kommt überhaupt Audio an, clippt es?), confidence (wie nah
                  * ans Threshold?), feat_size/num_read (liefert das AudioFrontend
@@ -710,6 +735,7 @@ static void mic_task(void *arg)
                     s_wakeword_debug_peak     = 0.0f;
                     s_wakeword_debug_min_feat = SIZE_MAX;
                 }
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
                 /* PTT oder Wake-Word → Streaming starten */
                 if ((s_ptt_active && !was_ptt) ||
@@ -1002,6 +1028,7 @@ void hannah_audio_init(void)
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
     mic_init();
 
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
     /* Debug-WAV-Snapshot (#180): Ringpuffer + Ausgabepuffer auf PSRAM. */
     s_debug_ring = (int16_t *)heap_caps_malloc(
         DEBUG_WAV_RING_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -1009,6 +1036,7 @@ void hannah_audio_init(void)
         WAV_HEADER_BYTES + DEBUG_WAV_RING_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_debug_ring || !s_debug_wav_snapshot)
         ESP_LOGE(TAG, "Debug-WAV-Puffer: PSRAM-Allokation fehlgeschlagen — /debug/wav bleibt leer.");
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 #endif
 
     /* Mute-Button: Input mit Pull-up, Interrupt auf fallende Flanke */
@@ -1080,7 +1108,9 @@ void hannah_audio_init(void)
     hannah_net_set_start_listening_callback(hannah_audio_start_listen_after_tts);
     s_mic_parked_sem = xSemaphoreCreateBinary();
     s_wakeword_parked_sem = xSemaphoreCreateBinary();
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
     s_debug_wav_done_sem = xSemaphoreCreateBinary();
+#endif
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);
 #else
     hannah_led_set_state(LED_STATE_IDLE);

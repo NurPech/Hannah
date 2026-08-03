@@ -133,4 +133,19 @@ menu "Hannah Audio"
         help
             Schrittweite pro Tastendruck für Vol+/Vol-.
 
+    config HANNAH_WAKEWORD_DEBUG
+        bool "Wakeword-Debug-Infrastruktur aktivieren"
+        default y
+        help
+            Periodische "Wakeword-Debug"-Log-Zeile (rms/peak/confidence/mel-
+            /input-preview, alle ~500ms) plus der 4s-Roh-PCM-Ringpuffer samt
+            Vol+/Vol--Tastenkombi- und Remote-Snapshot (GET /debug/wav(/capture)),
+            inkl. frame_no-Zähler (#197). Aus #173/#180/#194/#197, entscheidend
+            beim Finden von #198. Default bewusst noch "y" (#199) — erst auf
+            "n" umstellen, wenn sich #198 über einen längeren Zeitraum bewährt
+            hat, damit bis dahin keine Debug-Fähigkeit verloren geht. Bei "n":
+            kein Log-Spam, kein RAM-Verbrauch für den Ringpuffer (~125 KB
+            PSRAM), /debug/wav(/capture) bleiben erreichbar, melden aber nur
+            "keine Aufnahme verfügbar".
+
 endmenu
