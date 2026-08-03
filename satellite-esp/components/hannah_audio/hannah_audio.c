@@ -121,6 +121,14 @@ static volatile bool     s_wakeword_paused   = false;
 static volatile bool         s_hw_paused          = false;
 static SemaphoreHandle_t     s_mic_parked_sem     = NULL;
 static SemaphoreHandle_t     s_speaker_parked_sem = NULL;
+/* #196: analog zu s_mic_parked_sem, aber für hannah_audio_pause_wakeword() —
+ * lässt den OTA-Task warten, bis mic_task sicher keinen hannah_wakeword_process()/
+ * Invoke() mehr in Flight hat, bevor hannah_wakeword_deinit() die TFLite-Arena
+ * freigibt. Vorher war s_wakeword_paused nur ein Flag ohne Synchronisierung —
+ * ein bereits laufender Invoke() lief einfach weiter, während die Arena
+ * parallel schon freigegeben wurde (Use-after-free, Absturz in
+ * tflite::GetQuantizedConvolutionMultipler beobachtet). */
+static SemaphoreHandle_t     s_wakeword_parked_sem = NULL;
 static volatile bool     s_vol_up_req        = false;
 static volatile bool     s_vol_down_req      = false;
 static volatile bool     s_speaking_active        = false;
@@ -139,6 +147,13 @@ static int                s_stream_frames   = 0;
  * Download während eines Re-Triggers ist ein irrelevantes Randrisiko. */
 static int16_t  *s_debug_ring          = NULL;
 static size_t     s_debug_ring_wp       = 0;
+/* #197: Zähler, ein Inkrement pro mic_task-Iteration (=10ms), synchron zum
+ * Ringpuffer-Schreiben unten — erlaubt eine spätere Debug-WAV-Download-Datei
+ * exakt auf eine bestimmte periodische Wakeword-Debug-Zeile zurückzurechnen
+ * (Differenz der frame_no-Werte × 160 Samples), statt über Wanduhr-
+ * Zeitstempel zu raten (unzuverlässig, siehe Debugging-Session zum
+ * Live-vs-Offline-Confidence-Unterschied). */
+static uint32_t   s_debug_ring_frame_no = 0;
 static bool        s_debug_ring_full     = false;
 static uint8_t   *s_debug_wav_snapshot = NULL;
 static volatile size_t s_debug_wav_len = 0;
@@ -478,8 +493,8 @@ static void mic_task(void *arg)
             } else {
                 if (s_debug_ready) {
                     debug_wav_snapshot();
-                    ESP_LOGI(TAG, "Debug-WAV-Snapshot ausgelöst (%u B) — abrufbar unter /debug/wav.",
-                             (unsigned)s_debug_wav_len);
+                    ESP_LOGI(TAG, "Debug-WAV-Snapshot ausgelöst (%u B, frame_no=%lu) — abrufbar unter /debug/wav.",
+                             (unsigned)s_debug_wav_len, (unsigned long)s_debug_ring_frame_no);
                 }
                 s_debug_hold_frames = 0;
                 s_debug_ready       = false;
@@ -501,8 +516,8 @@ static void mic_task(void *arg)
                          DEBUG_WAV_REMOTE_TRIGGER_FRAMES / 100.0f);
             } else if (s_remote_countdown == 0) {
                 debug_wav_snapshot();
-                ESP_LOGI(TAG, "Debug-WAV-Snapshot (remote) ausgelöst (%u B) — abrufbar unter /debug/wav.",
-                         (unsigned)s_debug_wav_len);
+                ESP_LOGI(TAG, "Debug-WAV-Snapshot (remote) ausgelöst (%u B, frame_no=%lu) — abrufbar unter /debug/wav.",
+                         (unsigned)s_debug_wav_len, (unsigned long)s_debug_ring_frame_no);
                 hannah_led_set_state(hannah_net_is_muted() ? LED_STATE_MUTE : LED_STATE_IDLE);
                 xSemaphoreGive(s_debug_wav_done_sem);
                 s_remote_countdown = -1;
@@ -557,6 +572,7 @@ static void mic_task(void *arg)
                     s_debug_ring_full = true;
                 }
             }
+            s_debug_ring_frame_no++;
         }
 
         /* Warmup: Frontend füttern aber nicht triggern */
@@ -595,7 +611,11 @@ static void mic_task(void *arg)
         }
 
         if (s_wakeword_paused) {
-            /* OTA läuft — Inference pausieren damit IDLE0 den WDT zurücksetzen kann */
+            /* OTA läuft — Inference pausieren damit IDLE0 den WDT zurücksetzen kann.
+             * xSemaphoreGive() bestätigt hannah_audio_pause_wakeword(), dass hier
+             * gerade sicher kein hannah_wakeword_process()/Invoke() mehr läuft —
+             * erst danach darf der OTA-Task die TFLite-Arena freigeben (#196). */
+            xSemaphoreGive(s_wakeword_parked_sem);
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
@@ -669,11 +689,12 @@ static void mic_task(void *arg)
                 if (++s_wakeword_debug_ctr >= 50) {
                     s_wakeword_debug_ctr = 0;
                     ESP_LOGI(TAG, "Wakeword-Debug: rms=%.4f peak=%.4f confidence(peak/500ms)=%.4f threshold=%.2f "
-                                  "noise_ema=%.4f feat_size(min/500ms)=%u num_read=%u output_raw=%u invoke_fails=%lu",
+                                  "noise_ema=%.4f feat_size(min/500ms)=%u num_read=%u output_raw=%u invoke_fails=%lu frame_no=%lu",
                              rms_idle, s_wakeword_debug_peak, s_wakeword_debug_max,
                              hannah_config_get()->wakeword_threshold / 100.0f, s_noise_floor_ema,
                              (unsigned)s_wakeword_debug_min_feat, (unsigned)wwdbg.num_read,
-                             (unsigned)wwdbg.output_raw, (unsigned long)wwdbg.invoke_fail_count);
+                             (unsigned)wwdbg.output_raw, (unsigned long)wwdbg.invoke_fail_count,
+                             (unsigned long)s_debug_ring_frame_no);
                     ESP_LOGI(TAG, "Wakeword-Debug mel[0..9]=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
                              (unsigned)wwdbg.mel_preview[0], (unsigned)wwdbg.mel_preview[1],
                              (unsigned)wwdbg.mel_preview[2], (unsigned)wwdbg.mel_preview[3],
@@ -1051,6 +1072,7 @@ void hannah_audio_init(void)
     hannah_net_set_virtual_ptt_callback(on_virtual_ptt);
     hannah_net_set_start_listening_callback(hannah_audio_start_listen_after_tts);
     s_mic_parked_sem = xSemaphoreCreateBinary();
+    s_wakeword_parked_sem = xSemaphoreCreateBinary();
     s_debug_wav_done_sem = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);
 #else
@@ -1136,7 +1158,19 @@ void hannah_audio_resume(void)
 
 void hannah_audio_pause_wakeword(void)
 {
-    s_wakeword_paused = true;
+    /* Kein mic_task (CONFIG_HANNAH_MIC_TYPE_NONE) — Semaphore existiert nicht,
+     * es läuft ohnehin nie ein Invoke(), das auf die Arena zugreifen könnte. */
+    if (s_wakeword_parked_sem) {
+        /* Stale Give aus einem früheren Pause/Resume-Zyklus verwerfen, BEVOR
+         * das Flag gesetzt wird — der anschließende blockierende Take darf nur
+         * einen Give akzeptieren, der mic_task nachweislich NACH dem Setzen
+         * des Flags erreicht hat (#196). */
+        xSemaphoreTake(s_wakeword_parked_sem, 0);
+        s_wakeword_paused = true;
+        xSemaphoreTake(s_wakeword_parked_sem, portMAX_DELAY);
+    } else {
+        s_wakeword_paused = true;
+    }
     ESP_LOGI(TAG, "Wakeword-Inference pausiert (OTA aktiv).");
 }
 

@@ -5,6 +5,11 @@
 -->
 
 
+## 0.67.20 (2026-08-02)
+### Satellite Firmware
+* Fixed: satellite could hard-crash (`abort()` inside TFLite Micro's `GetQuantizedConvolutionMultipler`) right as an OTA update started. `hannah_audio_pause_wakeword()` only set a flag and returned immediately, so `hannah_wakeword_deinit()` (called right after, freeing the PSRAM TFLite arena) could run while `mic_task` was still mid-`Invoke()` on a previous audio frame — a use-after-free on the arena. Now blocks on a semaphore, mirroring the existing `hannah_audio_deinit_for_ota()`/`s_mic_parked_sem` pattern, until `mic_task` has confirmed it observed the pause and won't start another `Invoke()` (Refs #196)
+* Added: `frame_no` counter in the periodic `Wakeword-Debug` log line and both debug-WAV-snapshot log lines (button and remote trigger) — a running count of mic_task iterations (10ms each), synchronized with the debug ring buffer write loop. Lets a downloaded debug WAV be mapped back to an exact sample offset for any given debug log line (`(debug_frame_no - (snapshot_frame_no - 399)) × 160`), instead of correlating via wall-clock timestamps (Refs #197)
+
 ## 0.67.19 (2026-08-02)
 ### Satellite Firmware
 * Fixed: wakeword model override (#166) quantized/dequantized every loaded model using hardcoded scale/zero_point/dtype constants taken from `hey_hannah_int8.tflite`, regardless of what the actually-loaded override model's own tensors specified. Now read dynamically from the model's `TfLiteTensor` metadata after `AllocateTensors()`, with a clean rejection (detection stays disabled) if a model uses a tensor type other than int8/uint8 instead of silently computing garbage (Refs #195)
