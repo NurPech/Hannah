@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.21 (2026-08-03)
+### Satellite Firmware
+* Fixed: wakeword confidence stayed low live despite near-perfect offline detection on identical audio. `hannah_wakeword_process()` converted raw `FrontendOutput` values to the model's float feature range using a scale of `128.0f`, but the actual training-reference implementation (`pymicro_features`, used by both the training pipeline and `test_inference.py`) uses `1/0.0390625 = 25.6`. Confirmed via exact frame-aligned comparison (using the `frame_no` counter from #197) between live-logged `mel_preview` values and an offline-recomputed reference for the same debug-WAV capture: mel-spectrum shape correlated 0.89–1.00, but amplitude was off by a constant ~5× — exactly `128/25.6`. Live features were therefore systematically ~5× quieter than what the model was trained on (Refs #198)
+
 ## 0.67.20 (2026-08-02)
 ### Satellite Firmware
 * Fixed: satellite could hard-crash (`abort()` inside TFLite Micro's `GetQuantizedConvolutionMultipler`) right as an OTA update started. `hannah_audio_pause_wakeword()` only set a flag and returned immediately, so `hannah_wakeword_deinit()` (called right after, freeing the PSRAM TFLite arena) could run while `mic_task` was still mid-`Invoke()` on a previous audio frame — a use-after-free on the arena. Now blocks on a semaphore, mirroring the existing `hannah_audio_deinit_for_ota()`/`s_mic_parked_sem` pattern, until `mic_task` has confirmed it observed the pause and won't start another `Invoke()` (Refs #196)

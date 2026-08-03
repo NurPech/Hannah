@@ -416,10 +416,20 @@ float hannah_wakeword_process(const int16_t *pcm)
     }
 
     /* uint16 → int8/uint8 quantisieren (je nach Modell-Input-Dtype), neuesten
-     * Frame ans Ende schreiben. Kombinierte Skala: FrontendOutput-Werte sind
-     * bereits durch 128 geteilte uint16-Fixpunktwerte (siehe Header-Kommentar),
-     * hier noch durch die modellspezifische Input-Scale teilen. */
-    const float input_combined_scale = 128.0f * s_input_scale;
+     * Frame ans Ende schreiben. Kombinierte Skala: FrontendOutput-Rohwerte
+     * müssen zuerst auf denselben float-Feature-Wertebereich gebracht werden,
+     * den auch die Trainings-Pipeline sieht — pymicro_features (von Training
+     * und test_inference.py genutzt, siehe src/micro_features.cpp) teilt dazu
+     * durch 1/FRONTEND_RAW_TO_FLOAT_SCALE = 25.6, NICHT durch 128 wie zuvor
+     * hier angenommen. Der alte falsche Faktor 128 dämpfte alle Live-Features
+     * um exakt 128/25.6 = 5× gegenüber den Trainings-Features — mit hoher
+     * Wahrscheinlichkeit die Hauptursache der seit #173 verfolgten Live-vs-
+     * Offline-Erkennungslücke (#198, per exaktem Debug-WAV-Vergleich via
+     * frame_no, #197, gemessen: Formkorrelation 0.89–1.00, aber Amplitude
+     * konstant um Faktor ~5 verschoben). Danach noch durch die
+     * modellspezifische Input-Scale teilen. */
+    const float frontend_raw_to_float_scale = 25.6f;
+    const float input_combined_scale = frontend_raw_to_float_scale * s_input_scale;
     const int32_t input_min = s_input_is_int8 ? -128 : 0;
     const int32_t input_max = s_input_is_int8 ?  127 : 255;
     for (size_t i = 0; i < feat.size; i++) {
