@@ -5,6 +5,13 @@
 -->
 
 
+## 0.67.24 (2026-08-03)
+### Hannah Core
+* Fixed: voice commands without an explicit room (e.g. "Licht aus") found no devices/room when spoken through a Proxy-connected satellite (`SubmitSatelliteAudio` gRPC path), while the same command with an explicit room worked fine. The satellite's assigned-room fallback only existed in `pipeline()` (the older direct-UDP path) — `_handle_satellite_audio()` → `_handle_text()` never received it. `_handle_text()` now takes an optional `device` argument and applies the same fallback (`satellite_manager.get_satellite_room(device)`) when no room was recognized in the text (Refs #201)
+
+### Satellite Firmware
+* Fixed: the persisted crash log (`/assets/_hannah_last_log.txt`, written before an ordered restart so it's retrievable afterward via `GET /log/last`) was deleted again by the very next asset-sync right after boot. It shares its LittleFS mount with the downloaded asset cache, and `garbage_collect()` in `hannah_asset.c` removed anything there not on the current manifest — the leading-underscore filename was chosen specifically to be ignored by asset-sync, but that exception was never actually implemented. `garbage_collect()` now skips any filename starting with `_`, since manifest asset IDs never do (Refs #202)
+
 ## 0.67.23 (2026-08-03)
 ### Satellite Firmware
 * Added: `CONFIG_HANNAH_WAKEWORD_DEBUG` Kconfig option (default `y` for now, see #199) gating the wakeword debug infrastructure built up across #173/#180/#194/#197 — the periodic `Wakeword-Debug` log line (rms/peak/confidence/mel-/input-preview), the 4s raw-PCM ring buffer, and both the Vol+/Vol- button-combo and remote (`GET /debug/wav/capture`) snapshot triggers. `GET /debug/wav`/`/debug/wav/capture` stay registered either way and just report "no capture available" when the flag is off, so `hannah_webserver.c` didn't need to change. Kept default `y` deliberately — this tooling was decisive in finding #198, and we don't want to lose it until that fix has proven itself over a longer stretch of live use. Flip to `n` once confident, to skip the log spam and ~125 KB PSRAM ring-buffer allocation (Refs #199)

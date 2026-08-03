@@ -553,7 +553,7 @@ def main():
             f"{mem}"
         )
 
-    def _handle_text(text: str, speaker_user_id: str = "", source: str = "") -> tuple[str, str]:
+    def _handle_text(text: str, speaker_user_id: str = "", source: str = "", device: str = "") -> tuple[str, str]:
         """
         Verarbeitet einen Text-Befehl durch NLU und gibt (Antwort, Intent-Name) zurück.
         Kein TTS — reines Text-in/Text-out.
@@ -561,6 +561,7 @@ def main():
 
         speaker_user_id: optionale Hannah-User-ID aus Voice-ID-Erkennung.
         source: Kontext-Schlüssel (Gerät, Roomie-ID, Kanal). Leer = speaker_user_id oder "anon".
+        device: Satelliten-Device-ID für Raum-Fallback (nur gesetzt bei Satelliten-Audio).
         """
         _source = source or speaker_user_id or "anon"
 
@@ -608,6 +609,15 @@ def main():
         # Gesprächskontext: fehlende Felder ergänzen + Aktion erben
         conv_ctx.fill_intent(_source, intent)
         conv_ctx.inherit_action(_source, intent)
+
+        # Raum-Fallback: zugewiesener Raum des Satelliten, falls kein Raum im Text genannt wurde
+        # (analog zum UDP-direkt-Pfad in pipeline() — ging im gRPC/Proxy-Pfad verloren)
+        if device and intent.room is None and intent.name not in ("Query", "CarQuery"):
+            room = satellite_manager.get_satellite_room(device)
+            if room:
+                intent.room    = room
+                intent.room_id = room.lower()
+                log.debug(f"[{device}] Raum-Fallback: '{room}'")
 
         log.info(
             f"[textcmd] Text: '{text}' → Intent: {intent.name} | "
@@ -1256,7 +1266,7 @@ def main():
         if room and _try_answer_pending(device, room, transcript):
             return transcript, "", "AnswerPending", b"", 0
 
-        answer, intent_name = _handle_text(transcript, speaker_user_id=speaker_user_id, source=device)
+        answer, intent_name = _handle_text(transcript, speaker_user_id=speaker_user_id, source=device, device=device)
 
         tts_pcm = b""
         sample_rate = 0

@@ -322,6 +322,11 @@ static void garbage_collect(char wanted[][ASSET_ID_MAX], int wanted_count)
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
+        /* Namenskonvention für satelliteneigene, nicht vom Manifest verwaltete
+         * Dateien im selben Mount (z.B. "_hannah_last_log.txt" aus
+         * hannah_webserver.c) — Asset-IDs aus dem Manifest beginnen nie mit "_". */
+        if (entry->d_name[0] == '_') continue;
+
         bool keep = false;
         for (int i = 0; i < wanted_count; i++) {
             if (strcmp(entry->d_name, wanted[i]) == 0) { keep = true; break; }
