@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.25 (2026-08-03)
+### Hannah Core
+* Fixed: the satellite room fallback introduced in #201 resolved a room but still found no devices whenever the room's ioBroker enum ID wasn't already an all-lowercase slug (e.g. `OG Zimmer Süd` instead of `wohnzimmer`). Both `pipeline()` and `_handle_text()` set `intent.room_id = room.lower()`, but `satellite_manager.get_satellite_room()` already returns the canonical, case-preserved room ID matching `IoBrokerClient.devices`'s dict keys exactly — no normalization needed or wanted. Dropped the `.lower()` call at both sites (Refs #203)
+
 ## 0.67.24 (2026-08-03)
 ### Hannah Core
 * Fixed: voice commands without an explicit room (e.g. "Licht aus") found no devices/room when spoken through a Proxy-connected satellite (`SubmitSatelliteAudio` gRPC path), while the same command with an explicit room worked fine. The satellite's assigned-room fallback only existed in `pipeline()` (the older direct-UDP path) — `_handle_satellite_audio()` → `_handle_text()` never received it. `_handle_text()` now takes an optional `device` argument and applies the same fallback (`satellite_manager.get_satellite_room(device)`) when no room was recognized in the text (Refs #201)

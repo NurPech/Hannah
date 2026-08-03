@@ -399,7 +399,7 @@ def main():
             room = satellite_manager.get_satellite_room(device)
             if room:
                 intent.room    = room
-                intent.room_id = room.lower()
+                intent.room_id = room
                 log.debug(f"[{device}] Raum-Fallback: '{room}'")
 
         log.info(
@@ -616,7 +616,7 @@ def main():
             room = satellite_manager.get_satellite_room(device)
             if room:
                 intent.room    = room
-                intent.room_id = room.lower()
+                intent.room_id = room
                 log.debug(f"[{device}] Raum-Fallback: '{room}'")
 
         log.info(
