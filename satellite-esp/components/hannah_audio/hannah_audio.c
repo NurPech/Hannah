@@ -837,6 +837,21 @@ static void speaker_task(void *arg)
              "hannah/satellite/%s/playback_done", hannah_config_get()->device_id);
     ESP_LOGI(TAG, "Speaker-Task gestartet.");
     while (1) {
+        /* #200: Check muss am Loop-Anfang stehen, unabhängig vom Receive-
+         * Ergebnis (siehe mic_task) — stand er hinter dem "kein Item"-Zweig,
+         * wurde er nie erreicht, solange der Speaker idle ist (Normalfall
+         * beim Start eines automatischen OTA-Checks): xRingbufferReceive
+         * timeout't dann alle 1s und macht `continue`, ohne s_hw_paused je
+         * zu sehen — s_speaker_parked_sem wurde nie gegeben, wodurch
+         * hannah_audio_deinit_for_ota() für immer blockierte. */
+        if (s_hw_paused) {
+            /* OTA baut die I2S-Kanäle gerade ab/wieder auf — s_tx_chan nicht
+             * anfassen. */
+            xSemaphoreGive(s_speaker_parked_sem);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         size_t item_size;
         spk_rb_item_t *item = xRingbufferReceive(s_spk_ringbuf, &item_size,
                                                    pdMS_TO_TICKS(1000));
@@ -848,14 +863,6 @@ static void speaker_task(void *arg)
                 if (!s_sampling_mode)
                     hannah_led_set_state(LED_STATE_IDLE);
             }
-            continue;
-        }
-
-        if (s_hw_paused) {
-            /* OTA baut die I2S-Kanäle gerade ab/wieder auf — s_tx_chan nicht
-             * anfassen, Item ungeschrieben zurückgeben (siehe mic_task). */
-            xSemaphoreGive(s_speaker_parked_sem);
-            vRingbufferReturnItem(s_spk_ringbuf, item);
             continue;
         }
 

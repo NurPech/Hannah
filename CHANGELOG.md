@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.22 (2026-08-03)
+### Satellite Firmware
+* Fixed: OTA hung forever (no crash, no restart, but webserver/wakeword already torn down and download never starting) whenever the satellite was idle — not actively playing TTS/an announcement — at the moment an automatic OTA check triggered, which is the normal case. `speaker_task()`'s `s_hw_paused` check (used to synchronize I2S teardown before the download, #193) sat behind the `if (!item) continue;` branch of its ring-buffer receive loop, so it was never reached while `xRingbufferReceive()` kept timing out with nothing queued — `s_speaker_parked_sem` was never given, and `hannah_audio_deinit_for_ota()` blocked forever on it. Moved the check to the top of the loop, unconditional of the receive result, matching the already-correct `mic_task` pattern (Refs #200)
+
 ## 0.67.21 (2026-08-03)
 ### Satellite Firmware
 * Fixed: wakeword confidence stayed low live despite near-perfect offline detection on identical audio. `hannah_wakeword_process()` converted raw `FrontendOutput` values to the model's float feature range using a scale of `128.0f`, but the actual training-reference implementation (`pymicro_features`, used by both the training pipeline and `test_inference.py`) uses `1/0.0390625 = 25.6`. Confirmed via exact frame-aligned comparison (using the `frame_no` counter from #197) between live-logged `mel_preview` values and an offline-recomputed reference for the same debug-WAV capture: mel-spectrum shape correlated 0.89–1.00, but amplitude was off by a constant ~5× — exactly `128/25.6`. Live features were therefore systematically ~5× quieter than what the model was trained on (Refs #198)
