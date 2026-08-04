@@ -5,6 +5,10 @@
 -->
 
 
+## 0.67.28 (2026-08-04)
+### Hannah Core
+* Fixed: Core crash-looped on every boot (`AttributeError: 'str' object has no attribute 'get'`) whenever a `residents`-linked account's `provider_payload` had been double-JSON-encoded by the `LinkAccount` gRPC handler (which passed the webui's already-serialized JSON string straight to the `__json_fields__`-backed model column, which serializes it again). `LinkAccount` now decodes the incoming JSON string before persisting; `UserManager._resident_link()` and the car-tracker's equivalent lookup also no longer crash on a malformed/legacy `provider_payload` shape (Refs #207)
+
 ## 0.67.27 (2026-08-04)
 ### Hannah Core
 * Fixed: a resident's `display_name` could get wiped back to empty shortly after every adapter restart, for any resident whose presence changes live (most noticeably real, actively-tracked people) — a presence-only `AgentResident` update from the adapter always sent an empty name, which `Resident.update()` applied unconditionally, overwriting the name known from the last snapshot. `hannah-proto` bumped to 1.0.2 (`AgentResident.name`/`presence_state` are now proto3 `optional`); `Resident.update()`, `_on_agent_resident()` and the `resident_update` gRPC handler now only overwrite a field when the incoming message actually set it (Refs #206)

@@ -58,7 +58,12 @@ class UserManager:
         la = user.get_linked_account("residents")
         if not la:
             return None
-        payload = la.provider_payload or {}
+        payload = la.provider_payload
+        # Defensive: a malformed/legacy provider_payload (e.g. double-JSON-encoded by the
+        # LinkAccount RPC bug fixed alongside this) decodes to a plain string instead of a
+        # dict — treat as "no usable roomie_id" instead of crashing the whole boot on it.
+        if not isinstance(payload, dict):
+            payload = {}
         roomie_id = payload.get("roomie_id")
         if not roomie_id:
             return None

@@ -380,7 +380,20 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             context.set_details("Account bereits mit einem anderen User verknüpft.")
             return pb.StatusResponse(ok=False, message="Account bereits mit einem anderen User verknüpft.")
 
-        user.link_account(request.service, request.account_id, provider_payload=request.provider_payload)
+        # provider_payload arrives over the wire as a JSON-encoded string (proto has no
+        # open-ended object type here); LinkedAccount.provider_payload is a __json_fields__
+        # column that itself does its own json.dumps()/json.loads() on write/read, so we must
+        # decode into a dict/None first — passing the raw string through double-encodes it,
+        # and User Manager's _resident_link() then crashes on `payload.get(...)` at the next
+        # boot because the decoded value is still a JSON string, not a dict.
+        provider_payload = None
+        if request.provider_payload:
+            try:
+                provider_payload = json.loads(request.provider_payload)
+            except json.JSONDecodeError:
+                log.warning(f"LinkAccount: provider_payload für user_id={request.user_id} ist kein gültiges JSON, ignoriert: {request.provider_payload!r}")
+
+        user.link_account(request.service, request.account_id, provider_payload=provider_payload)
         return pb.StatusResponse(ok=True, message="verknüpft")
 
     def UnlinkAccount(self, request, context):

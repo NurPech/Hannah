@@ -1114,6 +1114,42 @@ def test_link_account_accepts_int32_user_id(tmp_path):
 
     assert response.ok is True
 
+def test_link_account_with_json_provider_payload_round_trips_as_dict(tmp_path):
+    """Regression: the webui sends provider_payload pre-serialized as a JSON string
+    (proto has no open-ended object type). LinkAccount used to pass that string straight
+    to LinkedAccount.create(), which double-JSON-encodes it (the model's __json_fields__
+    already does its own json.dumps()/json.loads()) — on read back, provider_payload was
+    still a string, not a dict, and UserManager._resident_link() crashed the whole boot
+    with AttributeError: 'str' object has no attribute 'get' (#206 follow-up)."""
+    user_manager, get_db = _make_user_manager_with_leonie(tmp_path)
+    user = user_manager.get_user_by_username("leonie")
+    servicer = _make_server(user_manager=user_manager)
+
+    payload = json.dumps({"resident_type": "roomie", "roomie_id": "leonie"})
+    request = LinkAccountRequest(user_id=user.id, service="residents", account_id="leonie", provider_payload=payload)
+    response = servicer.LinkAccount(request, MagicMock())
+    assert response.ok is True
+
+    fresh = User.get(get_db(), id=user.id)
+    la = fresh.get_linked_account("residents")
+    assert isinstance(la.provider_payload, dict)
+    assert la.provider_payload["roomie_id"] == "leonie"
+
+    assert user_manager._resident_link(fresh) == ("leonie", "roomie")
+
+def test_resident_link_ignores_malformed_string_provider_payload(tmp_path):
+    """Defensive: a legacy/corrupted provider_payload (e.g. from the double-encoding bug
+    above, before it was fixed) decodes to a plain string instead of a dict.
+    _resident_link() must treat that as "no usable roomie_id", not crash (#206 follow-up)."""
+    user_manager, get_db = _make_user_manager_with_leonie(tmp_path)
+    user = user_manager.get_user_by_username("leonie")
+    # Simulate a pre-existing double-encoded row: the raw text stored via the old buggy
+    # path decodes (once) to a JSON *string*, not a dict.
+    user.link_account("residents", "leonie", provider_payload='{"resident_type": "roomie", "roomie_id": "leonie"}')
+
+    fresh = User.get(get_db(), id=user.id)
+    assert user_manager._resident_link(fresh) is None
+
 def test_user_to_pb_with_linked_account(tmp_path):
     """Regression: _user_to_pb crashed with AttributeError on acc.service (the model
     attribute is .provider) for any user with a linked account; also covers

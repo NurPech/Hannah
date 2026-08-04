@@ -122,7 +122,8 @@ def main():
             return ""
         for la in user.linked_accounts:
             if la.provider == "residents":
-                return (la.provider_payload or {}).get("roomie_id", "")
+                payload = la.provider_payload
+                return payload.get("roomie_id", "") if isinstance(payload, dict) else ""
         return ""
 
     # Settings (nlu.*/llm.system_prompt/iobroker.state_names — #27 Phase 5, aus config.yaml
