@@ -25,21 +25,28 @@ class Resident(EventEmitterMixin, ABC):
     def is_home(self) -> bool:
         return self.presence_state == HOME_PRESENCE_STATE
 
-    def update(self, display_name: str, presence_state: int, mood: Optional[int] = None):
+    def update(self, display_name: Optional[str], presence_state: Optional[int], mood: Optional[int] = None):
         """Aktualisiert den Resident und feuert arrival/departure/mood_changed bei Zustandswechsel.
 
-        presence_state ist beim ersten Update None (unbekannt) — dann wird keine
+        display_name/presence_state/mood sind None, wenn das jeweilige Feld im
+        AgentResident-Update nicht gesetzt war (proto3 `optional`) — ein
+        presence-only Update darf den zuletzt bekannten Namen nicht löschen (#206),
+        genau wie ein name-only Update die Presence nicht zurücksetzen soll.
+
+        presence_state ist beim allerersten Update None (unbekannt) — dann wird keine
         Transition gemeldet, da es keinen Vorher-Zustand zum Vergleich gibt.
         """
         old_presence = self.presence_state
         old_mood = self.mood
 
-        self.display_name = display_name
-        self.presence_state = presence_state
+        if display_name is not None:
+            self.display_name = display_name
+        if presence_state is not None:
+            self.presence_state = presence_state
         if mood is not None:
             self.mood = mood
 
-        if old_presence is not None:
+        if presence_state is not None and old_presence is not None:
             was_home = old_presence == HOME_PRESENCE_STATE
             is_home = self.is_home()
             if is_home and not was_home:

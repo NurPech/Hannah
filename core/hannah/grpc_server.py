@@ -110,7 +110,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         enroll_voiceprint: Optional[Callable[[str, bytes, int], tuple]] = None,  # (user_id, pcm, rate) → (ok, msg)
         on_satellite_change: Optional[Callable[[dict], None]] = None,           # ({device: room}) bei Register/Disconnect via Proxy
         on_agent_state: Optional[Callable[[str, str, bool, int], None]] = None,      # (state_id, value, ack, ts)
-        on_agent_resident: Optional[Callable[[str, str, int, pb.ResidentType, int], None]] = None,   # (roomie_id, name, presence_state, type, mood_level)
+        on_agent_resident: Optional[Callable[[str, Optional[str], Optional[int], pb.ResidentType, Optional[int]], None]] = None,   # (roomie_id, name, presence_state, type, mood_level) — name/presence_state/mood_level None wenn im Update nicht gesetzt (proto3 optional, #206)
         on_agent_text_command: Optional[Callable[[str], tuple[str, str]]] = None,    # (text) → (answer, intent)
         on_agent_connect: Optional[Callable[[], None]] = None,                       # called on each new adapter connection
         on_agent_set_resident: Optional[Callable[[str, int, pb.ResidentType], None]] = None,    # (resident_id, presence_state, type)
@@ -1351,11 +1351,14 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                         self._on_agent_state(u.state_id, u.value, u.ack, u.ts)
                     elif which == "resident_update" and self._on_agent_resident:
                         r = msg.resident_update
-                        if r.HasField("mood_level"):
-                            self._on_agent_resident(r.roomie_id, r.name, r.presence_state, r.type, r.mood_level)
-                        else:
-                            self._on_agent_resident(r.roomie_id, r.name, r.presence_state, r.type)
-                        
+                        self._on_agent_resident(
+                            r.roomie_id,
+                            r.name if r.HasField("name") else None,
+                            r.presence_state if r.HasField("presence_state") else None,
+                            r.type,
+                            r.mood_level if r.HasField("mood_level") else None,
+                        )
+
                     elif which == "text_command" and self._on_agent_text_command:
                         answer, intent = self._on_agent_text_command(msg.text_command.text)
                         q.put(pb.AgentCommand(text_answer=pb.AgentTextAnswer(

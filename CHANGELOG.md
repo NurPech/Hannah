@@ -5,6 +5,16 @@
 -->
 
 
+## 0.67.27 (2026-08-04)
+### Hannah Core
+* Fixed: a resident's `display_name` could get wiped back to empty shortly after every adapter restart, for any resident whose presence changes live (most noticeably real, actively-tracked people) — a presence-only `AgentResident` update from the adapter always sent an empty name, which `Resident.update()` applied unconditionally, overwriting the name known from the last snapshot. `hannah-proto` bumped to 1.0.2 (`AgentResident.name`/`presence_state` are now proto3 `optional`); `Resident.update()`, `_on_agent_resident()` and the `resident_update` gRPC handler now only overwrite a field when the incoming message actually set it (Refs #206)
+
+### Hannah Proxy
+* Changed: `hannah-proto-go` bumped to v1.0.2, matching Core's protocol version bump (Refs #206)
+
+### Telegram
+* Changed: `hannah-proto` bumped to 1.0.2, matching Core's protocol version bump (Refs #206)
+
 ## 0.67.26 (2026-08-04)
 ### Satellite Firmware
 * Changed: built-in wakeword default model (`hannah_wakeword/model/model.h`, `models/hannah.tflite`) updated to a new retrain (Refs #168)

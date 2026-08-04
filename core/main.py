@@ -1330,9 +1330,11 @@ def main():
         "pet": pb.ResidentType.PET,
     }
 
-    def _on_agent_resident(roomie_id: str, display_name: str, presence_state: int, resident_type: pb.ResidentType, mood_level: int | None = None):
+    def _on_agent_resident(roomie_id: str, display_name: str | None, presence_state: int | None, resident_type: pb.ResidentType, mood_level: int | None = None):
         # Residents-Update via gRPC. residents ist per late-binding sichtbar
-        # (wird kurz nach grpc_servicer gesetzt).
+        # (wird kurz nach grpc_servicer gesetzt). display_name/presence_state/mood_level
+        # sind None, wenn das AgentResident-Update das jeweilige Feld nicht gesetzt hatte
+        # (proto3 optional) — Resident.update() lässt in dem Fall den bisherigen Wert stehen (#206).
         cls = _RESIDENT_TYPE_CLASSES.get(resident_type)
         if cls is None:
             log.warning(f"Unbekannter/unspezifizierter resident_type '{resident_type}' für {roomie_id}")
@@ -1343,10 +1345,13 @@ def main():
         # Initial-Snapshot beim Adapter-Connect: alle Residents in einem Schwung
         # nachziehen, statt auf das nächste Einzel-Update pro Resident zu warten.
         for r in residents_list:
-            if r.HasField("mood_level"):
-                _on_agent_resident(r.roomie_id, r.name, r.presence_state, r.type, r.mood_level)
-            else:
-                _on_agent_resident(r.roomie_id, r.name, r.presence_state, r.type)
+            _on_agent_resident(
+                r.roomie_id,
+                r.name if r.HasField("name") else None,
+                r.presence_state if r.HasField("presence_state") else None,
+                r.type,
+                r.mood_level if r.HasField("mood_level") else None,
+            )
 
     def _on_agent_text_command(text: str) -> tuple[str, str]:
         return _handle_text(text, source="iobroker")
