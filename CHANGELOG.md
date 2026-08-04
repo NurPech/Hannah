@@ -5,6 +5,12 @@
 -->
 
 
+## 0.67.26 (2026-08-04)
+### Satellite Firmware
+* Changed: built-in wakeword default model (`hannah_wakeword/model/model.h`, `models/hannah.tflite`) updated to a new retrain (Refs #168)
+* Changed: `CONFIG_HANNAH_VAD_WEBRTC_AGGRESSIVENESS` default raised from 2 to 3 (max) — in rooms with steady background noise (TV/radio/computer) the silence counter never reached the required threshold, so recordings regularly ran into the 10s hard timeout instead of ending on real silence (Refs #204)
+* Changed: `CONFIG_HANNAH_WAKEWORD_DEBUG` default flipped from `y` to `n` now that #198 has proven itself over a longer stretch of live use — drops the periodic debug log line and the ~125 KB PSRAM ring-buffer allocation; `/debug/wav(/capture)` stay reachable, just report "no capture available" (Refs #199)
+
 ## 0.67.25 (2026-08-03)
 ### Hannah Core
 * Fixed: the satellite room fallback introduced in #201 resolved a room but still found no devices whenever the room's ioBroker enum ID wasn't already an all-lowercase slug (e.g. `OG Zimmer Süd` instead of `wohnzimmer`). Both `pipeline()` and `_handle_text()` set `intent.room_id = room.lower()`, but `satellite_manager.get_satellite_room()` already returns the canonical, case-preserved room ID matching `IoBrokerClient.devices`'s dict keys exactly — no normalization needed or wanted. Dropped the `.lower()` call at both sites (Refs #203)
