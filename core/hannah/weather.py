@@ -2,22 +2,23 @@ import logging
 import threading
 from typing import Optional
 
+from hannah_proto import weather_pb2
+
 log = logging.getLogger(__name__)
 
 
 class WeatherCache:
     """
-    Empfängt Wetter-Updates aus ioBroker via MQTT (openweathermap/0/forecast/#)
-    und baut natürlichsprachliche Antworten daraus.
+    Empfängt Wetter-Updates vom ioBroker-Adapter (AgentWeatherUpdate über den
+    AgentConnect-Stream) und baut natürlichsprachliche Antworten daraus.
 
-    Topic-Struktur (Suffix nach dem konfigurierten Prefix):
-      current/temperature, current/state, current/windSpeed, ...
-      day0/temperatureMax, day0/precipitationRain, ...
-      day1/..., day2/..., ..., day6/...
+    Interner Cache-Shape (unverändert ggü. der früheren MQTT-Variante):
+      current: {temperature, state, title, windSpeed, windDirectionText, precipitationRain}
+      day0: {temperatureMax, ...} (Tagesvorhersage für Offset 0)
+      day1..day5: {temperatureMin, temperatureMax, state, title, precipitationRain, windSpeed, windDirectionText}
     """
 
-    def __init__(self, topic_prefix: str = "openweathermap/0/forecast"):
-        self.topic_prefix = topic_prefix
+    def __init__(self):
         self._cache: dict[str, dict[str, object]] = {}
         self._lock = threading.Lock()
 
@@ -25,21 +26,16 @@ class WeatherCache:
     def available(self) -> bool:
         return bool(self._cache.get("current"))
 
-    def update(self, topic: str, raw_value: str):
-        """Verarbeitet ein eingehendes MQTT-Topic."""
-        suffix = topic[len(self.topic_prefix):].strip("/")
-        parts = suffix.split("/", 1)
-        if len(parts) != 2:
-            return
-        bucket, key = parts
-        value: object
-        try:
-            value = float(raw_value)
-        except (ValueError, TypeError):
-            value = raw_value.strip()
+    def apply_update(self, update: weather_pb2.AgentWeatherUpdate):
+        """Verarbeitet ein AgentWeatherUpdate — ersetzt den kompletten Cache-Snapshot."""
+        new_cache: dict[str, dict[str, object]] = {}
+        if update.HasField("current"):
+            new_cache["current"] = _current_to_bucket(update.current)
+        for day in update.forecast:
+            new_cache[f"day{day.day_offset}"] = _forecast_day_to_bucket(day)
         with self._lock:
-            self._cache.setdefault(bucket, {})[key] = value
-        log.debug(f"Wetter: {bucket}/{key} = {value!r}")
+            self._cache = new_cache
+        log.debug(f"Wetter: apply_update ({len(new_cache)} Bucket(s))")
 
     def build_answer(self, scope: str = "today") -> str:
         """
@@ -153,6 +149,40 @@ class WeatherCache:
 
 # ------------------------------------------------------------------
 # Hilfsfunktionen
+
+def _current_to_bucket(data: weather_pb2.WeatherCurrentData) -> dict[str, object]:
+    bucket: dict[str, object] = {"temperature": data.temperature}
+    if data.condition_summary:
+        bucket["title"] = data.condition_summary
+    if data.condition_detail:
+        bucket["state"] = data.condition_detail
+    if data.HasField("precipitation_mm"):
+        bucket["precipitationRain"] = data.precipitation_mm
+    if data.HasField("wind_speed_ms"):
+        bucket["windSpeed"] = data.wind_speed_ms
+    if data.HasField("wind_direction_text"):
+        bucket["windDirectionText"] = data.wind_direction_text
+    return bucket
+
+
+def _forecast_day_to_bucket(day: weather_pb2.WeatherForecastDay) -> dict[str, object]:
+    bucket: dict[str, object] = {}
+    if day.HasField("temperature_min"):
+        bucket["temperatureMin"] = day.temperature_min
+    if day.HasField("temperature_max"):
+        bucket["temperatureMax"] = day.temperature_max
+    if day.condition_summary:
+        bucket["title"] = day.condition_summary
+    if day.condition_detail:
+        bucket["state"] = day.condition_detail
+    if day.HasField("precipitation_mm"):
+        bucket["precipitationRain"] = day.precipitation_mm
+    if day.HasField("wind_speed_ms"):
+        bucket["windSpeed"] = day.wind_speed_ms
+    if day.HasField("wind_direction_text"):
+        bucket["windDirectionText"] = day.wind_direction_text
+    return bucket
+
 
 def _day_sentence(label: str, day: dict) -> str:
     """Baut einen Satz für einen einzelnen Prognosetag."""

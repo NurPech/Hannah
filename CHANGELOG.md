@@ -4,6 +4,9 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.68.0 (2026-08-05)
+### Hannah Core
+* Changed: `WeatherCache` no longer parses MQTT topics directly (`openweathermap/0/forecast/...`, hardcoded to one vendor) — it now consumes the new `AgentWeatherUpdate` message pushed by the `iobroker.hannah` adapter over the existing `AgentConnect` stream, making the weather source provider-independent. `hannah-proto` bumped to 1.1.0. No MQTT fallback; `build_answer()` and its answer-generation logic are unchanged (Refs #209)
 
 ## 0.67.28 (2026-08-04)
 ### Hannah Core

@@ -118,6 +118,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         on_agent_device_snapshot: Optional[Callable[[Iterable[pb.AgentDevice]], None]] = None,
         on_agent_send_residents: Optional[Callable[[Iterable[pb.AgentResident]], None]] = None,
         on_agent_room_snapshot: Optional[Callable[[Iterable[pb.AgentRoom]], None]] = None,
+        on_weather_update: Optional[Callable[[pb.AgentWeatherUpdate], None]] = None,
         on_trigger_firmware_update: Optional[Callable[[str], None]] = None,  # (device)
         on_trigger_satellite_restart: Optional[Callable[[str], None]] = None,  # (device)
         on_timer_fired: Optional[Callable[[str, str, dict], None]] = None,     # (timer_id, label, metadata)
@@ -188,6 +189,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_agent_device_snapshot    = on_agent_device_snapshot
         self._on_agent_send_residents     = on_agent_send_residents
         self._on_agent_room_snapshot      = on_agent_room_snapshot
+        self._on_weather_update           = on_weather_update
         self._on_trigger_firmware_update  = on_trigger_firmware_update or (lambda _: None)
         self._on_trigger_satellite_restart = on_trigger_satellite_restart or (lambda _: None)
         self._on_timer_fired    = on_timer_fired
@@ -1396,6 +1398,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                         self._on_agent_send_residents(r.residents)
                     elif which == "send_rooms" and self._on_agent_room_snapshot:
                         self._on_agent_room_snapshot(msg.send_rooms.rooms)
+                    elif which == "weather_update" and self._on_weather_update:
+                        self._on_weather_update(msg.weather_update)
                     elif which == "ask_resident" and self._on_agent_ask_resident:
                         ar = msg.ask_resident
                         threading.Thread(

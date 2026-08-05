@@ -229,10 +229,7 @@ def main():
         on_conversation_end=_on_conversation_end,
     )
 
-    weather_cfg = cfg.get("weather", {})
-    weather = WeatherCache(
-        topic_prefix=weather_cfg.get("topic_prefix", "openweathermap/0/forecast")
-    )
+    weather = WeatherCache()
 
     # Auto-Tracker: cars-Tabelle (CarRegistry, #115) mit Owner-User-IDs → Roomie-IDs
     # übersetzt (car_tracker.py kennt nur Roomie-IDs); cfg["cars"]/cfg["car"] bleiben
@@ -1314,11 +1311,12 @@ def main():
         # Route to handlers that expect slash-notation topics and plain string values
         topic = state_id.replace(".", "/")
         raw = _json_to_raw(value)
-        if topic.startswith(weather.topic_prefix):
-            weather.update(topic, raw)
         for _ct in car_manager:
             if topic.startswith(_ct.topic_prefix):
                 _ct.update(topic, raw)
+
+    def _on_weather_update(update: pb.AgentWeatherUpdate) -> None:
+        weather.apply_update(update)
 
     _RESIDENT_TYPE_CLASSES = {
         pb.ResidentType.ROOMIE: Roomie,
@@ -1535,6 +1533,7 @@ def main():
         on_agent_device_snapshot=_on_agent_device_snapshot,
         on_agent_send_residents=_on_agent_send_residents,
         on_agent_room_snapshot=_on_agent_room_snapshot,
+        on_weather_update=_on_weather_update,
         on_trigger_firmware_update=lambda device: mqtt_handler.publish_ota_ok(device),
         on_trigger_satellite_restart=lambda device: (
             mqtt_handler.publish_restart(device),

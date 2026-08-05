@@ -5,5 +5,5 @@ requests>=2.31.0
 PyYAML>=6.0
 Werkzeug>=3.0.0
 paho-mqtt>=2.0.0
-hannah-proto>=1.0.2
+hannah-proto>=1.1.0
 dialectorm-m1kad0>=0.1.1
