@@ -5,6 +5,10 @@
 -->
 
 
+## 0.69.3 (2026-08-06)
+### Hannah Core
+* Fixed: DND-Änderungen wurden nie an den Adapter zurückgemeldet — `_on_dnd`, `_on_agent_satellite_control`s `dnd`-Zweig und `_apply_global_dnd` pushen jetzt `agent_satellite_update(..., dnd=...)`, analog zum bestehenden `mute`-Muster. Betroffener ioBroker-State blieb dadurch dauerhaft `ack:false` — keine Bestätigung, ob eine DND-Aktion tatsächlich griff. Zusätzlich: `_on_agent_satellite_control`s Log-Zeile zeigte immer `room=`, auch wenn tatsächlich per `device_id` aufgelöst wurde. Benötigt `hannah-proto>=2.1.0` (`AgentSatelliteUpdate.dnd`) (Refs #213)
+
 ## 0.69.2 (2026-08-06)
 ### Hannah Core
 * **Breaking**: Gruppen referenzieren jetzt Satelliten (`device_id`) direkt statt Räume — `group_rooms` (DB) ersetzt durch `group_satellites`, bestehende Gruppen werden beim ersten Start automatisch migriert (jeder Satellit, der laut DB aktuell im migrierten Raum sitzt). `config.yaml`'s `groups:`-Block entfällt ersatzlos (vollständig durch das DB-/Admin-UI-Gruppenmodell abgelöst). Benötigt `hannah-proto>=2.0.1` (`Group.satellites`/`SetGroupSatellites`, `PROTO_VERSION` 4→5) (Refs #56)

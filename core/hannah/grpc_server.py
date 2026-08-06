@@ -1159,7 +1159,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         return key
 
     def agent_satellite_update(self, device_id: str, room: str, address: str, online: bool,
-                               volume: int = None, mute: bool = None,
+                               volume: int = None, mute: bool = None, dnd: bool = None,
                                display_name: str = "") -> bool:
         """Push a satellite online/offline or state update to all connected adapters."""
         kwargs = dict(device_id=device_id, room=room, address=address, online=online)
@@ -1167,6 +1167,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             kwargs["volume"] = volume
         if mute is not None:
             kwargs["mute"] = mute
+        if dnd is not None:
+            kwargs["dnd"] = dnd
         if display_name:
             kwargs["display_name"] = display_name
         cmd = pb.AgentCommand(satellite_update=pb.AgentSatelliteUpdate(**kwargs))

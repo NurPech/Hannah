@@ -884,13 +884,19 @@ def main():
     def _on_dnd(device: str, active: bool):
         _device_dnd[device] = active
         mqtt_handler.publish_dnd_state(device, active)
+        all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}
+        room = all_devices.get(device, "")
+        display_name = satellite_manager.resolve_satellite_name(device) or ""
+        grpc_servicer.agent_satellite_update(device, room, "", True, dnd=active, display_name=display_name)
         log.info(f"DND {device}: {active}")
 
     def _apply_global_dnd(active: bool):
         """Setzt DND auf allen bekannten Satelliten und publiziert den globalen State."""
+        all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}
         for device in _resolve_targets("all"):
             _device_dnd[device] = active
             mqtt_handler.publish_dnd_state(device, active)
+            grpc_servicer.agent_satellite_update(device, all_devices.get(device, ""), "", True, dnd=active)
         log.info(f"Globales DND: {active}")
 
     def _apply_global_mute(active: bool):
@@ -1337,7 +1343,9 @@ def main():
                 mqtt_handler.publish_mute_set(d, bool(value))
         elif key == "dnd":
             for d in targets:
+                _device_dnd[d] = bool(value)
                 mqtt_handler.publish_dnd_state(d, bool(value))
+                grpc_servicer.agent_satellite_update(d, all_devices.get(d, ""), "", True, dnd=bool(value))
         elif key == "volume":
             for d in targets:
                 _device_volume[d] = int(value)
@@ -1353,7 +1361,8 @@ def main():
                     pcm, rate = _resample_to_16k(*result)
                     for d in targets:
                         _send_audio(d, pcm, rate, label="[satellite_control] ")
-        log.info(f"[satellite_control] room={room!r} {key}={value!r} → {len(targets)} Satelliten")
+        via = f"device_id={device_id!r}" if device_id else f"room={room!r}"
+        log.info(f"[satellite_control] {via} {key}={value!r} → {len(targets)} Satelliten")
 
     _iobroker_ready: bool = False
 
