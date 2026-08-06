@@ -30,10 +30,12 @@ static hannah_asset_play_result_cb_t s_play_result_cb = NULL;
 /* ── Relevanzliste (#170) ────────────────────────────────────────────────── */
 
 /* Assets, die der Satellit selbst braucht, unabhängig von Cores Relevanzliste —
- * aktuell nur der Wakeword-Modell-Override (#166). Einzelner Eintrag, daher kein
- * Registrierungsmechanismus, nur eine feste Liste. */
+ * der Wakeword-Modell-Override (#166) und der Connect-Sound (#7, den der Satellit
+ * selbst beim Registrieren abspielt, siehe hannah_net_set_registered_callback()
+ * in main.c — kein Kommando von Core nötig). */
 static const char *const s_fixed_assets[] = {
     "wakeword",
+    "connect",
 };
 #define FIXED_ASSET_COUNT (sizeof(s_fixed_assets) / sizeof(s_fixed_assets[0]))
 

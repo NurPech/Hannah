@@ -5,6 +5,13 @@
 -->
 
 
+## 0.69.1 (2026-08-06)
+### Hannah Core
+* Fixed: satellite connect sound (#7, v0.69.0) never actually played on quick reconnects/reflashes — `_on_satellite_change()`'s new-vs-known diff silently skipped the whole connect fanfare whenever a device was still in `_known_satellites` from before (no clean `NotifySatelliteGone` in between). Redesigned: the satellite now plays its own connect sound locally the moment it registers, instead of waiting for a `play_asset` command from Core — `"connect"` removed from `RELEVANT_ASSET_IDS`/no longer sent by Core at all (Refs #7)
+
+### Satellite Firmware
+* Changed: `"connect"` added to the firmware's fixed asset-relevance exception list (alongside `"wakeword"`) and a new `hannah_net_set_registered_callback()` plays it locally right after UDP registration — no command from Core needed, same eventually-consistent-across-reboots behavior as wakeword model updates (Refs #7)
+
 ## 0.69.0 (2026-08-06)
 ### Hannah Core
 * Changed: timer jingle and alarm ring-cycle now wait for the satellite's real `playback_done` ack instead of a blind `time.sleep()`/fixed `cycle_seconds` timer derived from the asset manifest's `duration_s` — alarm ring cadence now follows actual playback length, with `cycle_seconds` repurposed as a safety timeout for satellites without the ack (old firmware). Core no longer reads the satellite-namespace asset manifest at all; `_load_asset_manifest()`/`_asset_manifest` removed (Refs #169)

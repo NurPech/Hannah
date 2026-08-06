@@ -31,6 +31,18 @@ static void on_play_asset(const char *asset_id)
     hannah_asset_play_async(asset_id);
 }
 
+/* Connect-Sound (#7) — der Satellit spielt ihn selbst, sobald er sich registriert
+ * hat, statt auf ein Kommando von Core zu warten. hannah_asset_play_async() ist
+ * bewusst tolerant: liegt "connect" noch nicht im Cache (z.B. allererster Boot
+ * nach Erst-Flash, bevor der erste Asset-Sync durchgelaufen ist), passiert
+ * einfach nichts — genau das gleiche eventually-consistent Verhalten wie beim
+ * Wakeword-Modell-Override, das nach einem Update auch erst den nächsten Reboot
+ * braucht. */
+static void on_satellite_registered(void)
+{
+    hannah_asset_play_async("connect");
+}
+
 /* Meldet das Ergebnis eines play_asset-Versuchs an Core zurück (#116) — vorher war
  * play_asset komplett Fire-and-Forget, ein fehlgeschlagenes Play (Asset nicht im
  * Cache, kaputter WAV-Header) blieb rein lokal auf dem Gerät sichtbar (ESP_LOGW). */
@@ -120,6 +132,7 @@ void app_main(void)
     hannah_net_set_play_asset_callback(on_play_asset);
     hannah_asset_set_play_result_callback(on_play_asset_result);
     hannah_asset_init();
+    hannah_net_set_registered_callback(on_satellite_registered);
 
     /* Audio-Pipeline */
     hannah_audio_init();

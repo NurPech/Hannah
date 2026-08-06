@@ -54,7 +54,7 @@ from hannah.__version__ import VERSION as HANNAH_VERSION
 # Asset-IDs, die Core per play_asset anfordern könnte (#170) — Grundlage für die
 # Relevanzliste, die hannah_asset auf dem Satelliten reaktiv statt blind alles im
 # Manifest lädt. Core braucht dafür nicht das satellite-Namespace-Manifest zu lesen.
-RELEVANT_ASSET_IDS = ["alarm_ring", "timer_jingle", "connect"]
+RELEVANT_ASSET_IDS = ["alarm_ring", "timer_jingle"]
 
 # TimeQuery/DateQuery: rein regelbasiert aus datetime, kein LLM nötig
 _WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
@@ -1025,7 +1025,6 @@ def main():
             if ble_macs:
                 mqtt_handler.publish_ble_watchlist(device_id, ble_macs)
             mqtt_handler.publish_asset_relevant(device_id, RELEVANT_ASSET_IDS)
-            mqtt_handler.publish_play_asset(device_id, "connect")
         for device_id in _known_satellites - current:
             grpc_servicer.agent_satellite_update(device_id, _prev_satellite_map.get(device_id, ""), "", False)
         _known_satellites = current

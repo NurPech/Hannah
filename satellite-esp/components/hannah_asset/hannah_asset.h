@@ -21,8 +21,8 @@ extern "C" {
  *                          — kein blindes "alles im Manifest laden" mehr und kein
  *                          fester Boot-Timer. Zusätzlich zur Core-Relevanzliste bleibt
  *                          eine kleine, fest im Firmware-Code verankerte Ausnahmeliste
- *                          relevant, unabhängig von Core (aktuell nur "wakeword", #166
- *                          Modell-Override). Assets werden unverändert (ohne
+ *                          relevant, unabhängig von Core ("wakeword", #166 Modell-Override,
+ *                          und "connect", #7 Connect-Sound). Assets werden unverändert (ohne
  *                          Dateiendung) unter ihrer Asset-ID gecacht — der Inhalt ist
  *                          dem Cache egal, nur den Konsumenten (Sound-Player,
  *                          Wakeword-Modell, ...) nicht.

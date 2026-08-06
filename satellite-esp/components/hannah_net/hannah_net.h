@@ -83,6 +83,13 @@ void hannah_net_mqtt_publish(const char *topic, const char *payload, int qos, in
 typedef void (*hannah_net_ota_ok_cb_t)(void);
 void hannah_net_set_ota_ok_callback(hannah_net_ota_ok_cb_t cb);
 
+/* Registered-Callback: wird aufgerufen direkt nachdem sich der Satellit per UDP beim
+ * Proxy/Core registriert hat (fire-and-forget, kein Warten auf ein Ack) — für Aktionen,
+ * die der Satellit selbst auslösen kann, ohne auf ein Kommando von Core zu warten
+ * (z.B. Connect-Sound aus dem lokalen Asset-Cache abspielen, #7). */
+typedef void (*hannah_net_registered_cb_t)(void);
+void hannah_net_set_registered_callback(hannah_net_registered_cb_t cb);
+
 /* BLE-Watchlist-Callback: wird aufgerufen wenn hannah/satellite/<device>/ble/watchlist empfangen.
  * json/len zeigen direkt auf den MQTT-Payload-Puffer (nur während des Callbacks gültig). */
 typedef void (*hannah_net_ble_watchlist_cb_t)(const char *json, int len);

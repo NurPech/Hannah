@@ -90,6 +90,7 @@ static hannah_net_tts_cb_t      s_tts_cb      = NULL;
 static hannah_net_tts_end_cb_t  s_tts_end_cb  = NULL;
 static hannah_net_playback_cb_t s_playback_cb = NULL;
 static hannah_net_ota_ok_cb_t          s_ota_ok_cb          = NULL;
+static hannah_net_registered_cb_t      s_registered_cb      = NULL;
 static hannah_net_ble_watchlist_cb_t   s_ble_watchlist_cb   = NULL;
 static char s_ble_watchlist_cache[512];
 static int  s_ble_watchlist_cache_len = 0;
@@ -197,6 +198,7 @@ static void udp_connect(const char *host, int port)
     ESP_LOGI(TAG, "UDP-Socket → Proxy %s:%d (listen :%d)",
              host, port, CONFIG_HANNAH_UDP_LISTEN_PORT);
     send_register();
+    if (s_registered_cb) s_registered_cb();
 }
 
 static void udp_receive_task(void *arg)
@@ -1012,6 +1014,7 @@ void hannah_net_get_ip_str(char *buf, size_t len)
 }
 
 void hannah_net_set_ota_ok_callback(hannah_net_ota_ok_cb_t cb)        { s_ota_ok_cb        = cb; }
+void hannah_net_set_registered_callback(hannah_net_registered_cb_t cb) { s_registered_cb    = cb; }
 void hannah_net_set_ble_watchlist_callback(hannah_net_ble_watchlist_cb_t cb)
 {
     s_ble_watchlist_cb = cb;
