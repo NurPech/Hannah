@@ -2,13 +2,15 @@
 python-telegram-bot>=20.0
 
 # gRPC
-grpcio>=1.81.1
-protobuf>=4.25.0
+grpcio>=1.83.0
+protobuf>=7.35.0
 
 # Proto schema — published package instead of the git-submodule/local-codegen
 # pattern (#60); pins the runtime proto/gRPC-version coupling that used to be
-# handled by matching grpcio-tools' version locally
-hannah-proto>=1.0.2
+# handled by matching grpcio-tools' version locally. >=2.0.0 for the PROTO_VERSION
+# 5 bump (Group.satellites/SetGroupSatellites, #56) — Core enforces an exact
+# x-proto-version match, so this MUST move in lockstep with core/requirements.txt
+hannah-proto>=2.0.1
 
 # Config
 pyyaml>=6.0

@@ -5,6 +5,16 @@
 -->
 
 
+## 0.69.2 (2026-08-06)
+### Hannah Core
+* **Breaking**: Gruppen referenzieren jetzt Satelliten (`device_id`) direkt statt Räume — `group_rooms` (DB) ersetzt durch `group_satellites`, bestehende Gruppen werden beim ersten Start automatisch migriert (jeder Satellit, der laut DB aktuell im migrierten Raum sitzt). `config.yaml`'s `groups:`-Block entfällt ersatzlos (vollständig durch das DB-/Admin-UI-Gruppenmodell abgelöst). Benötigt `hannah-proto>=2.0.1` (`Group.satellites`/`SetGroupSatellites`, `PROTO_VERSION` 4→5) (Refs #56)
+
+### Hannah Proxy
+* Changed: `hannah-proto-go` auf `v2.0.1` gebumpt (Modul-Pfad jetzt `.../v2`) — Pflicht-Update, da Hannah Core `enforce_protocol_version` exakt matcht und den Proxy sonst ab dem nächsten Core-Release ablehnt (Refs #56)
+
+### Telegram
+* Changed: `hannah-proto` auf `>=2.0.1` gebumpt — Pflicht-Update aus demselben Grund wie beim Proxy (Refs #56)
+
 ## 0.69.1 (2026-08-06)
 ### Hannah Core
 * Fixed: satellite connect sound (#7, v0.69.0) never actually played on quick reconnects/reflashes — `_on_satellite_change()`'s new-vs-known diff silently skipped the whole connect fanfare whenever a device was still in `_known_satellites` from before (no clean `NotifySatelliteGone` in between). Redesigned: the satellite now plays its own connect sound locally the moment it registers, instead of waiting for a `play_asset` command from Core — `"connect"` removed from `RELEVANT_ASSET_IDS`/no longer sent by Core at all (Refs #7)

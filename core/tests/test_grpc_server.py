@@ -15,10 +15,10 @@ from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
 from hannah.weather import WeatherCache
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupRoomsRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData
 from hannah.satellite_manager import SatellitePermissionError
 
-def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_rooms=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
+def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
     return HannahServicer(
         user_manager=user_manager or MagicMock(),
         satellite_manager=satellite_manager or MagicMock(),
@@ -41,7 +41,7 @@ def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handl
         create_group=create_group,
         update_group=update_group,
         delete_group=delete_group,
-        set_group_rooms=set_group_rooms,
+        set_group_satellites=set_group_satellites,
         get_db_satellites=get_db_satellites,
         set_satellite_room=set_satellite_room,
         set_satellite_display_name=set_satellite_display_name,
@@ -265,7 +265,7 @@ class TestRoomsGroupsRpcs:
     def test_get_groups(self):
         get_groups = MagicMock(return_value=[{
             "group_id": "og", "display_name": "Obergeschoss",
-            "rooms": [{"room_id": "bad", "display_name": "Bad"}],
+            "satellites": [{"device_id": "bad-esp", "display_name": "Bad", "room_id": "bad"}],
         }])
         servicer = _make_server(get_groups=get_groups)
 
@@ -275,8 +275,9 @@ class TestRoomsGroupsRpcs:
         group = response.groups[0]
         assert group.group_id == "og"
         assert group.display_name == "Obergeschoss"
-        assert len(group.rooms) == 1
-        assert group.rooms[0].room_id == "bad"
+        assert len(group.satellites) == 1
+        assert group.satellites[0].device_id == "bad-esp"
+        assert group.satellites[0].room_id == "bad"
 
     def test_create_group_ok(self):
         create_group = MagicMock(return_value=True)
@@ -312,13 +313,13 @@ class TestRoomsGroupsRpcs:
         delete_group.assert_called_once_with("og")
         assert response.ok is True
 
-    def test_set_group_rooms(self):
-        set_group_rooms = MagicMock()
-        servicer = _make_server(set_group_rooms=set_group_rooms)
+    def test_set_group_satellites(self):
+        set_group_satellites = MagicMock()
+        servicer = _make_server(set_group_satellites=set_group_satellites)
 
-        response = servicer.SetGroupRooms(SetGroupRoomsRequest(group_id="og", room_ids=["bad", "schlafzimmer"]), None)
+        response = servicer.SetGroupSatellites(SetGroupSatellitesRequest(group_id="og", device_ids=["bad-esp", "schlafzimmer-esp"]), None)
 
-        set_group_rooms.assert_called_once_with("og", ["bad", "schlafzimmer"])
+        set_group_satellites.assert_called_once_with("og", ["bad-esp", "schlafzimmer-esp"])
         assert response.ok is True
 
 class TestSatelliteRpcs:

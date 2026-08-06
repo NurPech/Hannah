@@ -2,14 +2,9 @@
 # extra_state_prefixes:
 #   - "0_userdata.0"
 
-groups:
-  erdgeschoss:
-    - Wohnzimmer
-    - Küche
-  alle:
-    - Wohnzimmer
-    - Küche
-    - Schlafzimmer
+# Gruppen (Satelliten-Sets für Announcements/Steuerung) liegen in der "groups"/
+# "group_satellites"-Tabelle, nicht mehr hier — siehe Admin-UI / GetGroups/CreateGroup/
+# SetGroupSatellites gRPC (#56, war vorher raumbasiert über diesen Config-Block).
 
 udp:
   host: "0.0.0.0"       # Bind-Adresse des Servers

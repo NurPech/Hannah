@@ -3,7 +3,7 @@ Hannah Room Manager
 
 Verwaltet, über hannah.models, Persistenz für:
   - Räume (sync aus ioBroker)
-  - Gruppen von Räumen (n:n über group_rooms — kein eigenes Model, per Join-Query)
+  - Gruppen von Satelliten (n:n über group_satellites — kein eigenes Model, per Join-Query; #56, war vorher Gruppen von Räumen)
 
 Satelliten-Verwaltung liegt in satellite_manager.py (SatelliteManager) — sync_rooms()
 greift hier weiterhin direkt auf das Satellite-Model zu, um beim Löschen eines Raums
@@ -75,18 +75,21 @@ class RoomManager:
     # Gruppen
 
     def get_groups(self) -> list[dict]:
-        """Alle Gruppen mit ihren Räumen."""
+        """Alle Gruppen mit ihren Satelliten (#56: Gruppen referenzieren Satelliten direkt, nicht mehr Räume)."""
         db = self._db()
         groups = Group.select(db).order_by("display_name").all()
         result = []
         for g in groups:
-            room_rows = Room.select(db).join(
-                "group_rooms gr", on="gr.room_id = rooms.room_id"
-            ).where("gr.group_id = ?", g.group_id).order_by("rooms.display_name").all()
+            sat_rows = Satellite.select(db).join(
+                "group_satellites gs", on="gs.device_id = satellites.device_id"
+            ).where("gs.group_id = ?", g.group_id).order_by("satellites.device_id").all()
             result.append({
                 "group_id": g.group_id,
                 "display_name": g.display_name,
-                "rooms": [{"room_id": r.room_id, "display_name": r.display_name} for r in room_rows],
+                "satellites": [
+                    {"device_id": s.device_id, "display_name": s.display_name or "", "room_id": s.room_id or ""}
+                    for s in sat_rows
+                ],
             })
         return result
 
@@ -118,36 +121,26 @@ class RoomManager:
         log.info(f"RoomManager: Gruppe '{group_id}' gelöscht")
         return True
 
-    def set_group_rooms(self, group_id: str, room_ids: list[str]) -> None:
-        """Setzt die Räume einer Gruppe (ersetzt vorhandene Einträge komplett).
-        group_rooms ist eine reine n:n-Pivot-Tabelle ohne eigenes Model."""
+    def set_group_satellites(self, group_id: str, device_ids: list[str]) -> None:
+        """Setzt die Satelliten einer Gruppe (ersetzt vorhandene Einträge komplett).
+        group_satellites ist eine reine n:n-Pivot-Tabelle ohne eigenes Model."""
         db = self._db()
         with self._lock:
-            db.execute("DELETE FROM group_rooms WHERE group_id = ?", (group_id,))
-            for room_id in room_ids:
+            db.execute("DELETE FROM group_satellites WHERE group_id = ?", (group_id,))
+            for device_id in device_ids:
                 db.execute(
-                    "INSERT OR IGNORE INTO group_rooms (group_id, room_id) VALUES (?, ?)",
-                    (group_id, room_id),
+                    "INSERT OR IGNORE INTO group_satellites (group_id, device_id) VALUES (?, ?)",
+                    (group_id, device_id),
                 )
             db.commit()
-        log.debug(f"RoomManager: Gruppe '{group_id}' → {len(room_ids)} Räume gesetzt")
+        log.debug(f"RoomManager: Gruppe '{group_id}' → {len(device_ids)} Satelliten gesetzt")
 
-    def get_group_room_ids(self, group_id: str) -> list[str]:
+    def get_group_satellite_map(self) -> dict[str, list[str]]:
+        """Gibt {group_id: [device_id, ...]} für alle Gruppen zurück (eine DB-Query)."""
         rows = self._db().execute(
-            "SELECT room_id FROM group_rooms WHERE group_id = ?", (group_id,)
-        ).fetchall()
-        return [r[0] for r in rows]
-
-    def resolve_group(self, group_id: str) -> list[str]:
-        """Gibt alle room_ids einer Gruppe zurück."""
-        return self.get_group_room_ids(group_id)
-
-    def get_group_room_id_map(self) -> dict[str, list[str]]:
-        """Gibt {group_id: [room_id, ...]} für alle Gruppen zurück (eine DB-Query)."""
-        rows = self._db().execute(
-            "SELECT group_id, room_id FROM group_rooms ORDER BY group_id"
+            "SELECT group_id, device_id FROM group_satellites ORDER BY group_id"
         ).fetchall()
         result: dict[str, list[str]] = {}
-        for group_id, room_id in rows:
-            result.setdefault(group_id, []).append(room_id)
+        for group_id, device_id in rows:
+            result.setdefault(group_id, []).append(device_id)
         return result

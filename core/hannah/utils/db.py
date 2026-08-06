@@ -52,14 +52,6 @@ CREATE TABLE IF NOT EXISTS "groups" (
 	PRIMARY KEY("group_id")
 );
 
-CREATE TABLE IF NOT EXISTS "group_rooms" (
-	"group_id"	TEXT NOT NULL,
-	"room_id"	TEXT NOT NULL,
-	PRIMARY KEY("group_id","room_id"),
-	FOREIGN KEY("group_id") REFERENCES "groups"("group_id") ON DELETE CASCADE,
-	FOREIGN KEY("room_id") REFERENCES "rooms"("room_id") ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS "satellites" (
 	"device_id"	TEXT NOT NULL,
 	"seed"	TEXT,
@@ -78,6 +70,14 @@ CREATE TABLE IF NOT EXISTS "satellites" (
 	PRIMARY KEY("device_id"),
 	FOREIGN KEY("room_id") REFERENCES "rooms"("room_id") ON DELETE SET NULL,
     FOREIGN KEY("owner_user_id") REFERENCES "users"("id") ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS "group_satellites" (
+	"group_id"	TEXT NOT NULL,
+	"device_id"	TEXT NOT NULL,
+	PRIMARY KEY("group_id","device_id"),
+	FOREIGN KEY("group_id") REFERENCES "groups"("group_id") ON DELETE CASCADE,
+	FOREIGN KEY("device_id") REFERENCES "satellites"("device_id") ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "satellite_restarts" (
@@ -242,6 +242,22 @@ def init_db():
     if "smalltalk_followup_listen" not in _col_names(db, "satellites"):
         db.execute('ALTER TABLE "satellites" ADD COLUMN "smalltalk_followup_listen" INTEGER NOT NULL DEFAULT 0')
         db.commit()
+
+    # #56: Gruppen referenzieren jetzt Satelliten direkt statt Räume — group_rooms wird
+    # einmalig nach group_satellites übernommen (jeder Satellit, der laut DB aktuell im
+    # migrierten Raum sitzt) und danach gelöscht. Läuft nur einmal, da group_rooms danach
+    # nicht mehr existiert (SCHEMA legt die Tabelle für Neuinstallationen nicht mehr an).
+    if "group_rooms" in _existing_tables(db):
+        rows = db.execute("SELECT group_id, room_id FROM group_rooms").fetchall()
+        for group_id, room_id in rows:
+            for (device_id,) in db.execute('SELECT device_id FROM satellites WHERE room_id = ?', (room_id,)).fetchall():
+                db.execute(
+                    'INSERT OR IGNORE INTO group_satellites (group_id, device_id) VALUES (?, ?)',
+                    (group_id, device_id),
+                )
+        db.execute("DROP TABLE group_rooms")
+        db.commit()
+        _log.info(f"DB-Migration #56: {len(rows)} group_rooms-Zeile(n) nach group_satellites übernommen, group_rooms gelöscht")
 
     # --- First-run: create admin account if no users exist ---
     if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:

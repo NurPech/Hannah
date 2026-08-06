@@ -161,7 +161,6 @@ def main():
 
     # STT + NLU + TTS
     stt = STT(cfg.get("stt", {}))
-    _group_pseudo_rooms = {k: k.capitalize() for k in cfg.get("groups", {})}
     nlu_cfg = settings_manager.get_settings_dict("nlu") or cfg.get("nlu", {})
     # Wortliste "automations" entkoppelt gesprochene Phrase ("Autoresponder") vom internen
     # Automation-Key ("telegram_autoresponder") — gleiches Muster wie category_words. Auch an
@@ -169,7 +168,7 @@ def main():
     # kennt, statt nur über die NLU-Wortliste erreichbar zu sein (#138 Nachfassrunde).
     automation_words = settings_manager.get_settings_dict("automations")
     nlu_cfg["automation_words"] = automation_words
-    nlu = NLU(nlu_cfg, {**iobroker.rooms, **_group_pseudo_rooms}, iobroker.devices)
+    nlu = NLU(nlu_cfg, iobroker.rooms, iobroker.devices)
     tts = TTS(cfg.get("tts", {}))
 
     llm = load_llm(cfg.get("llm", {}))
@@ -840,20 +839,10 @@ def main():
         targets = [d for d, r in all_devices.items() if _satellite_room(d, r) == room_lower]
 
         if not targets:
-            # Gruppen: zuerst DB, dann config.yaml als Fallback
-            db_groups = room_manager.get_group_room_id_map()
+            # Gruppen referenzieren Satelliten direkt (#56)
+            db_groups = room_manager.get_group_satellite_map()
             if room_lower in db_groups:
-                room_ids = {rid for rid in db_groups[room_lower]}
-                for d, r in all_devices.items():
-                    if _satellite_room(d, r) in room_ids:
-                        targets.append(d)
-            else:
-                for group_key, rooms in cfg.get("groups", {}).items():
-                    if group_key.lower() == room_lower:
-                        for room in rooms:
-                            targets += [d for d, r in all_devices.items()
-                                        if _satellite_room(d, r) == room.lower()]
-                        break
+                targets = [d for d in db_groups[room_lower] if d in all_devices]
 
         if not targets:
             log.warning(f"{label}kein Satellit in Raum/Gruppe '{device}' — ignoriert.")
@@ -1450,7 +1439,7 @@ def main():
         # Raum-Lebenszyklus läuft ausschließlich über _on_agent_room_snapshot() (siehe
         # dort), das den vollständigen, geräteunabhängigen enum.rooms.*-Katalog bekommt (#134).
         db_group_rooms = {g["group_id"]: g["display_name"] for g in room_manager.get_groups()}
-        nlu._rooms = {**iobroker.rooms, **_group_pseudo_rooms, **db_group_rooms}
+        nlu._rooms = {**iobroker.rooms, **db_group_rooms}
         nlu._devices = iobroker.devices
         _iobroker_ready = True
         grpc_servicer.timer_send_ready()
@@ -1536,7 +1525,7 @@ def main():
         create_group=room_manager.create_group,
         update_group=room_manager.update_group,
         delete_group=room_manager.delete_group,
-        set_group_rooms=room_manager.set_group_rooms,
+        set_group_satellites=room_manager.set_group_satellites,
         get_db_satellites=satellite_manager.get_satellites,
         set_satellite_room=satellite_manager.set_satellite_room,
         set_satellite_display_name=satellite_manager.set_satellite_display_name,

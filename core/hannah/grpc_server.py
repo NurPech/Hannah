@@ -132,11 +132,11 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         resolve_satellite_room: Optional[Callable[[str], Optional[str]]] = None,  # (device_id) → room_id | None
         upsert_satellite: Optional[Callable[[str], None]] = None,                # (device_id) → refresh last_seen
         get_rooms: Optional[Callable[[], list]] = None,                          # () → [{room_id, display_name}]
-        get_groups: Optional[Callable[[], list]] = None,                         # () → [{group_id, display_name, rooms}]
+        get_groups: Optional[Callable[[], list]] = None,                         # () → [{group_id, display_name, satellites}]
         create_group: Optional[Callable[[str, str], bool]] = None,               # (group_id, display_name) → bool
         update_group: Optional[Callable[[str, str], bool]] = None,               # (group_id, display_name) → bool
         delete_group: Optional[Callable[[str], bool]] = None,                    # (group_id) → bool
-        set_group_rooms: Optional[Callable[[str, list], None]] = None,           # (group_id, room_ids)
+        set_group_satellites: Optional[Callable[[str, list], None]] = None,      # (group_id, device_ids), #56
         get_db_satellites: Optional[Callable[[], list]] = None,                  # () → [{device_id, display_name, room_id, last_seen, room_display_name}]
         set_satellite_room: Optional[Callable[[str, Optional[str]], bool]] = None,         # (device_id, room_id) → bool
         set_satellite_display_name: Optional[Callable[[str, str], bool]] = None,          # (device_id, display_name) → bool
@@ -207,7 +207,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._create_group             = create_group or (lambda *_: False)
         self._update_group             = update_group or (lambda *_: False)
         self._delete_group             = delete_group or (lambda *_: False)
-        self._set_group_rooms          = set_group_rooms or (lambda *_: None)
+        self._set_group_satellites      = set_group_satellites or (lambda *_: None)
         self._get_db_satellites        = get_db_satellites or (lambda: [])
         self._set_satellite_room       = set_satellite_room or (lambda *_: False)
         self._set_satellite_display_name = set_satellite_display_name or (lambda *_: False)
@@ -667,7 +667,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             pb.Group(
                 group_id=g["group_id"],
                 display_name=g["display_name"],
-                rooms=[pb.Room(room_id=r["room_id"], display_name=r["display_name"]) for r in g["rooms"]],
+                satellites=[
+                    pb.GroupSatellite(device_id=s["device_id"], display_name=s["display_name"], room_id=s["room_id"])
+                    for s in g["satellites"]
+                ],
             )
             for g in groups
         ])
@@ -684,8 +687,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         ok = self._delete_group(request.group_id)
         return pb.StatusResponse(ok=ok, message="deleted" if ok else "not found")
 
-    def SetGroupRooms(self, request, _context):
-        self._set_group_rooms(request.group_id, list(request.room_ids))
+    def SetGroupSatellites(self, request, _context):
+        self._set_group_satellites(request.group_id, list(request.device_ids))
         return pb.StatusResponse(ok=True, message="set")
 
     # ------------------------------------------------------------------
