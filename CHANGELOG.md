@@ -4,6 +4,16 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.69.0 (2026-08-06)
+### Hannah Core
+* Changed: timer jingle and alarm ring-cycle now wait for the satellite's real `playback_done` ack instead of a blind `time.sleep()`/fixed `cycle_seconds` timer derived from the asset manifest's `duration_s` — alarm ring cadence now follows actual playback length, with `cycle_seconds` repurposed as a safety timeout for satellites without the ack (old firmware). Core no longer reads the satellite-namespace asset manifest at all; `_load_asset_manifest()`/`_asset_manifest` removed (Refs #169)
+* Changed: satellite connect sound migrated to the asset-server `play_asset` pattern — Core no longer loads a local `core/sounds/satellite_connected.wav` and streams it as raw PCM on connect; it now publishes `play_asset(device, "connect")` like timer jingle/alarm ring, and adds `"connect"` to the per-satellite asset-relevance list so it gets cached like any other asset (Refs #7)
+* Added: `TimeQuery`/`DateQuery` NLU intents — "wie spät ist es"/"welches Datum haben wir" now get answered directly from `datetime`, no LLM required (Refs #211)
+
+### Satellite Firmware
+* Removed: `CONFIG_HANNAH_VAD_ENERGY_THRESHOLD` (dead code) — the computed `min_thr`/`adaptive_thr` value was never passed anywhere; the actual streaming silence decision runs exclusively through `hannah_webrtc_vad_feed()` (frequency-based, no energy-threshold parameter). Found while debugging #204 (Refs #205)
+
 ## 0.68.0 (2026-08-05)
 ### Hannah Core
 * Changed: `WeatherCache` no longer parses MQTT topics directly (`openweathermap/0/forecast/...`, hardcoded to one vendor) — it now consumes the new `AgentWeatherUpdate` message pushed by the `iobroker.hannah` adapter over the existing `AgentConnect` stream, making the weather source provider-independent. `hannah-proto` bumped to 1.1.0. No MQTT fallback; `build_answer()` and its answer-generation logic are unchanged (Refs #209)

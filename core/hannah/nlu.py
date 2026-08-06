@@ -156,6 +156,15 @@ class NLU:
         self._car_range_words:    set[str] = {"reichweite", "weit", "kommt", "tankstand", "laden"}
         self._car_odometer_words: set[str] = {"kilometer", "km", "kilometerstand", "tachostand"}
 
+        # Wörter die auf eine Uhrzeit-Abfrage hinweisen — rein regelbasiert, kein LLM nötig
+        self._time_words: set[str] = set(cfg.get("time_words", [
+            "spaet", "uhrzeit",
+        ]))
+        # Wörter die auf eine Datums-/Wochentag-Abfrage hinweisen
+        self._date_words: set[str] = set(cfg.get("date_words", [
+            "datum", "wochentag",
+        ]))
+
         # Stop/Pause/Resume: Wiedergabe-Steuerung
         self._stop_words: set[str] = set(cfg.get("stop_words", [
             "stopp", "stop", "aufhoeren", "aufhoer", "abbrechen",
@@ -279,17 +288,31 @@ class NLU:
             and bool(self._weather_words & set(tokens))
         )
 
+        # TimeQuery/DateQuery: rein regelbasiert (kein LLM nötig), ohne Geräte-/Raumbezug
+        is_time = (
+            not is_car and not is_weather
+            and no_device_context
+            and bool(self._time_words & norm_tokens)
+        )
+        is_date = (
+            not is_car and not is_weather and not is_time
+            and no_device_context
+            and bool(self._date_words & norm_tokens)
+        )
+
         # SetPresence: Kommen/Gehen ohne Geräte-/Raumbezug, kein Query
         # "Ich gehe schlafen" ist kein Presence-Event — Sleep-Wörter als Veto
         _has_sleep_words = bool({"schlafen", "schlaf", "bett", "nacht", "muede"} & norm_tokens)
         is_presence_away = (
-            not is_query
+            not is_time and not is_date
+            and not is_query
             and no_device_context
             and not _has_sleep_words
             and bool(self._presence_away & norm_tokens)
         )
         is_presence_home = (
-            not is_query
+            not is_time and not is_date
+            and not is_query
             and no_device_context
             and bool(self._presence_home & norm_tokens)
         )
@@ -298,19 +321,19 @@ class NLU:
         # Vorrang vor action-basierten Intents, weil "stoppe" auch in turn_off_words steht
         _has_off = action == "off"
         is_stop = (
-            not is_car and not is_weather
+            not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and not is_query and device is None
             and bool(self._stop_words & norm_tokens)
         )
         is_pause = (
-            not is_car and not is_weather
+            not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and not is_stop and not is_query and device is None
             and bool(self._pause_words & norm_tokens)
         )
         is_resume = (
-            not is_car and not is_weather
+            not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and not is_stop and not is_pause and not is_query and device is None
             and bool(self._resume_words & norm_tokens)
@@ -318,13 +341,13 @@ class NLU:
 
         # SetDND / SetMute: ohne Geräte-/Raumbezug, kein Query
         is_dnd = (
-            not is_car and not is_weather
+            not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and no_device_context and not is_query
             and bool(self._dnd_words & norm_tokens)
         )
         is_mute_cmd = (
-            not is_car and not is_weather
+            not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and not is_dnd
             and no_device_context and not is_query
@@ -334,7 +357,7 @@ class NLU:
         # SetAutomation: ohne Geräte-/Raumbezug, kein Query — gleiches Muster wie SetDND/SetMute
         _automation_key = self._find_automation(joined) if no_device_context and not is_query else None
         is_automation = (
-            not is_car and not is_weather
+            not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and not is_dnd and not is_mute_cmd
             and no_device_context and not is_query
@@ -346,7 +369,7 @@ class NLU:
         is_volume_up = bool(self._volume_up_words & norm_tokens)
         is_volume_down = bool(self._volume_down_words & norm_tokens)
         is_volume = (
-            not is_car and not is_weather
+            not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and not is_dnd and not is_mute_cmd and not is_automation
             and not is_query and device is None
@@ -372,6 +395,8 @@ class NLU:
         is_smalltalk = (
             not is_car
             and not is_weather
+            and not is_time
+            and not is_date
             and not is_presence_away
             and not is_presence_home
             and not is_stop
@@ -405,6 +430,10 @@ class NLU:
         elif is_weather:
             weather_scope = self._find_weather_scope(tokens)
             intent_name, value, unit = "WeatherQuery", weather_scope, None
+        elif is_time:
+            intent_name, value, unit = "TimeQuery", None, None
+        elif is_date:
+            intent_name, value, unit = "DateQuery", None, None
         elif is_presence_away:
             intent_name, value, unit = "SetPresence", "away", None
         elif is_presence_home:

@@ -55,6 +55,35 @@ class TestDeleteAlarm:
         assert intent.resolved_date == datetime.date.today()
 
 
+class TestTimeDateQuery:
+    """Uhrzeit/Datum rein regelbasiert beantwortbar, kein LLM nötig."""
+
+    def test_wie_spaet(self, nlu):
+        intent = nlu.parse("wie spaet ist es")
+
+        assert intent.name == "TimeQuery"
+
+    def test_uhrzeit(self, nlu):
+        intent = nlu.parse("welche uhrzeit haben wir")
+
+        assert intent.name == "TimeQuery"
+
+    def test_datum(self, nlu):
+        intent = nlu.parse("welches datum haben wir heute")
+
+        assert intent.name == "DateQuery"
+
+    def test_wochentag(self, nlu):
+        intent = nlu.parse("welcher wochentag ist heute")
+
+        assert intent.name == "DateQuery"
+
+    def test_time_takes_priority_over_date_when_both_present(self, nlu):
+        intent = nlu.parse("sag mir uhrzeit und datum")
+
+        assert intent.name == "TimeQuery"
+
+
 class TestQueryAlarms:
     def test_welche_wecker(self, nlu):
         intent = nlu.parse("welche wecker habe ich gestellt")

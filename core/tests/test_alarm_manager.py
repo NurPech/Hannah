@@ -1,5 +1,6 @@
 import datetime
 import os
+import threading
 
 import pytest
 from werkzeug.security import generate_password_hash
@@ -32,6 +33,14 @@ def _create_user(db, username="leonie", trust_level=5) -> int:
     return User.get(db(), username=username).id
 
 
+def _never_done(device, timeout):
+    """Fake wait_playback_done_fn — blockt den _ringing_loop-Background-Thread für die
+    Dauer des Tests (Event wird nie gesetzt), analog zum alten cycle_seconds=999-Trick:
+    Tests rufen _ringing_cycle() direkt und synchron auf, der Loop-Thread soll währenddessen
+    nicht dazwischenfunken."""
+    return threading.Event().wait(timeout)
+
+
 @pytest.fixture
 def manager(db):
     fired, played, volumes, announced = [], [], [], []
@@ -41,8 +50,10 @@ def manager(db):
         play_asset_fn=lambda device, asset: played.append((device, asset)),
         set_volume_fn=lambda device, level: volumes.append((device, level)),
         get_volume_fn=lambda device: 50,
+        reset_playback_done_fn=lambda device: None,
+        wait_playback_done_fn=_never_done,
         announce_fn=lambda device, text: announced.append((device, text)),
-        cycle_seconds=999,  # real Timer delay irrelevant — tests invoke cycles directly
+        cycle_seconds=999,  # real delay irrelevant — tests invoke cycles directly
     )
     mgr.fired = fired
     mgr.played = played
@@ -323,6 +334,8 @@ class TestPlayResultFallback:
             play_asset_fn=lambda device, asset: played.append((device, asset)),
             set_volume_fn=lambda device, level: None,
             get_volume_fn=lambda device: 50,
+            reset_playback_done_fn=lambda device: None,
+            wait_playback_done_fn=_never_done,
             cycle_seconds=999,
         )
         sat = _create_satellite(db)

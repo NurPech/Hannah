@@ -12,13 +12,11 @@ import time
 import uuid
 import logging
 import os
-import pathlib
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
-import wave
 from typing import Callable, Optional
 
 import numpy as np
@@ -56,7 +54,19 @@ from hannah.__version__ import VERSION as HANNAH_VERSION
 # Asset-IDs, die Core per play_asset anfordern könnte (#170) — Grundlage für die
 # Relevanzliste, die hannah_asset auf dem Satelliten reaktiv statt blind alles im
 # Manifest lädt. Core braucht dafür nicht das satellite-Namespace-Manifest zu lesen.
-RELEVANT_ASSET_IDS = ["alarm_ring", "timer_jingle"]
+RELEVANT_ASSET_IDS = ["alarm_ring", "timer_jingle", "connect"]
+
+# TimeQuery/DateQuery: rein regelbasiert aus datetime, kein LLM nötig
+_WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+
+
+def _time_answer() -> str:
+    return f"Es ist {datetime.datetime.now().strftime('%H:%M')} Uhr."
+
+
+def _date_answer() -> str:
+    now = datetime.datetime.now()
+    return f"Heute ist {_WEEKDAYS_DE[now.weekday()]}, der {now.strftime('%d.%m.%Y')}."
 
 
 def setup_logging(level: str):
@@ -82,28 +92,6 @@ def main():
     except FileNotFoundError as e:
         log.error(str(e))
         sys.exit(1)
-
-    # Asset-Manifest (einmalig beim Start abrufen — enthält u.a. duration_s für Jingles)
-    def _load_asset_manifest() -> dict:
-        import urllib.request as _urlreq
-        asset_cfg = cfg.get("asset_server", {})
-        url   = asset_cfg.get("url", "").rstrip("/")
-        token = asset_cfg.get("token", "")
-        if not url or not token:
-            return {}
-        try:
-            req = _urlreq.Request(
-                f"{url}/manifest",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            with _urlreq.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-                return data.get("assets", {})
-        except Exception as exc:
-            log.warning(f"[asset] Manifest nicht abrufbar: {exc}")
-        return {}
-
-    _asset_manifest: dict = _load_asset_manifest()
 
     # User-Registry (SQLite, Hannah-eigene Quelle der Wahrheit statt ioBroker)
     init_db()
@@ -417,6 +405,10 @@ def main():
             publish_answer(answer)
         elif intent.name == "WeatherQuery":
             publish_answer(weather.build_answer(scope=intent.value or "today"))
+        elif intent.name == "TimeQuery":
+            publish_answer(_time_answer())
+        elif intent.name == "DateQuery":
+            publish_answer(_date_answer())
         elif intent.name == "SetPresence":
             if intent.value == "away":
                 log.info(f"[{device}] SetPresence away — Sprecher unbekannt, Status nicht gesetzt.")
@@ -631,6 +623,10 @@ def main():
             answer = car_manager.answer_for_roomie(scope=intent.value or "all", roomie_id=_resolve_roomie_id(speaker_user_id))
         elif intent.name == "WeatherQuery":
             answer = weather.build_answer(scope=intent.value or "today")
+        elif intent.name == "TimeQuery":
+            answer = _time_answer()
+        elif intent.name == "DateQuery":
+            answer = _date_answer()
         elif intent.name == "SetPresence":
             roomie_id = _resolve_roomie_id(speaker_user_id) if speaker_user_id else ""
             if intent.value == "away":
@@ -984,7 +980,8 @@ def main():
         # _handle_feedback ist erst weiter unten definiert, gleiches Forward-Reference-
         # Muster wie _on_alarm_fire oben.
         announce_fn=lambda device, text: _handle_feedback(device, True, text),
-        cycle_seconds=_asset_manifest.get("alarm_ring", {}).get("meta", {}).get("duration_s", 4.0),
+        reset_playback_done_fn=mqtt_handler.reset_playback_done,
+        wait_playback_done_fn=mqtt_handler.wait_for_playback_done,
     )
     mqtt_handler.set_play_asset_result_handler(
         lambda device, asset_id, ok: alarm_manager.on_play_result(device, asset_id, ok)
@@ -1010,19 +1007,6 @@ def main():
     ble_engine.set_location_change_handler(_on_ble_location_change)
     mqtt_handler.set_ble_report_handler(ble_engine.on_report)
 
-    # Connect-Sound: einmalig beim Start laden
-    _connect_pcm: Optional[bytes] = None
-    _connect_rate: int = 0
-    _connect_sound_path = pathlib.Path(__file__).parent / "sounds" / "satellite_connected.wav"
-    if _connect_sound_path.exists():
-        try:
-            with wave.open(str(_connect_sound_path), "rb") as _wf:
-                _connect_pcm = _wf.readframes(_wf.getnframes())
-                _connect_rate = _wf.getframerate()
-            log.info(f"Connect-Sound geladen: {_connect_sound_path.name} ({_connect_rate} Hz)")
-        except Exception as _exc:
-            log.warning(f"Connect-Sound konnte nicht geladen werden: {_exc}")
-
     # Satellite-Online-Tracking: diff berechnen und per-device online/offline publishen
     _known_satellites: set[str] = set()
     _prev_satellite_map: dict[str, str] = {}
@@ -1041,12 +1025,7 @@ def main():
             if ble_macs:
                 mqtt_handler.publish_ble_watchlist(device_id, ble_macs)
             mqtt_handler.publish_asset_relevant(device_id, RELEVANT_ASSET_IDS)
-            if _connect_pcm:
-                threading.Thread(
-                    target=_send_audio,
-                    args=(device_id, _connect_pcm, _connect_rate),
-                    daemon=True,
-                ).start()
+            mqtt_handler.publish_play_asset(device_id, "connect")
         for device_id in _known_satellites - current:
             grpc_servicer.agent_satellite_update(device_id, _prev_satellite_map.get(device_id, ""), "", False)
         _known_satellites = current
@@ -1414,10 +1393,14 @@ def main():
             if result:
                 tts_pcm = _resample_to_16k(*result)
 
-        jingle_duration = _asset_manifest.get("timer_jingle", {}).get("meta", {}).get("duration_s", 1.0)
+        for device in targets:
+            mqtt_handler.reset_playback_done(device)
         for device in targets:
             mqtt_handler.publish_play_asset(device, "timer_jingle")
-        time.sleep(jingle_duration + 0.1)
+        for device in targets:
+            if not mqtt_handler.wait_for_playback_done(device, timeout=3.0):
+                log.warning(f"[timer] Kein playback_done von '{device}' erhalten (alte Firmware?) — Fallback-Sleep")
+                time.sleep(1.1)
 
         if tts_pcm:
             pcm, rate = tts_pcm

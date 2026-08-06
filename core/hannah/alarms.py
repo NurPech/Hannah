@@ -2,6 +2,7 @@ import datetime
 import json
 import logging
 import threading
+import time
 from typing import Callable, Optional
 
 from hannah.models.alarm import Alarm
@@ -40,6 +41,8 @@ class AlarmManager:
         play_asset_fn: Callable[[str, str], None],
         set_volume_fn: Callable[[str, int], None],
         get_volume_fn: Callable[[str], int],
+        reset_playback_done_fn: Callable[[str], None],
+        wait_playback_done_fn: Callable[[str, float], bool],
         announce_fn: Optional[Callable[[str, str], None]] = None,
         asset_id: str = "alarm_ring",
         volume_low: int = 30,
@@ -53,6 +56,10 @@ class AlarmManager:
             vollen Alarm-Record (dict), nicht nur die ID.
         play_asset_fn/set_volume_fn: mqtt_handler.publish_play_asset/publish_volume_set.
         get_volume_fn(satellite_id): aktuelle Lautstärke, für Restore nach dem Stoppen.
+        reset_playback_done_fn/wait_playback_done_fn: mqtt_handler.reset_playback_done/
+            wait_for_playback_done — der Klingel-Loop wartet auf das echte Wiedergabe-Ende
+            statt fest `cycle_seconds` abzuwarten (#169); `cycle_seconds` bleibt als
+            Safety-Timeout für den Fall, dass nie ein Ack ankommt (alte Firmware o.ä.).
         announce_fn(satellite_id, text): TTS-Fallback für den Klingel-Loop, sobald ein
             play_asset-Versuch per on_play_result() ein Nack meldet (#116) — der Ring-Ton
             allein war komplett Fire-and-Forget und konnte bei einem defekten/fehlenden
@@ -64,6 +71,8 @@ class AlarmManager:
         self._play_asset_fn = play_asset_fn
         self._set_volume_fn = set_volume_fn
         self._get_volume_fn = get_volume_fn
+        self._reset_playback_done_fn = reset_playback_done_fn
+        self._wait_playback_done_fn = wait_playback_done_fn
         self._announce_fn = announce_fn
         self._asset_id = asset_id
         self._volume_low = volume_low
@@ -74,7 +83,7 @@ class AlarmManager:
         self._timers: dict[int, threading.Timer] = {}
         self._lock = threading.Lock()
 
-        self._ringing: dict[str, Optional[threading.Timer]] = {}
+        self._ringing: dict[str, Optional[threading.Thread]] = {}
         self._ring_high: dict[str, bool] = {}
         self._pre_ring_volume: dict[str, int] = {}
         self._asset_broken: dict[str, bool] = {}
@@ -246,7 +255,31 @@ class AlarmManager:
             self._ring_high[satellite_id] = False
             self._asset_broken[satellite_id] = False
             self._ringing[satellite_id] = None  # Platzhalter, verhindert Re-Entry vor dem ersten Zyklus
-        self._ringing_cycle(satellite_id)
+        self._ringing_cycle(satellite_id)  # erste Runde synchron, wie bisher
+        t = threading.Thread(target=self._ringing_loop, args=(satellite_id,), daemon=True)
+        with self._ringing_lock:
+            if satellite_id in self._ringing:  # könnte während der ersten Runde schon gestoppt worden sein
+                self._ringing[satellite_id] = t
+                t.start()
+
+    def _ringing_loop(self, satellite_id: str) -> None:
+        """Läuft als eigener Thread nach der ersten (synchronen) Runde: wartet auf das
+        echte Wiedergabe-Ende (playback_done) statt einen festen `cycle_seconds`-Timer
+        laufen zu lassen (#169), dann nächste Runde. `cycle_seconds` ist dabei nur noch
+        der Safety-Timeout für den Fall, dass nie ein Ack ankommt."""
+        while True:
+            with self._ringing_lock:
+                if satellite_id not in self._ringing:
+                    return  # gestoppt
+                asset_broken = self._asset_broken.get(satellite_id, False)
+            if asset_broken:
+                time.sleep(self._cycle_seconds)  # TTS-Fallback hat kein playback_done-Ack
+            else:
+                self._wait_playback_done_fn(satellite_id, self._cycle_seconds)
+            with self._ringing_lock:
+                if satellite_id not in self._ringing:
+                    return  # während des Wartens gestoppt
+            self._ringing_cycle(satellite_id)
 
     def _ringing_cycle(self, satellite_id: str) -> None:
         with self._ringing_lock:
@@ -256,15 +289,12 @@ class AlarmManager:
             self._ring_high[satellite_id] = high
             level = self._volume_high if high else self._volume_low
             asset_broken = self._asset_broken.get(satellite_id, False)
-            t = threading.Timer(self._cycle_seconds, self._ringing_cycle, args=(satellite_id,))
-            t.daemon = True
-            self._ringing[satellite_id] = t
         self._set_volume_fn(satellite_id, level)
         if asset_broken and self._announce_fn:
             self._announce_fn(satellite_id, self._fallback_text)
         else:
+            self._reset_playback_done_fn(satellite_id)
             self._play_asset_fn(satellite_id, self._asset_id)
-        t.start()
 
     def on_play_result(self, satellite_id: str, asset_id: str, ok: bool) -> None:
         """Reagiert auf das MQTT-Ack/Nack vom Satelliten (hannah_net.c/hannah_asset.c)
@@ -282,15 +312,15 @@ class AlarmManager:
 
     def stop_ringing(self, satellite_id: str) -> bool:
         """Bricht den Klingel-Loop ab und stellt die Lautstärke von vor dem Klingeln
-        wieder her. Gibt True zurück wenn tatsächlich etwas gestoppt wurde."""
+        wieder her. Gibt True zurück wenn tatsächlich etwas gestoppt wurde. Wirkt wie
+        bisher erst auf die *nächste* Runde — eine gerade laufende Wiedergabe wird
+        nicht abgebrochen (_ringing_loop prüft die Mitgliedschaft nach dem Warten)."""
         with self._ringing_lock:
             was_ringing = satellite_id in self._ringing
-            t = self._ringing.pop(satellite_id, None)
+            self._ringing.pop(satellite_id, None)
             self._ring_high.pop(satellite_id, None)
             self._asset_broken.pop(satellite_id, None)
             pre_volume = self._pre_ring_volume.pop(satellite_id, None)
-        if t is not None:
-            t.cancel()
         if pre_volume is not None:
             self._set_volume_fn(satellite_id, pre_volume)
         if was_ringing:

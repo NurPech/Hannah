@@ -23,13 +23,6 @@ menu "Hannah Wake Word"
         help
             Wie lange Stille anhält bis audio_end gesendet wird.
 
-    config HANNAH_VAD_ENERGY_THRESHOLD
-        int "VAD Energie-Schwelle (RMS, 0–32767)"
-        default 500
-        range 10 10000
-        help
-            RMS-Pegel unterhalb dessen ein Frame als Stille gilt.
-
     config HANNAH_VAD_WEBRTC_AGGRESSIVENESS
         int "WebRTC VAD Aggressivität (0–3)"
         default 2

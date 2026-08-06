@@ -741,9 +741,6 @@ static void mic_task(void *arg)
                 if ((s_ptt_active && !was_ptt) ||
                     confidence >= hannah_config_get()->wakeword_threshold / 100.0f) {
                     bool  by_wakeword  = !(s_ptt_active && !was_ptt);
-                    float min_thr      = CONFIG_HANNAH_VAD_ENERGY_THRESHOLD / 32767.0f;
-                    float adaptive_thr = s_noise_floor_ema * 2.0f;
-                    if (adaptive_thr < min_thr) adaptive_thr = min_thr;
                     int vad_silence_frames = (int)(hannah_config_get()->vad_silence_ms / 10);
                     mic_led(LED_STATE_WAKE);
                     vTaskDelay(pdMS_TO_TICKS(150));
