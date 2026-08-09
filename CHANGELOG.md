@@ -5,6 +5,10 @@
 -->
 
 
+## 0.70.0 (2026-08-09)
+### Hannah Core
+* Added: Activity-Log — protokolliert pro verarbeitetem Kommando Kanal (Satellit/Telegram/ioBroker/gRPC), Zeitpunkt, erkannten NLU-Intent samt Metadaten, Antworttext und (bei Voice-Kanälen) eine WAV-Aufnahme. Läuft in einer separaten MySQL-Datenbank (bewusst getrennt von `hannah.db`/SD-Karte), deaktiviert sich selbst ohne konfigurierten Host. Behebt nebenbei, dass `source_service`/`source_user_id` bei `SubmitText`/`SubmitVoice` bisher nach der User-Auflösung verworfen wurden, statt den Kanal erkennbar zu machen. Needs `dialectorm-m1kad0>=0.1.2` (dialekt-agnostische Schema-Erzeugung) (Refs #220)
+
 ## 0.69.4 (2026-08-09)
 ### Hannah Core
 * Added: per-message `compat_version` check (`CompatVersionInterceptor`) alongside the existing global `enforce_protocol_version` check — a breaking change scoped to one message's schema no longer has to reject every client, only calls that actually use the affected message. Additive, not a replacement: both interceptors run, each with their own `enforce` toggle (`enforce_compat_version`, default `false`, same safe-rollout pattern as `enforce_protocol_version`). Needs `hannah-proto>=3.1.0` (`hannah_proto.interceptor`) (Refs #217)

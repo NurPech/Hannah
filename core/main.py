@@ -24,6 +24,8 @@ import numpy as np
 from hannah.models.linked_account import LinkedAccount
 from hannah.user_manager import UserManager
 from hannah.utils.db import get_db, init_db
+from hannah import activity_log
+from hannah.utils.activity_db import init_activity_db
 from hannah.residents import Roomie, Guest, Pet, Resident, HOME_PRESENCE_STATE
 from hannah import audio as audio_mod
 from hannah import config as config_mod
@@ -96,6 +98,11 @@ def main():
     # User-Registry (SQLite, Hannah-eigene Quelle der Wahrheit statt ioBroker)
     init_db()
     _user_manager = UserManager(get_db)
+
+    # Activity-Log (#220) — separate MySQL-DB, No-op wenn nicht konfiguriert
+    activity_log_cfg = cfg.get("activity_log", {})
+    activity_log.configure(activity_log_cfg.get("audio_dir", "activity_audio"))
+    init_activity_db(activity_log_cfg)
 
     def _resolve_roomie_id(speaker_user_id: str) -> str:
         """Löst eine Hannah-User-ID auf die verlinkte ioBroker-Roomie-ID auf (sofern verlinkt).
@@ -327,16 +334,47 @@ def main():
     # Kern-Pipeline: numpy-Array → Intent → Gerät schalten (Sprach-Pfad)
 
     def pipeline(device: str, audio_array, publish_error, publish_answer):
+        # Activity-Log (#220): kein Return-Wert in dieser Funktion (Callback-basiert),
+        # daher Erfassung über lokale Wrapper statt Umbau der Dispatch-Logik. publish_answer
+        # ist ein Parameter (Shadowing ohne UnboundLocalError-Risiko); _feedback ist der
+        # oben umbenannte, bisher globale _handle_feedback-Aufruf — bewusst umbenannt statt
+        # geshadowt, da ein lokales "def _handle_feedback" den Zugriff auf die äußere
+        # Funktion (gebraucht für den eigentlichen Aufruf) unmöglich gemacht hätte.
+        _orig_publish_answer = publish_answer
+        _captured_answer = [None]
+        intent = None
+
+        def publish_answer(text):
+            _captured_answer[0] = text
+            _orig_publish_answer(text)
+
+        def _feedback(satellite_device, is_success, text):
+            if text:
+                _captured_answer[0] = text
+            _handle_feedback(satellite_device, is_success, text)
+
+        def _log_pipeline_activity():
+            activity_log.log_activity(
+                channel_type="satellite", channel_id=device, raw_text=locals_text[0],
+                intent=intent, answer_text=_captured_answer[0] or "", audio_array=audio_array,
+            )
+
+        locals_text = [""]
+
         # STT
         try:
             text, no_speech_prob = stt.transcribe(audio_array)
         except Exception as e:
             log.error(f"[{device}] STT fehlgeschlagen: {e}")
             publish_error(f"STT: {e}")
+            _log_pipeline_activity()
             return
+
+        locals_text[0] = text
 
         if not text:
             log.debug(f"[{device}] Keine Sprache erkannt (no_speech={no_speech_prob:.2f})")
+            _log_pipeline_activity()
             return
 
         log.info(f"[{device}] Text: '{text}'")
@@ -344,7 +382,8 @@ def main():
         # Phrase-Trigger-Check vor NLU (#139, Nachfolger des alten Routine-Checks)
         phrase_reply = trigger_engine.match_phrase(text)
         if phrase_reply is not None:
-            _handle_feedback(device, True, phrase_reply)
+            _feedback(device, True, phrase_reply)
+            _log_pipeline_activity()
             return
 
         # Offene Rückfrage auflösen
@@ -354,7 +393,8 @@ def main():
             if kind in ("alarm_expand", "alarm_delete_series"):
                 conv_ctx.clear_clarification(device)
                 reply = _resolve_alarm_confirmation(kind, clarification["payload"], text)
-                _handle_feedback(device, True, reply)
+                _feedback(device, True, reply)
+                _log_pipeline_activity()
                 return
             resolved = resolve_clarification_answer(text, clarification["candidates"])
             if resolved:
@@ -365,7 +405,9 @@ def main():
                 count = iobroker.execute(orig, satellite_device=device)
                 conv_ctx.update_from_intent(device, orig)
                 if count == 0:
-                    _handle_feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
+                    _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
+                intent = orig
+                _log_pipeline_activity()
                 return
             # Keine Übereinstimmung → Rückfrage verwerfen, normal weiterverarbeiten
             conv_ctx.clear_clarification(device)
@@ -396,7 +438,8 @@ def main():
         if intent.candidates:
             question = build_clarification_question(intent.candidates)
             conv_ctx.set_clarification(device, intent, intent.candidates)
-            _handle_feedback(device, True, question)
+            _feedback(device, True, question)
+            _log_pipeline_activity()
             return
 
         if intent.name == "CarQuery":
@@ -411,10 +454,10 @@ def main():
         elif intent.name == "SetPresence":
             if intent.value == "away":
                 log.info(f"[{device}] SetPresence away — Sprecher unbekannt, Status nicht gesetzt.")
-                _handle_feedback(device, True, "Tschüss! Bis bald.")
+                _feedback(device, True, "Tschüss! Bis bald.")
             else:
                 log.info(f"[{device}] SetPresence home — Sprecher unbekannt, Status nicht gesetzt.")
-                _handle_feedback(device, True, "Willkommen zuhause!")
+                _feedback(device, True, "Willkommen zuhause!")
         elif intent.name in ("StopIntent", "PauseIntent", "ResumeIntent"):
             cmd_type = {"StopIntent": "stop", "PauseIntent": "pause", "ResumeIntent": "resume"}[intent.name]
             targets = _resolve_targets(intent.room_id or device)
@@ -427,14 +470,14 @@ def main():
         elif intent.name == "SetVolume":
             targets = _resolve_targets(intent.room_id or device)
             if not targets:
-                _handle_feedback(device, False, "Keinen Satelliten gefunden.")
+                _feedback(device, False, "Keinen Satelliten gefunden.")
             else:
                 level = _apply_volume(targets, intent.value, intent.unit)
                 if intent.unit == "relative":
                     reply = "Lauter." if intent.value > 0 else "Leiser."
                 else:
                     reply = f"Lautstärke auf {level} Prozent gesetzt."
-                _handle_feedback(device, True, reply)
+                _feedback(device, True, reply)
         elif intent.name == "SetTimer":
             seconds = int(intent.value)
             label = intent.label or format_duration(seconds)
@@ -449,7 +492,7 @@ def main():
             reply = f"Timer für {format_duration(seconds)} gesetzt."
             if intent.label:
                 reply = f"Timer für {format_duration(seconds)} gesetzt: {intent.label}."
-            _handle_feedback(device, True, reply)
+            _feedback(device, True, reply)
         elif intent.name == "SetAlarm":
             user_id = _resolve_alarm_user_id(None, device)
             weekday = intent.weekdays[0] if intent.weekdays else None
@@ -460,7 +503,7 @@ def main():
                 conv_ctx.set_clarification(device, None, [], kind="alarm_expand", payload={
                     "alarm_id": record["id"], "satellite_id": device, "time": intent.value, "weekday": weekday,
                 })
-                _handle_feedback(device, True, (
+                _feedback(device, True, (
                     f"Wecker für {weekday_name} um {intent.value} Uhr gestellt. "
                     f"Soll ich den Wecker von {weekday_name} bis Freitag anlegen?"
                 ))
@@ -468,16 +511,16 @@ def main():
                 target_date = _next_alarm_date(intent.value)
                 alarm_manager.create_alarm(device, intent.value, None, target_date.isoformat(), user_id)
                 label = _format_alarm_date(target_date)
-                _handle_feedback(device, True, f"Wecker gestellt für {label} um {intent.value} Uhr.")
+                _feedback(device, True, f"Wecker gestellt für {label} um {intent.value} Uhr.")
         elif intent.name == "DeleteAlarm":
             if intent.resolved_date is None:
-                _handle_feedback(device, False, "Für welchen Tag soll ich den Wecker löschen?")
+                _feedback(device, False, "Für welchen Tag soll ich den Wecker löschen?")
             else:
                 matches = alarm_manager.find_occurrences(None, intent.resolved_date)
                 if intent.value:
                     matches = [m for m in matches if m["time"] == intent.value]
                 if not matches:
-                    _handle_feedback(device, False, "Ich habe dafür keinen Wecker gefunden.")
+                    _feedback(device, False, "Ich habe dafür keinen Wecker gefunden.")
                 else:
                     series_matches = [m for m in matches if m["weekdays"]]
                     for m in matches:
@@ -491,23 +534,23 @@ def main():
                         conv_ctx.set_clarification(device, None, [], kind="alarm_delete_series",
                                                     payload={"alarm_id": series_matches[0]["id"]})
                         reply += f" Soll ich den Wecker für {weekday_name} bis Freitag löschen?"
-                    _handle_feedback(device, True, reply)
+                    _feedback(device, True, reply)
         elif intent.name == "QueryAlarms":
-            _handle_feedback(device, True, _format_alarm_list(alarm_manager.get_alarm_records(), device))
+            _feedback(device, True, _format_alarm_list(alarm_manager.get_alarm_records(), device))
         elif intent.name == "SetDND":
             active = intent.value == "on"
             _apply_global_dnd(active)
-            _handle_feedback(device, True, "Nicht stören aktiv." if active else "Nicht stören deaktiviert.")
+            _feedback(device, True, "Nicht stören aktiv." if active else "Nicht stören deaktiviert.")
         elif intent.name == "SetMute":
             active = intent.value == "on"
             _apply_global_mute(active)
-            _handle_feedback(device, True, "Mikrofone stumm." if active else "Mikrofone wieder aktiv.")
+            _feedback(device, True, "Mikrofone stumm." if active else "Mikrofone wieder aktiv.")
         elif intent.name == "Smalltalk":
             history = conv_ctx.get_llm_history(device)
             answer = llm.chat(text, system_prompt=prepare_prompt(llm_system_prompt, iobroker), history=history)
             conv_ctx.add_llm_exchange(device, text, answer)
             _maybe_reopen_smalltalk_mic(device)
-            _handle_feedback(device, True, answer)
+            _feedback(device, True, answer)
         elif intent.name == "Query":
             answer = iobroker.answer_query(intent)
             if answer:
@@ -519,10 +562,12 @@ def main():
             count = iobroker.execute(intent, satellite_device=device)
             conv_ctx.update_from_intent(device, intent)
             if intent.name == "Unknown":
-                _handle_feedback(device, False, "Tut mir leid, ich habe dich nicht verstanden.")
+                _feedback(device, False, "Tut mir leid, ich habe dich nicht verstanden.")
             elif count == 0:
                 log.warning(f"[{device}] Keine States gesetzt — Intent nicht auflösbar.")
-                _handle_feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
+                _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
+
+        _log_pipeline_activity()
 
     # ------------------------------------------------------------------
     def _speaker_context(speaker_user_id: str) -> str:
@@ -542,7 +587,10 @@ def main():
             f"{mem}"
         )
 
-    def _handle_text(text: str, speaker_user_id: str = "", source: str = "", device: str = "") -> tuple[str, str]:
+    def _handle_text(
+        text: str, speaker_user_id: str = "", source: str = "", device: str = "",
+        channel_type: str = "", channel_id: str = "", audio_array=None, sample_rate: int = 16000,
+    ) -> tuple[str, str]:
         """
         Verarbeitet einen Text-Befehl durch NLU und gibt (Antwort, Intent-Name) zurück.
         Kein TTS — reines Text-in/Text-out.
@@ -551,12 +599,23 @@ def main():
         speaker_user_id: optionale Hannah-User-ID aus Voice-ID-Erkennung.
         source: Kontext-Schlüssel (Gerät, Roomie-ID, Kanal). Leer = speaker_user_id oder "anon".
         device: Satelliten-Device-ID für Raum-Fallback (nur gesetzt bei Satelliten-Audio).
+        channel_type/channel_id: Activity-Log-Kanal (#220), vom Aufrufer explizit gesetzt
+        (z.B. "telegram"/"satellite"/"iobroker") statt aus source/device zurückgeraten.
+        audio_array: Roh-Audio fürs Activity-Log (nur bei Voice-Kanälen vorhanden).
         """
         _source = source or speaker_user_id or "anon"
 
+        def _logged(answer: str, intent_name: str, intent=None) -> tuple[str, str]:
+            activity_log.log_activity(
+                channel_type=channel_type or "grpc_text", channel_id=channel_id,
+                user_id=speaker_user_id, raw_text=text, intent=intent,
+                answer_text=answer, audio_array=audio_array, sample_rate=sample_rate,
+            )
+            return answer, intent_name
+
         phrase_reply = trigger_engine.match_phrase(text)
         if phrase_reply is not None:
-            return phrase_reply, "Trigger"
+            return _logged(phrase_reply, "Trigger")
 
         # Smalltalk-Modus: LLM-Classifier vor NLU schalten
         if conv_ctx.is_smalltalk_active(_source):
@@ -567,13 +626,13 @@ def main():
                 sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
                 answer = llm.chat(text, system_prompt=sp, history=history)
                 conv_ctx.add_llm_exchange(_source, text, answer)
-                return answer, "Smalltalk"
+                return _logged(answer, "Smalltalk")
             if verdict == "NOT_ADDRESSED":
                 # #159 — erkennbar nicht an Hannah gerichtet (z.B. Fremdgespräch im offenen
                 # Follow-up-Mic-Fenster). Bewusst kein Fallthrough in die NLU-Verarbeitung,
                 # sonst würde zufällig aufgenommenes Gespräch als Gerätebefehl interpretiert.
                 log.debug(f"[{_source}] Classifier → NOT_ADDRESSED (Modus aktiv, ignoriert)")
-                return "", "Ignored"
+                return _logged("", "Ignored")
             log.debug(f"[{_source}] Classifier → COMMAND (Modus aktiv, weiter mit NLU)")
 
         if conv_ctx.has_clarification(_source):
@@ -581,7 +640,7 @@ def main():
             kind = clarification.get("type", "room")
             if kind in ("alarm_expand", "alarm_delete_series"):
                 conv_ctx.clear_clarification(_source)
-                return _resolve_alarm_confirmation(kind, clarification["payload"], text), "Alarm"
+                return _logged(_resolve_alarm_confirmation(kind, clarification["payload"], text), "Alarm")
             resolved = resolve_clarification_answer(text, clarification["candidates"])
             if resolved:
                 conv_ctx.clear_clarification(_source)
@@ -590,7 +649,7 @@ def main():
                 orig.room_id = resolved[0]
                 count = iobroker.execute(orig)
                 conv_ctx.update_from_intent(_source, orig)
-                return ("OK." if count > 0 else "Keine Geräte gefunden."), "Routine"
+                return _logged(("OK." if count > 0 else "Keine Geräte gefunden."), "Routine", orig)
             conv_ctx.clear_clarification(_source)
 
         intent = nlu.parse(text)
@@ -616,7 +675,7 @@ def main():
         if intent.candidates:
             question = build_clarification_question(intent.candidates)
             conv_ctx.set_clarification(_source, intent, intent.candidates)
-            return question, "Clarification"
+            return _logged(question, "Clarification", intent)
 
         if intent.name == "CarQuery":
             answer = car_manager.answer_for_roomie(scope=intent.value or "all", roomie_id=_resolve_roomie_id(speaker_user_id))
@@ -768,7 +827,7 @@ def main():
             answer = "Keine Geräte gefunden." if count == 0 else f"OK, {count} Gerät(e) geschaltet."
             conv_ctx.update_from_intent(_source, intent)
 
-        return answer, intent.name
+        return _logged(answer, intent.name, intent)
 
     # ── Satellit-Steuerung: Volume / Mute / DND ───────────────────────────────
     _global_volume: int = 80          # 0-100
@@ -974,7 +1033,7 @@ def main():
         # TTS-Fallback, falls der Satellit einen play_asset-Versuch nackt (#116) —
         # _handle_feedback ist erst weiter unten definiert, gleiches Forward-Reference-
         # Muster wie _on_alarm_fire oben.
-        announce_fn=lambda device, text: _handle_feedback(device, True, text),
+        announce_fn=lambda d, text: _handle_feedback(d, True, text),
         reset_playback_done_fn=mqtt_handler.reset_playback_done,
         wait_playback_done_fn=mqtt_handler.wait_for_playback_done,
     )
@@ -1142,7 +1201,9 @@ def main():
     # Voice-Pipeline für gRPC: OGG/Opus → STT → NLU → TTS → OGG/Opus
     # Wird von SubmitVoice (Telegram, zukünftige Services) genutzt.
 
-    def _handle_voice(audio_ogg: bytes, speaker_user_id: str = "") -> tuple[str, str, str, bytes]:
+    def _handle_voice(
+        audio_ogg: bytes, speaker_user_id: str = "", channel_type: str = "", channel_id: str = "",
+    ) -> tuple[str, str, str, bytes]:
         """OGG/Opus bytes → (transcript, answer, intent_name, audio_ogg_out)"""
         # OGG → raw PCM (16kHz, mono, s16le) via ffmpeg
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
@@ -1173,7 +1234,10 @@ def main():
             return "", "Ich konnte dich leider nicht verstehen.", "Unknown", b""
 
         log.info(f"[grpc/voice] Transkript: {transcript!r}")
-        answer, intent_name = _handle_text(transcript, speaker_user_id, source=speaker_user_id or "grpc-voice")
+        answer, intent_name = _handle_text(
+            transcript, speaker_user_id, source=speaker_user_id or "grpc-voice",
+            channel_type=channel_type or "grpc_voice", channel_id=channel_id, audio_array=audio_array,
+        )
 
         # TTS → PCM → OGG/Opus via ffmpeg
         audio_ogg_out = b""
@@ -1237,7 +1301,10 @@ def main():
         if room and _try_answer_pending(device, room, transcript):
             return transcript, "", "AnswerPending", b"", 0
 
-        answer, intent_name = _handle_text(transcript, speaker_user_id=speaker_user_id, source=device, device=device)
+        answer, intent_name = _handle_text(
+            transcript, speaker_user_id=speaker_user_id, source=device, device=device,
+            channel_type="satellite", channel_id=device, audio_array=audio_array,
+        )
 
         tts_pcm = b""
         sample_rate = 0
@@ -1326,7 +1393,7 @@ def main():
             )
 
     def _on_agent_text_command(text: str) -> tuple[str, str]:
-        return _handle_text(text, source="iobroker")
+        return _handle_text(text, source="iobroker", channel_type="iobroker")
 
     def _on_agent_set_resident(resident_id: str, presence_state: int, resident_type: pb.ResidentType):
         residents.set_presence(resident_id, presence_state, resident_type)

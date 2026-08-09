@@ -518,7 +518,12 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             f"[grpc] SubmitText von {request.source_service}:{request.source_user_id}"
             f" (user={user_id or 'anonym'}) — {request.text!r}"
         )
-        answer, intent_name = self._handle_text(request.text, user_id)
+        # #220: source_service/source_user_id wurden bisher nur für _user_from_request()
+        # gelesen und danach verworfen — jetzt zusätzlich als Activity-Log-Kanal durchgereicht.
+        answer, intent_name = self._handle_text(
+            request.text, user_id,
+            channel_type=request.source_service or "grpc_text", channel_id=request.source_user_id,
+        )
         return pb.SubmitTextResponse(answer=answer, intent_name=intent_name)
 
     def SubmitVoice(self, request, _context):
@@ -527,7 +532,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             f"[grpc] SubmitVoice von {request.source_service}:{request.source_user_id}"
             f" (user={user_id or 'anonym'}, {len(request.audio)} bytes)"
         )
-        transcript, answer, intent_name, audio_ogg = self._handle_voice(request.audio, user_id)
+        transcript, answer, intent_name, audio_ogg = self._handle_voice(
+            request.audio, user_id,
+            channel_type=request.source_service or "grpc_voice", channel_id=request.source_user_id,
+        )
         return pb.SubmitVoiceResponse(
             transcript=transcript,
             answer=answer,

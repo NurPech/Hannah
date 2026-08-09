@@ -166,3 +166,14 @@ llm:
 memory:
   db: "memory.db"        # SQLite-Datei für Langzeitgedächtnis (relativ zum Arbeitsverzeichnis)
   recent_limit: 10       # Wie viele Erinnerungen in den System-Prompt injiziert werden
+
+# Activity-Log (#220): welcher Kanal hat wann was erkannt/getan. Separate MySQL-DB,
+# bewusst getrennt von hannah.db (SD-Karten-Last auf dem Pi + erwartete Schreiblast).
+# Kein "host" gesetzt = Feature deaktiviert, kein Logging (nicht Core-kritisch).
+# activity_log:
+#   host: "192.168.1.X"
+#   port: 3306
+#   user: "hannah_activity"
+#   password: "IHR_MYSQL_PASSWORT"
+#   database: "hannah_activity"
+#   audio_dir: "activity_audio"   # WAV-Ordner (relativ zum Arbeitsverzeichnis), wird selbst angelegt
