@@ -24,6 +24,7 @@ from hannah_proto import hannah_pb2_grpc as pb_grpc
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import ProtocolVersionInterceptor, read_proto_version
+from hannah_proto.interceptor.compat_interceptor import CompatVersionInterceptor
 
 log = logging.getLogger(__name__)
 
@@ -1687,11 +1688,24 @@ class GrpcServer:
             expected_version=read_proto_version(),
             enforce=cfg.get("enforce_protocol_version", False),
         )
+        # hannah-proto#9/#217: per-method compat_version check, additive to
+        # the interceptor above rather than a replacement — running both as
+        # hard gates would defeat the point (compat_version exists so a
+        # breaking change elsewhere doesn't reject clients unaffected by
+        # it), so this only rejects on the specific messages a call
+        # actually uses. A client that never sends x-compat-version (i.e.
+        # every external client right now, none have adopted it yet) is
+        # treated as compat_version 1 — same safe default a client
+        # predating this mechanism gets.
+        self._compat_interceptor = CompatVersionInterceptor(
+            service=pb.DESCRIPTOR.services_by_name["HannahService"],
+            enforce=cfg.get("enforce_compat_version", False),
+        )
 
     def start(self):
         self._server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=8),
-            interceptors=[self._version_interceptor],
+            interceptors=[self._version_interceptor, self._compat_interceptor],
         )
         pb_grpc.add_HannahServiceServicer_to_server(self._servicer, self._server)
         addr = f"{self._host}:{self._port}"
@@ -1712,6 +1726,16 @@ class GrpcServer:
         """
         self._version_interceptor.enforce = enforce
         log.info(f"[grpc/version] Protocol-Version-Enforcement: {'AN' if enforce else 'AUS'}")
+
+    def set_compat_version_enforcement(self, enforce: bool) -> None:
+        """Reject-Mode für den per-Message-compat_version-Check gezielt an-/ausschalten (#217).
+
+        Solange kein externer Client x-compat-version mitschickt, muss das
+        False bleiben (nur Logging) — sonst lehnt Hannah jeden Call ab, der
+        eine Message mit compat_version > 1 nutzt.
+        """
+        self._compat_interceptor.enforce = enforce
+        log.info(f"[grpc/compat_version] Compat-Version-Enforcement: {'AN' if enforce else 'AUS'}")
 
 
 # ------------------------------------------------------------------

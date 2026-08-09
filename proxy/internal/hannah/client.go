@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/NurPech/hannah-proto-go/v2"
+	pb "github.com/NurPech/hannah-proto-go/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -30,8 +30,12 @@ func NewClient(address string) (*Client, error) {
 	conn, err := grpc.NewClient(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(32*1024*1024)),
-		grpc.WithChainUnaryInterceptor(versionUnaryInterceptor),
-		grpc.WithChainStreamInterceptor(versionStreamInterceptor),
+		// compat_version (hannah-proto#9/hannah#217) runs additively next to
+		// the version_interceptor.go pair above, not as a replacement — a
+		// breaking change scoped to one message no longer has to reject
+		// every client, only calls that actually use the affected message.
+		grpc.WithChainUnaryInterceptor(versionUnaryInterceptor, pb.CompatVersionUnaryClientInterceptor),
+		grpc.WithChainStreamInterceptor(versionStreamInterceptor, pb.CompatVersionStreamClientInterceptor),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("grpc dial %q: %w", address, err)

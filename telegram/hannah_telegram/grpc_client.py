@@ -13,6 +13,10 @@ from hannah_telegram.grpc_interceptors import (
     read_proto_version,
 )
 from hannah_proto import hannah_pb2, hannah_pb2_grpc
+from hannah_proto.interceptor.compat_interceptor import (
+    CompatVersionClientInterceptor,
+    client_compat_version_metadata,
+)
 
 log = logging.getLogger(__name__)
 
@@ -26,9 +30,17 @@ class HannahClient:
         self._stub: Optional[hannah_pb2_grpc.HannahServiceStub] = None
 
     async def connect(self) -> None:
+        # compat_version (hannah-proto#10/hannah#217) runs additively next
+        # to ProtocolVersionClientInterceptor, not as a replacement — a
+        # breaking change scoped to one message no longer has to reject
+        # every client, only calls that actually use the affected message.
+        service = hannah_pb2.DESCRIPTOR.services_by_name["HannahService"]
         self._channel = grpc.aio.insecure_channel(
             self._address,
-            interceptors=[ProtocolVersionClientInterceptor(read_proto_version())],
+            interceptors=[
+                ProtocolVersionClientInterceptor(read_proto_version()),
+                CompatVersionClientInterceptor(service),
+            ],
         )
         self._stub = hannah_pb2_grpc.HannahServiceStub(self._channel)
         log.info("gRPC channel to Hannah at %s created", self._address)
@@ -274,9 +286,15 @@ class HannahClient:
                 # grpc.aio's UnaryStreamClientInterceptor doesn't reliably apply metadata
                 # mutations for streaming calls (unlike unary-unary) — pass x-proto-version
                 # explicitly here instead of relying on ProtocolVersionClientInterceptor.
+                # Same reasoning applies to x-compat-version/CompatVersionClientInterceptor.
                 stream = self._stub.SubscribeEvents(
                     hannah_pb2.EventFilter(event_types=event_types),
-                    metadata=((PROTO_VERSION_METADATA_KEY, read_proto_version()),),
+                    metadata=(
+                        (PROTO_VERSION_METADATA_KEY, read_proto_version()),
+                        client_compat_version_metadata(
+                            hannah_pb2.DESCRIPTOR.services_by_name["HannahService"], "SubscribeEvents"
+                        ),
+                    ),
                 )
                 if on_connected:
                     try:

@@ -5,6 +5,16 @@
 -->
 
 
+## 0.69.4 (2026-08-09)
+### Hannah Core
+* Added: per-message `compat_version` check (`CompatVersionInterceptor`) alongside the existing global `enforce_protocol_version` check — a breaking change scoped to one message's schema no longer has to reject every client, only calls that actually use the affected message. Additive, not a replacement: both interceptors run, each with their own `enforce` toggle (`enforce_compat_version`, default `false`, same safe-rollout pattern as `enforce_protocol_version`). Needs `hannah-proto>=3.1.0` (`hannah_proto.interceptor`) (Refs #217)
+
+### Hannah Proxy
+* Changed: `hannah-proto-go` bumped to `v3.1.0` (module path now `.../v3`) — client now also attaches `x-compat-version` alongside the existing `x-proto-version`, same additive reasoning as the Core-side change above (Refs #217)
+
+### Telegram
+* Changed: `hannah-proto` bumped to `>=3.2.0` — client now also attaches `x-compat-version` via `CompatVersionClientInterceptor`, alongside the existing `x-proto-version`, same additive reasoning as the Core-side change above (Refs #217)
+
 ## 0.69.3 (2026-08-06)
 ### Hannah Core
 * Fixed: DND-Änderungen wurden nie an den Adapter zurückgemeldet — `_on_dnd`, `_on_agent_satellite_control`s `dnd`-Zweig und `_apply_global_dnd` pushen jetzt `agent_satellite_update(..., dnd=...)`, analog zum bestehenden `mute`-Muster. Betroffener ioBroker-State blieb dadurch dauerhaft `ack:false` — keine Bestätigung, ob eine DND-Aktion tatsächlich griff. Zusätzlich: `_on_agent_satellite_control`s Log-Zeile zeigte immer `room=`, auch wenn tatsächlich per `device_id` aufgelöst wurde. Benötigt `hannah-proto>=2.1.0` (`AgentSatelliteUpdate.dnd`) (Refs #213)

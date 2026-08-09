@@ -9,7 +9,8 @@ from hannah_telegram.grpc_interceptors import PROTO_VERSION_METADATA_KEY, read_p
 async def test_subscribe_events_sends_proto_version_metadata_explicitly():
     """Regression: grpc.aio's UnaryStreamClientInterceptor doesn't reliably apply
     metadata mutations for streaming calls (unlike unary-unary) — SubscribeEvents
-    needs x-proto-version passed explicitly instead of relying on the interceptor."""
+    needs x-proto-version and x-compat-version passed explicitly instead of
+    relying on the interceptors (#60, #217)."""
     client = HannahClient("localhost", 50051)
     client._stub = MagicMock()
     client._stub.SubscribeEvents.side_effect = RuntimeError("stop after first call")
@@ -19,4 +20,5 @@ async def test_subscribe_events_sends_proto_version_metadata_explicitly():
 
     client._stub.SubscribeEvents.assert_called_once()
     _, kwargs = client._stub.SubscribeEvents.call_args
-    assert kwargs["metadata"] == ((PROTO_VERSION_METADATA_KEY, read_proto_version()),)
+    assert kwargs["metadata"][0] == (PROTO_VERSION_METADATA_KEY, read_proto_version())
+    assert kwargs["metadata"][1][0] == "x-compat-version"

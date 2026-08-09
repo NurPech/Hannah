@@ -9,8 +9,9 @@ protobuf>=7.35.0
 # pattern (#60); pins the runtime proto/gRPC-version coupling that used to be
 # handled by matching grpcio-tools' version locally. >=2.0.0 for the PROTO_VERSION
 # 5 bump (Group.satellites/SetGroupSatellites, #56) — Core enforces an exact
-# x-proto-version match, so this MUST move in lockstep with core/requirements.txt
-hannah-proto>=2.0.1
+# x-proto-version match, so this MUST move in lockstep with core/requirements.txt.
+# >=3.2.0 for hannah_proto.interceptor.compat_interceptor.CompatVersionClientInterceptor (#217)
+hannah-proto>=3.2.0
 
 # Config
 pyyaml>=6.0
