@@ -606,9 +606,17 @@ def main():
         _source = source or speaker_user_id or "anon"
 
         def _logged(answer: str, intent_name: str, intent=None) -> tuple[str, str]:
+            # activity_log.user_id ist INTEGER — speaker_user_id kommt vom VoiceID-Pfad
+            # aber ungeprüft durch (VoiceID kennt nur ein beim Enrollment frei gewähltes
+            # String-Label, siehe #220-Folgefehler); Fallback auf Username-Lookup löst
+            # z.B. ein versehentlich mit Klarnamen statt User-ID enrolltes Profil auf.
+            resolved_user = speaker_user_id and (
+                _user_manager.get_user_by_id(speaker_user_id)
+                or _user_manager.get_user_by_username(speaker_user_id)
+            )
             activity_log.log_activity(
                 channel_type=channel_type or "grpc_text", channel_id=channel_id,
-                user_id=speaker_user_id, raw_text=text, intent=intent,
+                user_id=str(resolved_user.id) if resolved_user else "", raw_text=text, intent=intent,
                 answer_text=answer, audio_array=audio_array, sample_rate=sample_rate,
             )
             return answer, intent_name

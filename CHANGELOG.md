@@ -5,6 +5,10 @@
 -->
 
 
+## 0.70.1 (2026-08-10)
+### Hannah Core
+* Fixed: Activity-Log crashte für Satelliten-/VoiceID-Sprecherkennung mit einem nicht-numerischen Label (z.B. Klarname statt `users.id`) — `speaker_user_id` wird jetzt vor dem Schreiben über `UserManager` aufgelöst (erst per ID, dann per Username als Fallback), statt ungeprüft in die `INTEGER`-Spalte geschrieben zu werden (Refs #221)
+
 ## 0.70.0 (2026-08-09)
 ### Hannah Core
 * Added: Activity-Log — protokolliert pro verarbeitetem Kommando Kanal (Satellit/Telegram/ioBroker/gRPC), Zeitpunkt, erkannten NLU-Intent samt Metadaten, Antworttext und (bei Voice-Kanälen) eine WAV-Aufnahme. Läuft in einer separaten MySQL-Datenbank (bewusst getrennt von `hannah.db`/SD-Karte), deaktiviert sich selbst ohne konfigurierten Host. Behebt nebenbei, dass `source_service`/`source_user_id` bei `SubmitText`/`SubmitVoice` bisher nach der User-Auflösung verworfen wurden, statt den Kanal erkennbar zu machen. Needs `dialectorm-m1kad0>=0.1.2` (dialekt-agnostische Schema-Erzeugung) (Refs #220)
