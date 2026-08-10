@@ -337,20 +337,16 @@ static esp_err_t adau7118_init(void)
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
 static esp_err_t mic_init(void)
 {
-    /* TDM (ADAU7118, Rev.5+): der Wandler ist selbst die Taktquelle für
-     * BCLK/FSYNC ("BCLK-/FSYNC-Ausgang des ADAU7118", s. Kconfig) — der
-     * ESP32 muss hier SLAVE sein. PDM/I2S (INMP441): ESP32 erzeugt den Takt
-     * selbst, bleibt MASTER. Bisher wurde für TDM fälschlich derselbe
-     * MASTER-Rollenwert wie für PDM/I2S verwendet — der ESP32 erzeugte damit
-     * einen eigenen, mit dem ADAU7118 unkoordinierten Takt parallel zu
-     * dessen eigenem, statt ihn zu empfangen (Refs #222). */
-#if CONFIG_HANNAH_MIC_TYPE_TDM
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
-        CONFIG_HANNAH_MIC_I2S_PORT, I2S_ROLE_SLAVE);
-#else
+    /* Experiment zurückgenommen (Refs #222, 2026-08-10): I2S_ROLE_SLAVE für
+     * TDM (Annahme: ADAU7118 ist BCLK/FSYNC-Taktquelle) hat es auf echter
+     * Hardware nachweislich schlimmer gemacht statt besser — Mic-Warmup
+     * brauchte ~108s statt ~9s (wiederholt blockierende/fehlschlagende I2S-
+     * Reads), Wakeword-Debug zeigte danach durchgehend rms=0.0000/peak=0.0000
+     * (echte Null, kein Signal mehr, nicht mal der vorherige Störwert).
+     * Zurück auf MASTER für alle Mic-Typen, bis die eigentliche Taktrichtung
+     * zweifelsfrei geklärt ist. */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         CONFIG_HANNAH_MIC_I2S_PORT, I2S_ROLE_MASTER);
-#endif
     chan_cfg.dma_desc_num  = 8;
     chan_cfg.dma_frame_num = STEP_SAMPLES * 4;
 

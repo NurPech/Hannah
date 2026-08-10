@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.5 (2026-08-10)
+### Satellite Firmware
+* Changed: reverted the `I2S_ROLE_SLAVE` experiment for TDM from v0.71.4 — on real hardware it made things measurably worse, not better: mic warmup took ~108s instead of the usual ~9s (repeated blocking/failing I2S reads), and the wakeword debug log showed a genuine `rms=0.0000 peak=0.0000` (true zero signal, not even the previous noise-floor-like garbage). Back to `I2S_ROLE_MASTER` for all mic types until the actual clock direction is confirmed. Root cause of the silent/near-silent Rev5 TDM captures still open (Refs #222)
+
 ## 0.71.4 (2026-08-10)
 ### Satellite Firmware
 * Fixed: `mic_init()` created the I2S channel with `I2S_ROLE_MASTER` for every mic type, including TDM (Rev5/ADAU7118) — but on that path the ADAU7118 itself is the clock source for BCLK/FSYNC, not the ESP32, so the channel needs `I2S_ROLE_SLAVE` there. With the wrong role, the ESP32 was generating its own uncoordinated clock alongside the ADAU7118's, instead of receiving its clock — a plausible root cause for the persistent near-silent Rev5 captures that survived every ADAU7118 register fix so far (#222). PDM/I2S (INMP441) mic types are unaffected, still `I2S_ROLE_MASTER` (Refs #222)
