@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.3 (2026-08-10)
+### Satellite Firmware
+* Fixed: ADAU7118 `DEC_RATIO_CLK_MAP` register was left at its reset default, which maps `PDM_DAT1` to `PDM_CLK0` — but on Rev5, `PDM_DAT1` (MK2+MK4) is actually driven by `PDM_CLK1`. Per the datasheet, this mapping "must be the actual PDM clock that is driving the PDM microphone", so channels 2/3 were being demodulated against the wrong clock reference, plausibly explaining the near-silent captures despite an otherwise correctly configured chip (#222). `adau7118_init()` now explicitly maps DAT1 to CLK1 (Refs #222)
+
 ## 0.71.2 (2026-08-10)
 ### Satellite Firmware
 * Changed: `sdkconfig.defaults.rev5` now enables `CONFIG_HANNAH_WAKEWORD_DEBUG=y` — needed to pull real WAV snapshots (`/debug/wav(/capture)`, 4s raw PCM ring buffer) while investigating why Rev5 TDM captures are still silent despite the ADAU7118 register fix (#222, v0.71.0/v0.71.1). Rev5-only, Rev4 default is unchanged. Removed the one-off raw-frame log dump added in v0.71.1 — the debug ring buffer supersedes it; the ADAU7118 register readback log stays (Refs #222)

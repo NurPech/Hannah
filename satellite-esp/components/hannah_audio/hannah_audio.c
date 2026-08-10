@@ -213,10 +213,11 @@ static void IRAM_ATTR vol_down_isr_handler(void *arg)
 #define ADAU7118_I2C_ADDR  0x14  /* Datenblatt-Default, ADDR-Pin auf GND */
 
 /* Register-Map (ADAU7118 Rev.A Datenblatt, Table 16) */
-#define ADAU7118_REG_ENABLES   0x04
-#define ADAU7118_REG_SPT_CTRL1 0x07
-#define ADAU7118_REG_SPT_C(n)  (0x09 + (n))  /* n = 0..7 */
-#define ADAU7118_REG_RESETS    0x12
+#define ADAU7118_REG_ENABLES           0x04
+#define ADAU7118_REG_DEC_RATIO_CLK_MAP 0x05
+#define ADAU7118_REG_SPT_CTRL1         0x07
+#define ADAU7118_REG_SPT_C(n)          (0x09 + (n))  /* n = 0..7 */
+#define ADAU7118_REG_RESETS            0x12
 
 #define ADAU7118_RESETS_SOFT_RESET (1 << 0)
 
@@ -225,6 +226,17 @@ static void IRAM_ATTR vol_down_isr_handler(void *arg)
  * (MK1+MK3, Takt PDM_CLK0) und PDM_DAT1 (MK2+MK4, Takt PDM_CLK1) sind
  * bestückt — DAT2/DAT3 unbeschaltet, deren Kanäle bleiben aus. */
 #define ADAU7118_ENABLES_VALUE 0x33  /* CHAN_01+CHAN_23+CLK0+CLK1 an, CHAN_45/67 aus */
+
+/* DEC_RATIO_CLK_MAP (0x05): Bit7=DAT3_CLK_MAP, Bit6=DAT2_CLK_MAP,
+ * Bit5=DAT1_CLK_MAP, Bit4=DAT0_CLK_MAP (0=PDM_CLK0, 1=PDM_CLK1), Bit3:2=
+ * reserviert, Bit1:0=DEC_RATIO. Datenblatt-Fließtext (Refs #222, bestätigt
+ * 2026-08-10): Reset-Default mappt DAT0+DAT1 auf PDM_CLK0, DAT2+DAT3 auf
+ * PDM_CLK1 — "The PDM_CLKx assignment must be the actual PDM clock that is
+ * driving the PDM microphone." Bei uns hängt DAT1 (MK2+MK4) aber real an
+ * PDM_CLK1, nicht CLK0 — ein bisher unentdeckter Mismatch, plausibler
+ * Root-Cause für die beobachtete (praktisch) Stille auf Kanal 2/3.
+ * DEC_RATIO unverändert (0, passt zur aktuellen 16kHz-Ausgabe). */
+#define ADAU7118_DEC_RATIO_CLK_MAP_VALUE 0xE0  /* DAT1_CLK_MAP=1 (CLK1) korrigiert, Rest unverändert */
 
 /* SPT_CTRL1 (0x07): Bit6=TRI_STATE, Bit5:4=SLOT_WIDTH, Bit3:1=DATA_FORMAT,
  * Bit0=SAI_MODE. Reset-Default 0x41 hat SAI_MODE bereits auf TDM (Bit0=1) —
@@ -286,6 +298,7 @@ static esp_err_t adau7118_init(void)
 
     err  = adau7118_write(dev, ADAU7118_REG_SPT_CTRL1, ADAU7118_SPT_CTRL1_VALUE);
     err |= adau7118_write(dev, ADAU7118_REG_ENABLES, ADAU7118_ENABLES_VALUE);
+    err |= adau7118_write(dev, ADAU7118_REG_DEC_RATIO_CLK_MAP, ADAU7118_DEC_RATIO_CLK_MAP_VALUE);
     /* SPT_C0..SPT_C3 (MK1/MK3/MK4/MK2) bleiben auf Reset-Default (Slot = Kanalindex,
      * Drive an). SPT_C4..SPT_C7 (unbestückte Kanäle) werden vom Bus genommen —
      * SLOT-Feld unverändert, nur das DRV-Bit gelöscht. */
@@ -303,15 +316,16 @@ static esp_err_t adau7118_init(void)
     /* Diagnose #222: bestätigt per Rücklesen, dass der Chip die Werte wirklich
      * übernommen hat (statt nur ACK auf den Schreibzugriff) — Verdacht auf
      * "kommt gar keine Audiodaten an" trotz sauberem Init. Temporär, bis geklärt. */
-    uint8_t rb_enables = 0, rb_ctrl1 = 0, rb_c0 = 0, rb_c1 = 0, rb_c2 = 0, rb_c3 = 0;
+    uint8_t rb_enables = 0, rb_clkmap = 0, rb_ctrl1 = 0, rb_c0 = 0, rb_c1 = 0, rb_c2 = 0, rb_c3 = 0;
     adau7118_read(dev, ADAU7118_REG_ENABLES, &rb_enables);
+    adau7118_read(dev, ADAU7118_REG_DEC_RATIO_CLK_MAP, &rb_clkmap);
     adau7118_read(dev, ADAU7118_REG_SPT_CTRL1, &rb_ctrl1);
     adau7118_read(dev, ADAU7118_REG_SPT_C(0), &rb_c0);
     adau7118_read(dev, ADAU7118_REG_SPT_C(1), &rb_c1);
     adau7118_read(dev, ADAU7118_REG_SPT_C(2), &rb_c2);
     adau7118_read(dev, ADAU7118_REG_SPT_C(3), &rb_c3);
-    ESP_LOGI(TAG, "ADAU7118: Rueckgelesen ENABLES=0x%02X SPT_CTRL1=0x%02X SPT_C0=0x%02X SPT_C1=0x%02X SPT_C2=0x%02X SPT_C3=0x%02X",
-             rb_enables, rb_ctrl1, rb_c0, rb_c1, rb_c2, rb_c3);
+    ESP_LOGI(TAG, "ADAU7118: Rueckgelesen ENABLES=0x%02X DEC_RATIO_CLK_MAP=0x%02X SPT_CTRL1=0x%02X SPT_C0=0x%02X SPT_C1=0x%02X SPT_C2=0x%02X SPT_C3=0x%02X",
+             rb_enables, rb_clkmap, rb_ctrl1, rb_c0, rb_c1, rb_c2, rb_c3);
 
     return ESP_OK;
 }
