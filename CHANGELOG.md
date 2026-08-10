@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.1 (2026-08-10)
+### Satellite Firmware
+* Added: temporary diagnostic logging in `hannah_audio.c` (Rev.5/TDM) — reads back the ADAU7118 registers right after writing them and dumps the first raw TDM frame (all 4 channels) once. Reason: despite successful register configuration (#222, v0.71.0), captures are still pure silence — root cause still open (Refs #222)
+
 ## 0.71.0 (2026-08-10)
 ### Satellite Firmware
 * Fixed: ADAU7118 (PDM→TDM-Wandler, Rev.5) wurde bisher gar nicht per I2C konfiguriert, sondern lief nur auf seinem Power-on-Default — dabei stand die serielle Slot-Breite auf 32-bit, während der ESP32-seitige I2S-TDM-Kanal auf 16-bit-Slots konfiguriert ist. `adau7118_init()` setzt jetzt per Register-Schreibzugriff TDM-Modus mit 16-bit-Slots, aktiviert nur die tatsächlich bestückten Kanäle 0-3 (MK1-MK4) und nimmt die unbestückten Kanäle 4-7 vom Bus (Refs #222)

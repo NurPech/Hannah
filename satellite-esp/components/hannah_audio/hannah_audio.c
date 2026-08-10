@@ -252,6 +252,11 @@ static esp_err_t adau7118_write(i2c_master_dev_handle_t dev, uint8_t reg, uint8_
     return i2c_master_transmit(dev, buf, sizeof(buf), 100 /* ms */);
 }
 
+static esp_err_t adau7118_read(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *val)
+{
+    return i2c_master_transmit_receive(dev, &reg, 1, val, 1, 100 /* ms */);
+}
+
 static esp_err_t adau7118_init(void)
 {
     i2c_master_bus_handle_t bus = hannah_sensors_get_i2c_bus();
@@ -294,6 +299,20 @@ static esp_err_t adau7118_init(void)
     }
 
     ESP_LOGI(TAG, "ADAU7118: TDM-Modus konfiguriert (16-bit Slots, Kanäle 0-3 aktiv, Refs #222)");
+
+    /* Diagnose #222: bestätigt per Rücklesen, dass der Chip die Werte wirklich
+     * übernommen hat (statt nur ACK auf den Schreibzugriff) — Verdacht auf
+     * "kommt gar keine Audiodaten an" trotz sauberem Init. Temporär, bis geklärt. */
+    uint8_t rb_enables = 0, rb_ctrl1 = 0, rb_c0 = 0, rb_c1 = 0, rb_c2 = 0, rb_c3 = 0;
+    adau7118_read(dev, ADAU7118_REG_ENABLES, &rb_enables);
+    adau7118_read(dev, ADAU7118_REG_SPT_CTRL1, &rb_ctrl1);
+    adau7118_read(dev, ADAU7118_REG_SPT_C(0), &rb_c0);
+    adau7118_read(dev, ADAU7118_REG_SPT_C(1), &rb_c1);
+    adau7118_read(dev, ADAU7118_REG_SPT_C(2), &rb_c2);
+    adau7118_read(dev, ADAU7118_REG_SPT_C(3), &rb_c3);
+    ESP_LOGI(TAG, "ADAU7118: Rueckgelesen ENABLES=0x%02X SPT_CTRL1=0x%02X SPT_C0=0x%02X SPT_C1=0x%02X SPT_C2=0x%02X SPT_C3=0x%02X",
+             rb_enables, rb_ctrl1, rb_c0, rb_c1, rb_c2, rb_c3);
+
     return ESP_OK;
 }
 #endif /* CONFIG_HANNAH_MIC_TYPE_TDM */
@@ -625,6 +644,16 @@ static void mic_task(void *arg)
          * fixer Einzel-Kanal-Downmix — s. Issue #222. */
         size_t frames    = bytes_read / 8;
         int16_t *s16     = (int16_t *)raw;
+
+        /* Diagnose #222: einmaliger Roh-Dump der ersten TDM-Frame (alle 4 Kanäle),
+         * um zu sehen ob überhaupt Nicht-Null-Daten auf dem Bus ankommen. Temporär. */
+        static bool s_tdm_raw_dumped = false;
+        if (!s_tdm_raw_dumped && frames > 0) {
+            s_tdm_raw_dumped = true;
+            ESP_LOGI(TAG, "TDM Roh-Dump Frame0: ch0=%d ch1=%d ch2=%d ch3=%d (bytes_read=%u)",
+                     s16[0], s16[1], s16[2], s16[3], (unsigned)bytes_read);
+        }
+
         for (size_t i = 0; i < frames; i++) {
             mono[i] = s16[i * 4];
         }
