@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.4 (2026-08-10)
+### Satellite Firmware
+* Fixed: `mic_init()` created the I2S channel with `I2S_ROLE_MASTER` for every mic type, including TDM (Rev5/ADAU7118) — but on that path the ADAU7118 itself is the clock source for BCLK/FSYNC, not the ESP32, so the channel needs `I2S_ROLE_SLAVE` there. With the wrong role, the ESP32 was generating its own uncoordinated clock alongside the ADAU7118's, instead of receiving its clock — a plausible root cause for the persistent near-silent Rev5 captures that survived every ADAU7118 register fix so far (#222). PDM/I2S (INMP441) mic types are unaffected, still `I2S_ROLE_MASTER` (Refs #222)
+
 ## 0.71.3 (2026-08-10)
 ### Satellite Firmware
 * Fixed: ADAU7118 `DEC_RATIO_CLK_MAP` register was left at its reset default, which maps `PDM_DAT1` to `PDM_CLK0` — but on Rev5, `PDM_DAT1` (MK2+MK4) is actually driven by `PDM_CLK1`. Per the datasheet, this mapping "must be the actual PDM clock that is driving the PDM microphone", so channels 2/3 were being demodulated against the wrong clock reference, plausibly explaining the near-silent captures despite an otherwise correctly configured chip (#222). `adau7118_init()` now explicitly maps DAT1 to CLK1 (Refs #222)
