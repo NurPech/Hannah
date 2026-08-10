@@ -45,3 +45,7 @@ CONFIG_HANNAH_SD_CS_GPIO=4
 CONFIG_HANNAH_SD_MOSI_GPIO=5
 CONFIG_HANNAH_SD_CLK_GPIO=6
 CONFIG_HANNAH_SD_MISO_GPIO=7
+
+# Wakeword-Debug (Refs #222) — /debug/wav(/capture) für die laufende
+# Stille-Untersuchung der TDM-Mics
+CONFIG_HANNAH_WAKEWORD_DEBUG=y

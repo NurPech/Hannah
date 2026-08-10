@@ -644,16 +644,6 @@ static void mic_task(void *arg)
          * fixer Einzel-Kanal-Downmix — s. Issue #222. */
         size_t frames    = bytes_read / 8;
         int16_t *s16     = (int16_t *)raw;
-
-        /* Diagnose #222: einmaliger Roh-Dump der ersten TDM-Frame (alle 4 Kanäle),
-         * um zu sehen ob überhaupt Nicht-Null-Daten auf dem Bus ankommen. Temporär. */
-        static bool s_tdm_raw_dumped = false;
-        if (!s_tdm_raw_dumped && frames > 0) {
-            s_tdm_raw_dumped = true;
-            ESP_LOGI(TAG, "TDM Roh-Dump Frame0: ch0=%d ch1=%d ch2=%d ch3=%d (bytes_read=%u)",
-                     s16[0], s16[1], s16[2], s16[3], (unsigned)bytes_read);
-        }
-
         for (size_t i = 0; i < frames; i++) {
             mono[i] = s16[i * 4];
         }

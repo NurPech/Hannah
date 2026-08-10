@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.2 (2026-08-10)
+### Satellite Firmware
+* Changed: `sdkconfig.defaults.rev5` now enables `CONFIG_HANNAH_WAKEWORD_DEBUG=y` — needed to pull real WAV snapshots (`/debug/wav(/capture)`, 4s raw PCM ring buffer) while investigating why Rev5 TDM captures are still silent despite the ADAU7118 register fix (#222, v0.71.0/v0.71.1). Rev5-only, Rev4 default is unchanged. Removed the one-off raw-frame log dump added in v0.71.1 — the debug ring buffer supersedes it; the ADAU7118 register readback log stays (Refs #222)
+
 ## 0.71.1 (2026-08-10)
 ### Satellite Firmware
 * Added: temporary diagnostic logging in `hannah_audio.c` (Rev.5/TDM) — reads back the ADAU7118 registers right after writing them and dumps the first raw TDM frame (all 4 channels) once. Reason: despite successful register configuration (#222, v0.71.0), captures are still pure silence — root cause still open (Refs #222)
