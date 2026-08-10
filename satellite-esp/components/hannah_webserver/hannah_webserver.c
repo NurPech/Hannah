@@ -369,6 +369,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         "<input type=range name=ww_threshold min=0 max=100 value=%d "
           "oninput=\"document.getElementById('tv').textContent=this.value+'%%'\"></label>"
         "<label>VAD-Stille (ms)<input type=number name=vad_ms min=200 max=10000 step=100 value=%u></label>"
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+        "<label>TDM-Mic-Verstärkung (Refs #222)<input type=number name=tdm_gain min=1 max=200 value=%u></label>"
+#endif
         "<h3>Firmware</h3>"
         "<label>Update-Server URL<input name=ota_url value='%s'></label>"
         "<label>Update-Channel<input name=ota_channel value='%s' placeholder='(leer = stable)'></label>"
@@ -425,6 +428,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         cfg->mqtt_broker, cfg->mqtt_port, cfg->mqtt_user,
         cfg->wakeword_threshold, cfg->wakeword_threshold,
         cfg->vad_silence_ms,
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+        cfg->tdm_downmix_gain,
+#endif
         cfg->ota_url,
         cfg->ota_channel,
         cfg->asset_url,
@@ -501,6 +507,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (form_get(body, "vad_ms", vad_str, sizeof(vad_str))) {
         int v = atoi(vad_str);
         if (v >= 200 && v <= 10000) new_cfg.vad_silence_ms = (uint16_t)v;
+    }
+
+    char tdm_gain_str[8] = {0};
+    if (form_get(body, "tdm_gain", tdm_gain_str, sizeof(tdm_gain_str))) {
+        int g = atoi(tdm_gain_str);
+        if (g >= 1 && g <= 200) new_cfg.tdm_downmix_gain = (uint8_t)g;
     }
 
     char thr_str[8] = {0};

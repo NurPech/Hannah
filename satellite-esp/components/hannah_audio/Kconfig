@@ -36,6 +36,17 @@ menu "Hannah Audio"
             bool "Kein Mikrofon"
     endchoice
 
+    config HANNAH_TDM_DOWNMIX_GAIN
+        int "TDM-Downmix-Verstärkung (Faktor)"
+        default 32
+        range 1 200
+        depends on HANNAH_MIC_TYPE_TDM
+        help
+            Digitale Verstärkung des ADAU7118-TDM-Rohsignals (kein eigenes
+            Gain-Register auf dem Chip, s. Issue #222). Startwert, noch
+            nicht final gegen reale Nutzungsentfernung abgestimmt.
+            Runtime-Override per NVS/WebUI möglich, ohne Reflash.
+
     config HANNAH_SPEAKER_ENABLED
         bool "Speaker aktivieren (MAX98357A / I2S-Verstärker)"
         default y

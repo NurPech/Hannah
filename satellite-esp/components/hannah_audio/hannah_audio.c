@@ -64,8 +64,8 @@ static const char *TAG = "hannah_audio";
  * Signal, aber mit sehr geringer Amplitude (RMS ~33 bei lautem Sprechen aus
  * 15cm Entfernung, Vollausschlag wäre 32767) — braucht digitale Verstärkung,
  * analog zum bestehenden PDM-Pfad (dort bereits ×64 mit Clipping-Schutz).
- * Startwert, noch nicht final abgestimmt — ggf. nach Praxistest anpassen. */
-#define TDM_DOWNMIX_GAIN 32
+ * Kconfig-Default via hannah_config_get()->tdm_downmix_gain, per NVS/WebUI
+ * ohne Reflash überschreibbar. */
 
 /* VAD_SILENCE_FRAMES wird zur Laufzeit aus hannah_config_get()->vad_silence_ms berechnet */
 
@@ -699,12 +699,12 @@ static void mic_task(void *arg)
         /* TDM: 4× 16-bit Slots (ADAU7118) → Slot 0 = Kanal 0 = MK1 (Ost,
          * s. Geometrie-Kommentar bei adau7118_init()). Noch kein Beamforming,
          * fixer Einzel-Kanal-Downmix — s. Issue #222. Digitale Verstärkung
-         * (TDM_DOWNMIX_GAIN) mit Clipping-Schutz, s. Kommentar bei der
-         * Definition oben. */
+         * mit Clipping-Schutz, s. Kommentar bei hannah_config_t.tdm_downmix_gain. */
         size_t frames    = bytes_read / 8;
         int16_t *s16     = (int16_t *)raw;
+        int32_t tdm_gain = hannah_config_get()->tdm_downmix_gain;
         for (size_t i = 0; i < frames; i++) {
-            int32_t amplified = (int32_t)s16[i * 4] * TDM_DOWNMIX_GAIN;
+            int32_t amplified = (int32_t)s16[i * 4] * tdm_gain;
             mono[i] = (int16_t)(amplified > 32767 ? 32767 : amplified < -32768 ? -32768 : amplified);
         }
 #else

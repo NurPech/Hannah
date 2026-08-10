@@ -56,6 +56,11 @@ void hannah_config_init(void)
         s_cfg.wakeword_threshold = 75;
 #endif
         s_cfg.vad_silence_ms = CONFIG_HANNAH_VAD_SILENCE_MS;
+#ifdef CONFIG_HANNAH_TDM_DOWNMIX_GAIN
+        s_cfg.tdm_downmix_gain = CONFIG_HANNAH_TDM_DOWNMIX_GAIN;
+#else
+        s_cfg.tdm_downmix_gain = 32;
+#endif
         s_cfg.syslog_host[0] = '\0';
         s_cfg.syslog_port    = 514;
         return;
@@ -82,6 +87,14 @@ void hannah_config_init(void)
     uint16_t vad_ms = CONFIG_HANNAH_VAD_SILENCE_MS;
     nvs_get_u16(h, "vad_ms", &vad_ms);
     s_cfg.vad_silence_ms = vad_ms;
+
+#ifdef CONFIG_HANNAH_TDM_DOWNMIX_GAIN
+    uint8_t tdm_gain = CONFIG_HANNAH_TDM_DOWNMIX_GAIN;
+#else
+    uint8_t tdm_gain = 32;
+#endif
+    nvs_get_u8(h, "tdm_gain", &tdm_gain);
+    s_cfg.tdm_downmix_gain = tdm_gain;
 
     NVS_STR(h, "ota_url",     ota_url,     CONFIG_HANNAH_OTA_URL);
     NVS_STR(h, "ota_channel", ota_channel, CONFIG_HANNAH_OTA_CHANNEL);
@@ -156,6 +169,7 @@ void hannah_config_save(const hannah_config_t *cfg)
     nvs_set_str(h, "mqtt_pass",   cfg->mqtt_pass);
     nvs_set_u8 (h, "ww_threshold", cfg->wakeword_threshold);
     nvs_set_u16(h, "vad_ms",       cfg->vad_silence_ms);
+    nvs_set_u8 (h, "tdm_gain",     cfg->tdm_downmix_gain);
     nvs_set_str(h, "ota_url",      cfg->ota_url);
     nvs_set_str(h, "ota_channel",  cfg->ota_channel);
     nvs_set_str(h, "ota_token",    cfg->ota_token);

@@ -4,6 +4,9 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.71.9 (2026-08-10)
+### Satellite Firmware
+* Changed: `tdm_downmix_gain` moved from a compile-time `#define` into `hannah_config_t` — NVS-backed with a Kconfig-seeded default (`HANNAH_TDM_DOWNMIX_GAIN`, default 32), same runtime-override pattern as `wakeword_threshold`/`vad_silence_ms`. Adjustable via the satellite WebUI (Rev5/TDM builds only) without a reflash — useful while the value is still being tuned against real-world usage distance (#222) (Refs #222)
 
 ## 0.71.8 (2026-08-10)
 ### Satellite Firmware
