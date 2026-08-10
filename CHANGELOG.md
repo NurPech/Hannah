@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.0 (2026-08-10)
+### Satellite Firmware
+* Fixed: ADAU7118 (PDM→TDM-Wandler, Rev.5) wurde bisher gar nicht per I2C konfiguriert, sondern lief nur auf seinem Power-on-Default — dabei stand die serielle Slot-Breite auf 32-bit, während der ESP32-seitige I2S-TDM-Kanal auf 16-bit-Slots konfiguriert ist. `adau7118_init()` setzt jetzt per Register-Schreibzugriff TDM-Modus mit 16-bit-Slots, aktiviert nur die tatsächlich bestückten Kanäle 0-3 (MK1-MK4) und nimmt die unbestückten Kanäle 4-7 vom Bus (Refs #222)
+
 ## 0.70.1 (2026-08-10)
 ### Hannah Core
 * Fixed: Activity-Log crashte für Satelliten-/VoiceID-Sprecherkennung mit einem nicht-numerischen Label (z.B. Klarname statt `users.id`) — `speaker_user_id` wird jetzt vor dem Schreiben über `UserManager` aufgelöst (erst per ID, dann per Username als Fallback), statt ungeprüft in die `INTEGER`-Spalte geschrieben zu werden (Refs #221)

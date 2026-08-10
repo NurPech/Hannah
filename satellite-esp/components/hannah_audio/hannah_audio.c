@@ -212,6 +212,46 @@ static void IRAM_ATTR vol_down_isr_handler(void *arg)
 
 #define ADAU7118_I2C_ADDR  0x14  /* Datenblatt-Default, ADDR-Pin auf GND */
 
+/* Register-Map (ADAU7118 Rev.A Datenblatt, Table 16) */
+#define ADAU7118_REG_ENABLES   0x04
+#define ADAU7118_REG_SPT_CTRL1 0x07
+#define ADAU7118_REG_SPT_C(n)  (0x09 + (n))  /* n = 0..7 */
+#define ADAU7118_REG_RESETS    0x12
+
+#define ADAU7118_RESETS_SOFT_RESET (1 << 0)
+
+/* ENABLES (0x04): Bit5=PDM_CLK1_EN, Bit4=PDM_CLK0_EN, Bit3=CHAN_67_EN,
+ * Bit2=CHAN_45_EN, Bit1=CHAN_23_EN, Bit0=CHAN_01_EN. Nur PDM_DAT0
+ * (MK1+MK3, Takt PDM_CLK0) und PDM_DAT1 (MK2+MK4, Takt PDM_CLK1) sind
+ * bestückt — DAT2/DAT3 unbeschaltet, deren Kanäle bleiben aus. */
+#define ADAU7118_ENABLES_VALUE 0x33  /* CHAN_01+CHAN_23+CLK0+CLK1 an, CHAN_45/67 aus */
+
+/* SPT_CTRL1 (0x07): Bit6=TRI_STATE, Bit5:4=SLOT_WIDTH, Bit3:1=DATA_FORMAT,
+ * Bit0=SAI_MODE. Reset-Default 0x41 hat SAI_MODE bereits auf TDM (Bit0=1) —
+ * das war der Grund, warum der bisherige No-Op überhaupt Audio lieferte.
+ * SLOT_WIDTH steht im Reset aber auf 32-bit (Bit5:4=00); mic_init() unten
+ * konfiguriert den ESP32-seitigen I2S-TDM-RX-Kanal auf 16-bit-Slots — das
+ * ist ein echter Mismatch. 0x51 = TRI_STATE(1, unverändert) |
+ * SLOT_WIDTH=16bit(01) | DATA_FORMAT=0 (unverändert) | SAI_MODE(1, unverändert). */
+#define ADAU7118_SPT_CTRL1_VALUE 0x51
+
+/* Physische Mikrofon-Geometrie (Rev.5-Board, Mittelpunkt 58.5/57.5mm,
+ * Radius 32mm, Kreuz-Anordnung). Kanalzuordnung folgt der SEL-Pin-
+ * Beschaltung: SEL=GND -> gerader Kanal (0/2), SEL=VDD -> ungerader (1/3).
+ *   Kanal 0 (DAT0, SEL=GND) = MK1, Ost  (+32,   0)
+ *   Kanal 1 (DAT0, SEL=VDD) = MK3, Süd  (  0, -32)
+ *   Kanal 2 (DAT1, SEL=GND) = MK4, Nord (  0, +32)
+ *   Kanal 3 (DAT1, SEL=VDD) = MK2, West (-32,   0)
+ * Jeder Kanal landet per Default-Register-Mapping (SPT_Cx_SLOT = Kanalindex)
+ * bereits im gleichnamigen TDM-Slot — keine Slot-Umsortierung nötig. Für
+ * das Beamforming aus #222 relevant, hier nur dokumentiert, noch nicht genutzt. */
+
+static esp_err_t adau7118_write(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val)
+{
+    uint8_t buf[2] = { reg, val };
+    return i2c_master_transmit(dev, buf, sizeof(buf), 100 /* ms */);
+}
+
 static esp_err_t adau7118_init(void)
 {
     i2c_master_bus_handle_t bus = hannah_sensors_get_i2c_bus();
@@ -232,15 +272,28 @@ static esp_err_t adau7118_init(void)
         return err;
     }
 
-    /* TODO(#160): Register-Sequenz fehlt — ADAU7118-Datenblatt noch nicht
-     * vorliegend. Nötig u.a.: TDM-Modus aktivieren, 4 PDM-Eingänge auf die
-     * 4 TDM-Slots mappen, ggf. Hochpassfilter/Gain konfigurieren. Ohne
-     * diese Konfiguration liefert der Chip vermutlich seinen Power-on-
-     * Default (oft bereits ein sinnvoller TDM-Modus, aber nicht verifiziert) —
-     * bewusst als No-Op belassen statt Register zu raten. */
-    (void)dev;
+    err = adau7118_write(dev, ADAU7118_REG_RESETS, ADAU7118_RESETS_SOFT_RESET);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ADAU7118: Soft-Reset fehlgeschlagen (%s) — Chip antwortet nicht auf I2C?", esp_err_to_name(err));
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));  /* Datenblatt nennt keine Reset-Wartezeit, kurze Sicherheitsmarge */
 
-    ESP_LOGW(TAG, "ADAU7118: I2C-Device angelegt, Register-Init ist Platzhalter (Refs #160)");
+    err  = adau7118_write(dev, ADAU7118_REG_SPT_CTRL1, ADAU7118_SPT_CTRL1_VALUE);
+    err |= adau7118_write(dev, ADAU7118_REG_ENABLES, ADAU7118_ENABLES_VALUE);
+    /* SPT_C0..SPT_C3 (MK1/MK3/MK4/MK2) bleiben auf Reset-Default (Slot = Kanalindex,
+     * Drive an). SPT_C4..SPT_C7 (unbestückte Kanäle) werden vom Bus genommen —
+     * SLOT-Feld unverändert, nur das DRV-Bit gelöscht. */
+    err |= adau7118_write(dev, ADAU7118_REG_SPT_C(4), 0x40);
+    err |= adau7118_write(dev, ADAU7118_REG_SPT_C(5), 0x50);
+    err |= adau7118_write(dev, ADAU7118_REG_SPT_C(6), 0x60);
+    err |= adau7118_write(dev, ADAU7118_REG_SPT_C(7), 0x70);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ADAU7118: Register-Init unvollständig (%s)", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "ADAU7118: TDM-Modus konfiguriert (16-bit Slots, Kanäle 0-3 aktiv, Refs #222)");
     return ESP_OK;
 }
 #endif /* CONFIG_HANNAH_MIC_TYPE_TDM */
@@ -567,8 +620,9 @@ static void mic_task(void *arg)
             mono[i] = (int16_t)((int32_t)s16[i * 2] * 64 > 32767 ? 32767 : (int32_t)s16[i * 2] * 64 < -32768 ? -32768 : (int32_t)s16[i * 2] * 64);
         }
 #elif CONFIG_HANNAH_MIC_TYPE_TDM
-        /* TDM: 4× 16-bit Slots (ADAU7118) → Slot 0 (ein fester Kanal von 4,
-         * kein Beamforming — s. mic_init()-Kommentar / Issue #160) */
+        /* TDM: 4× 16-bit Slots (ADAU7118) → Slot 0 = Kanal 0 = MK1 (Ost,
+         * s. Geometrie-Kommentar bei adau7118_init()). Noch kein Beamforming,
+         * fixer Einzel-Kanal-Downmix — s. Issue #222. */
         size_t frames    = bytes_read / 8;
         int16_t *s16     = (int16_t *)raw;
         for (size_t i = 0; i < frames; i++) {
