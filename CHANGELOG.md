@@ -4,6 +4,14 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.72.0 (2026-08-10)
+### Satellite Firmware
+
+* Changed: `tdm_downmix_gain` default raised from 32 to 128 — tuned against real-world usage distance via the WebUI-adjustable value introduced in v0.71.9, no clipping observed at close/loud speech, clean signal on the wakeword debug waveform (Refs #222)
+* Added: Delay-and-sum beamforming for the Rev5 TDM mic array, replacing the fixed single-channel downmix — raw capture rate raised to 48kHz (ESP32 I2S-TDM clock only, no ADAU7118 register change needed) for finer delay resolution, all 4 channels time-aligned and summed, then downsampled back to 16kHz via AudioLib's new streaming `hannah_resample_ctx()` before the existing gain stage. Preferred listening direction is configurable via NVS/WebUI (`tdm_beam_direction_deg`, 0–315° in 45° steps, default 180° = opposite the power side) without a reflash (Refs #222)
+* Fixed: geometry comment in `hannah_audio.c` had the TDM array's North/South channels swapped (verified against the real Rev5 board, 2026-08-11) — corrected before wiring up the beamforming direction table (Refs #222)
+
 ## 0.71.9 (2026-08-10)
 ### Satellite Firmware
 * Changed: `tdm_downmix_gain` moved from a compile-time `#define` into `hannah_config_t` — NVS-backed with a Kconfig-seeded default (`HANNAH_TDM_DOWNMIX_GAIN`, default 32), same runtime-override pattern as `wakeword_threshold`/`vad_silence_ms`. Adjustable via the satellite WebUI (Rev5/TDM builds only) without a reflash — useful while the value is still being tuned against real-world usage distance (#222) (Refs #222)

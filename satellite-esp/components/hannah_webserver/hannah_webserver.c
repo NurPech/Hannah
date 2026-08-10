@@ -371,6 +371,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         "<label>VAD-Stille (ms)<input type=number name=vad_ms min=200 max=10000 step=100 value=%u></label>"
 #if CONFIG_HANNAH_MIC_TYPE_TDM
         "<label>TDM-Mic-Verstärkung (Refs #222)<input type=number name=tdm_gain min=1 max=200 value=%u></label>"
+        "<label>TDM-Beamforming-Richtung, Grad im Uhrzeigersinn ab Norden/Strom-Seite (Refs #222)"
+          "<input type=number name=tdm_beam_dir min=0 max=315 step=45 value=%u></label>"
 #endif
         "<h3>Firmware</h3>"
         "<label>Update-Server URL<input name=ota_url value='%s'></label>"
@@ -430,6 +432,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         cfg->vad_silence_ms,
 #if CONFIG_HANNAH_MIC_TYPE_TDM
         cfg->tdm_downmix_gain,
+        cfg->tdm_beam_direction_deg,
 #endif
         cfg->ota_url,
         cfg->ota_channel,
@@ -513,6 +516,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (form_get(body, "tdm_gain", tdm_gain_str, sizeof(tdm_gain_str))) {
         int g = atoi(tdm_gain_str);
         if (g >= 1 && g <= 200) new_cfg.tdm_downmix_gain = (uint8_t)g;
+    }
+
+    char tdm_beam_dir_str[8] = {0};
+    if (form_get(body, "tdm_beam_dir", tdm_beam_dir_str, sizeof(tdm_beam_dir_str))) {
+        int d = atoi(tdm_beam_dir_str);
+        /* nur die 8 physikalisch sinnvollen 45°-Schritte, s. Kconfig-Hilfetext */
+        if (d >= 0 && d <= 315 && d % 45 == 0) new_cfg.tdm_beam_direction_deg = (uint16_t)d;
     }
 
     char thr_str[8] = {0};

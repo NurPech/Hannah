@@ -38,13 +38,26 @@ menu "Hannah Audio"
 
     config HANNAH_TDM_DOWNMIX_GAIN
         int "TDM-Downmix-Verstärkung (Faktor)"
-        default 32
+        default 128
         range 1 200
         depends on HANNAH_MIC_TYPE_TDM
         help
             Digitale Verstärkung des ADAU7118-TDM-Rohsignals (kein eigenes
-            Gain-Register auf dem Chip, s. Issue #222). Startwert, noch
-            nicht final gegen reale Nutzungsentfernung abgestimmt.
+            Gain-Register auf dem Chip, s. Issue #222). Gegen reale
+            Nutzungsentfernung abgestimmt (128, sauberes Signal ohne Clipping).
+            Runtime-Override per NVS/WebUI möglich, ohne Reflash.
+
+    config HANNAH_TDM_BEAM_DIRECTION_DEG
+        int "TDM-Beamforming-Vorzugsrichtung (Grad)"
+        default 180
+        range 0 315
+        depends on HANNAH_MIC_TYPE_TDM
+        help
+            Hörrichtung des Delay-and-Sum-Beamformings, im Uhrzeigersinn ab
+            Norden (Kreuz-Array-Achse Richtung Stromversorgung), in 45°-
+            Schritten (0/45/.../315 — feinere Werte bringen physikalisch
+            keine zusätzliche Auflösung, s. Issue #222). Default 180° =
+            Süden, der Stromversorgung gegenüber, konzeptionell die Front.
             Runtime-Override per NVS/WebUI möglich, ohne Reflash.
 
     config HANNAH_SPEAKER_ENABLED

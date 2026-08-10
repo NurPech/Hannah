@@ -52,7 +52,17 @@ static const char *TAG = "hannah_audio";
 #  if CONFIG_HANNAH_MIC_TYPE_PDM
 #  define STEP_BYTES_RAW  (STEP_SAMPLES * 4)   /* 16-bit stereo PDM */
 #  elif CONFIG_HANNAH_MIC_TYPE_TDM
-#  define STEP_BYTES_RAW  (STEP_SAMPLES * 8)   /* 4× 16-bit TDM-Slots (ADAU7118) */
+/* Beamforming (Refs #222) braucht mehr Richtauflösung als bei 16kHz möglich
+ * (nur ~3 Delay-Stufen zwischen gegenüberliegenden Mics) — TDM erfasst daher
+ * mit 3× Überabtastung (48kHz), Delay-and-Sum + Downsample auf SAMPLE_RATE
+ * passiert in mic_task(). dma_frame_num bleibt unverändert bei STEP_SAMPLES*2
+ * (deutlich unter der ~511-Frame-DMA-Deskriptor-Grenze aus #222/v0.71.6) —
+ * dma_desc_num*dma_frame_num (8*320=2560 Frames Ringpuffer) deckt einen
+ * 480-Frame-Read pro 10ms-Schritt mit reichlich Marge ab. */
+#  define TDM_RAW_OVERSAMPLE 3
+#  define TDM_RAW_SAMPLE_RATE (SAMPLE_RATE * TDM_RAW_OVERSAMPLE)
+#  define TDM_RAW_STEP_SAMPLES (STEP_SAMPLES * TDM_RAW_OVERSAMPLE)
+#  define STEP_BYTES_RAW  (TDM_RAW_STEP_SAMPLES * 8)   /* 4× 16-bit TDM-Slots (ADAU7118), 48kHz */
 #  else
 #  define STEP_BYTES_RAW  (STEP_SAMPLES * 8)   /* 32-bit slots I2S  */
 #  endif
@@ -147,6 +157,89 @@ static volatile int      s_volume                 = CONFIG_HANNAH_VOLUME_DEFAULT
 static hannah_webrtc_vad_state_t s_webrtc_vad;
 static float              s_noise_floor_ema = 0.020f; /* adaptiver Noise-Floor-Schätzer */
 static int                s_stream_frames   = 0;
+
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+/* Delay-and-Sum-Beamforming (Refs #222). Ringpuffer-Tiefe deutlich über dem
+ * physikalisch nötigen Maximum (~9 Samples bei 48kHz für den Kreuz-Array-
+ * Radius 32mm, s. tdm_beamform_update_direction()). Kanalreihenfolge = TDM-
+ * Slot-Reihenfolge, s. Geometrie-Kommentar bei adau7118_init(): 0=MK1/Ost,
+ * 1=MK3/Nord, 2=MK4/Süd, 3=MK2/West. */
+#define TDM_BEAM_NUM_CH    4
+#define TDM_BEAM_MAX_DELAY 16
+static int      s_beam_delay_samples[TDM_BEAM_NUM_CH];
+static int16_t  s_beam_history[TDM_BEAM_NUM_CH][TDM_BEAM_MAX_DELAY]; /* letzte Roh-Samples des vorigen 480er-Blocks, für Delays über Blockgrenzen hinweg */
+static bool     s_beam_history_valid = false; /* erster Block nach Boot hat keine Historie — dort mit 0 auffüllen */
+static uint16_t s_beam_last_direction_deg = 0xFFFF; /* ungültig -> erzwingt Neuberechnung beim ersten Aufruf */
+static hannah_resample_ctx_t s_tdm_resample_ctx;
+static int16_t  s_tdm_combined[TDM_RAW_STEP_SAMPLES]; /* summiertes 48kHz-Signal vor dem Downsample */
+
+/* Berechnet pro Kanal die nötige Verzögerung (in Samples bei TDM_RAW_SAMPLE_RATE),
+ * damit alle 4 Kanäle für Schall aus direction_deg (Grad im Uhrzeigersinn ab
+ * Norden, s. tdm_beam_direction_deg) phasengleich aufsummiert werden können.
+ * Herleitung: Kanal i mit Position p_i (relativ Array-Mitte) empfängt eine
+ * ebene Welle aus Richtung û um (p_i·û)/c früher/später als die Mitte
+ * (positiv = p_i liegt in Schallquellen-Richtung = empfängt früher). Auf die
+ * am spätesten empfangende Kanal normiert (die braucht 0 Verzögerung, alle
+ * anderen entsprechend mehr) ergibt nichtnegative, reale Verzögerungen. */
+static void tdm_beamform_update_direction(uint16_t direction_deg)
+{
+    if (direction_deg == s_beam_last_direction_deg) return;
+
+    const double radius_mm            = 32.0;
+    const double speed_of_sound_mm_s  = 343000.0;
+    const double theta                = direction_deg * M_PI / 180.0;
+    const double ux                   =  sin(theta);
+    const double uy                   = -cos(theta);
+
+    /* Kanal-Positionen relativ Array-Mitte, mm. Reihenfolge = TDM-Slot 0..3. */
+    static const double pos_x[TDM_BEAM_NUM_CH] = {  32.0, 0.0,   0.0,  -32.0 };
+    static const double pos_y[TDM_BEAM_NUM_CH] = {   0.0, -32.0, 32.0,  0.0  };
+
+    double raw_delay_s[TDM_BEAM_NUM_CH];
+    double min_delay_s = 1e9;
+    for (int ch = 0; ch < TDM_BEAM_NUM_CH; ch++) {
+        raw_delay_s[ch] = (pos_x[ch] * ux + pos_y[ch] * uy) / speed_of_sound_mm_s;
+        if (raw_delay_s[ch] < min_delay_s) min_delay_s = raw_delay_s[ch];
+    }
+    for (int ch = 0; ch < TDM_BEAM_NUM_CH; ch++) {
+        double delay_s = raw_delay_s[ch] - min_delay_s;
+        int d = (int)lround(delay_s * TDM_RAW_SAMPLE_RATE);
+        if (d < 0) d = 0;
+        if (d >= TDM_BEAM_MAX_DELAY) d = TDM_BEAM_MAX_DELAY - 1; /* Sicherheitsnetz, greift bei unseren 45°-Schritten nie */
+        s_beam_delay_samples[ch] = d;
+    }
+    s_beam_last_direction_deg = direction_deg;
+    ESP_LOGI(TAG, "Beamforming: Richtung %u° -> Delays [%d,%d,%d,%d] Samples @ %dHz",
+             direction_deg, s_beam_delay_samples[0], s_beam_delay_samples[1],
+             s_beam_delay_samples[2], s_beam_delay_samples[3], TDM_RAW_SAMPLE_RATE);
+}
+
+/* Liest Rohsample für Kanal ch bei Index i (0..TDM_RAW_STEP_SAMPLES-1) im
+ * aktuellen 48kHz-Block, verzögert um s_beam_delay_samples[ch]. Negative
+ * Indizes (Delay reicht in den vorigen Block zurück) werden aus
+ * s_beam_history bedient. raw_s16 ist der interleavte TDM-Rohpuffer
+ * (4 Slots/Frame) des aktuellen Blocks. */
+static inline int16_t tdm_beam_delayed_sample(const int16_t *raw_s16, int ch, int i)
+{
+    int idx = i - s_beam_delay_samples[ch];
+    if (idx >= 0) return raw_s16[idx * TDM_BEAM_NUM_CH + ch];
+    int hist_idx = TDM_BEAM_MAX_DELAY + idx; /* idx ist negativ */
+    return s_beam_history_valid ? s_beam_history[ch][hist_idx] : 0;
+}
+
+/* Merkt sich die letzten TDM_BEAM_MAX_DELAY Rohsamples je Kanal aus dem
+ * gerade verarbeiteten Block, als Historie für den nächsten Aufruf. */
+static void tdm_beam_save_history(const int16_t *raw_s16)
+{
+    for (int ch = 0; ch < TDM_BEAM_NUM_CH; ch++) {
+        for (int k = 0; k < TDM_BEAM_MAX_DELAY; k++) {
+            int i = TDM_RAW_STEP_SAMPLES - TDM_BEAM_MAX_DELAY + k;
+            s_beam_history[ch][k] = raw_s16[i * TDM_BEAM_NUM_CH + ch];
+        }
+    }
+    s_beam_history_valid = true;
+}
+#endif /* CONFIG_HANNAH_MIC_TYPE_TDM */
 
 /* Debug-WAV-Snapshot (#180) — s_debug_ring wird ausschließlich vom mic_task
  * beschrieben (Schreiber + Trigger-Auswertung laufen im selben Task, keine
@@ -271,12 +364,16 @@ static void IRAM_ATTR vol_down_isr_handler(void *arg)
  * Radius 32mm, Kreuz-Anordnung). Kanalzuordnung folgt der SEL-Pin-
  * Beschaltung: SEL=GND -> gerader Kanal (0/2), SEL=VDD -> ungerader (1/3).
  *   Kanal 0 (DAT0, SEL=GND) = MK1, Ost  (+32,   0)
- *   Kanal 1 (DAT0, SEL=VDD) = MK3, Süd  (  0, -32)
- *   Kanal 2 (DAT1, SEL=GND) = MK4, Nord (  0, +32)
+ *   Kanal 1 (DAT0, SEL=VDD) = MK3, Nord (  0, -32)
+ *   Kanal 2 (DAT1, SEL=GND) = MK4, Süd  (  0, +32)
  *   Kanal 3 (DAT1, SEL=VDD) = MK2, West (-32,   0)
- * Jeder Kanal landet per Default-Register-Mapping (SPT_Cx_SLOT = Kanalindex)
- * bereits im gleichnamigen TDM-Slot — keine Slot-Umsortierung nötig. Für
- * das Beamforming aus #222 relevant, hier nur dokumentiert, noch nicht genutzt. */
+ * Himmelsrichtungen 2026-08-11 am echten Board verifiziert (vorherige Version
+ * dieses Kommentars hatte Nord/Süd vertauscht geraten, s. #222) — Süden
+ * (MK4) liegt der Stromversorgung gegenüber und ist die Default-Hörrichtung
+ * (180°, s. tdm_beam_direction_deg). Jeder Kanal landet per Default-
+ * Register-Mapping (SPT_Cx_SLOT = Kanalindex) bereits im gleichnamigen
+ * TDM-Slot — keine Slot-Umsortierung nötig. Genutzt vom Delay-and-Sum-
+ * Beamforming in mic_task() (Refs #222). */
 
 static esp_err_t adau7118_write(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val)
 {
@@ -403,8 +500,14 @@ static esp_err_t mic_init(void)
     ESP_LOGI(TAG, "Mic PDM I2S%d: %dHz stereo DSR_16S", CONFIG_HANNAH_MIC_I2S_PORT, SAMPLE_RATE);
 #elif CONFIG_HANNAH_MIC_TYPE_TDM
     ESP_ERROR_CHECK(adau7118_init());
+    /* Rohe Erfassungsrate ist TDM_RAW_SAMPLE_RATE (48kHz, s. STEP_BYTES_RAW-
+     * Kommentar oben) — der ADAU7118 folgt automatisch (kein Register-Write
+     * nötig, s. Datenblatt "Clocking": PDM_CLK wird intern aus FSYNC×DEC_RATIO
+     * abgeleitet, DEC_RATIO bleibt bei 64× (Register 0x05 unverändert)).
+     * mic_task() summiert/verzögert die 4 Kanäle und rechnet per
+     * hannah_resample_ctx() auf SAMPLE_RATE (16kHz) runter. */
     i2s_tdm_config_t tdm_cfg = {
-        .clk_cfg  = I2S_TDM_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
+        .clk_cfg  = I2S_TDM_CLK_DEFAULT_CONFIG(TDM_RAW_SAMPLE_RATE),
         .slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(
             I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
             I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3),
@@ -418,7 +521,14 @@ static esp_err_t mic_init(void)
         },
     };
     ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(s_rx_chan, &tdm_cfg));
-    ESP_LOGI(TAG, "Mic TDM I2S%d: %dHz, 4 Slots (ADAU7118)", CONFIG_HANNAH_MIC_I2S_PORT, SAMPLE_RATE);
+    ESP_LOGI(TAG, "Mic TDM I2S%d: %dHz raw (Beamforming -> %dHz), 4 Slots (ADAU7118)",
+             CONFIG_HANNAH_MIC_I2S_PORT, TDM_RAW_SAMPLE_RATE, SAMPLE_RATE);
+    /* mic_init() läuft auch nach hannah_audio_resume_hw() (OTA-Pause-Zyklus,
+     * s. Kommentar dort) erneut — Delay-Historie und Resample-Filterzustand
+     * müssen dann neu starten, sonst würde über die reale Erfassungslücke
+     * hinweg "kontinuierlich" weitergerechnet. */
+    hannah_resample_ctx_init(&s_tdm_resample_ctx);
+    s_beam_history_valid = false;
 #else
     // INMP441 requires ≥32 BCLK cycles per channel — use 32-bit slot width.
     // Data sits in bits [31:8]; we shift down in mic_task.
@@ -696,17 +806,37 @@ static void mic_task(void *arg)
             mono[i] = (int16_t)((int32_t)s16[i * 2] * 64 > 32767 ? 32767 : (int32_t)s16[i * 2] * 64 < -32768 ? -32768 : (int32_t)s16[i * 2] * 64);
         }
 #elif CONFIG_HANNAH_MIC_TYPE_TDM
-        /* TDM: 4× 16-bit Slots (ADAU7118) → Slot 0 = Kanal 0 = MK1 (Ost,
-         * s. Geometrie-Kommentar bei adau7118_init()). Noch kein Beamforming,
-         * fixer Einzel-Kanal-Downmix — s. Issue #222. Digitale Verstärkung
-         * mit Clipping-Schutz, s. Kommentar bei hannah_config_t.tdm_downmix_gain. */
-        size_t frames    = bytes_read / 8;
-        int16_t *s16     = (int16_t *)raw;
+        /* TDM: 4× 16-bit Slots (ADAU7118), erfasst mit 3× Überabtastung
+         * (TDM_RAW_SAMPLE_RATE) für Delay-and-Sum-Beamforming — s. Issue
+         * #222. Reihenfolge: pro Kanal verzögern + summieren (bei 48kHz,
+         * volle Richtauflösung) -> Downsample auf SAMPLE_RATE
+         * (hannah_resample_ctx, AudioLib >=0.3.0, mit Anti-Aliasing-Filter)
+         * -> erst danach Gain mit Clipping-Schutz (s. Kommentar bei
+         * hannah_config_t.tdm_downmix_gain) — vor dem Downsample würde ein
+         * geclipptes Signal den Anti-Aliasing-Filter verzerren. */
+        size_t raw_frames = bytes_read / 8;
+        int16_t *s16      = (int16_t *)raw;
+
+        tdm_beamform_update_direction(hannah_config_get()->tdm_beam_direction_deg);
+
+        for (size_t i = 0; i < raw_frames; i++) {
+            int32_t sum = 0;
+            for (int ch = 0; ch < TDM_BEAM_NUM_CH; ch++) {
+                sum += tdm_beam_delayed_sample(s16, ch, (int)i);
+            }
+            s_tdm_combined[i] = (int16_t)(sum / TDM_BEAM_NUM_CH);
+        }
+        tdm_beam_save_history(s16);
+
+        hannah_resample_ctx(&s_tdm_resample_ctx, s_tdm_combined, (int)raw_frames,
+                             TDM_RAW_SAMPLE_RATE, mono, STEP_SAMPLES, SAMPLE_RATE);
+
         int32_t tdm_gain = hannah_config_get()->tdm_downmix_gain;
-        for (size_t i = 0; i < frames; i++) {
-            int32_t amplified = (int32_t)s16[i * 4] * tdm_gain;
+        for (size_t i = 0; i < STEP_SAMPLES; i++) {
+            int32_t amplified = (int32_t)mono[i] * tdm_gain;
             mono[i] = (int16_t)(amplified > 32767 ? 32767 : amplified < -32768 ? -32768 : amplified);
         }
+        size_t frames = STEP_SAMPLES;
 #else
         /* I2S: 32-bit slots → linker Kanal (INMP441: MSB in bits[31:8]) */
         size_t frames    = bytes_read / 8;
