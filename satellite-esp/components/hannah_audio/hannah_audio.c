@@ -348,7 +348,20 @@ static esp_err_t mic_init(void)
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         CONFIG_HANNAH_MIC_I2S_PORT, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num  = 8;
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+    /* TDM: 8 Byte/Frame (4 Kanäle × 16-bit) statt 4 Byte/Frame bei PDM/I2S —
+     * STEP_SAMPLES*4 (640 Frames) überschreitet die ~4092-Byte-DMA-
+     * Deskriptor-Grenze und wurde vom Treiber bisher still auf 511 geklemmt
+     * ("dma frame num is out of dma buffer size, limited to 511", seit dem
+     * allerersten Boot in jedem Log). Bekannte ESP-IDF-Bugs rund um I2S-TDM-
+     * DMA-Puffergrößenberechnung (Refs #222: espressif/esp-idf#15126,
+     * #10630) legen nahe, dass dieses stille Klemmen zu korrupten/
+     * eingefrorenen Werten führen kann. Explizit auf einen Wert deutlich
+     * unter der Grenze setzen, damit gar nicht erst geklemmt wird. */
+    chan_cfg.dma_frame_num = STEP_SAMPLES * 2;
+#else
     chan_cfg.dma_frame_num = STEP_SAMPLES * 4;
+#endif
 
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, NULL, &s_rx_chan));
 

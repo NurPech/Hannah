@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.6 (2026-08-10)
+### Satellite Firmware
+* Fixed: TDM I2S channel requested `dma_frame_num = 640` (STEP_SAMPLES×4), which at 8 bytes/frame (4 channels × 16-bit) exceeds the ~4092-byte DMA descriptor limit and was silently clamped by the driver to 511 (`dma frame num is out of dma buffer size, limited to 511`, present in every boot log since the first Rev5 test). Combined with known upstream ESP-IDF I2S-TDM DMA buffer sizing bugs (espressif/esp-idf#15126, #10630), this silent clamping is a plausible cause of the corrupted/frozen-looking values seen in every Rev5 capture so far, independent of ADAU7118 register config. `dma_frame_num` is now set well under the descriptor limit for TDM specifically, avoiding the clamp entirely (Refs #222)
+
 ## 0.71.5 (2026-08-10)
 ### Satellite Firmware
 * Changed: reverted the `I2S_ROLE_SLAVE` experiment for TDM from v0.71.4 — on real hardware it made things measurably worse, not better: mic warmup took ~108s instead of the usual ~9s (repeated blocking/failing I2S reads), and the wakeword debug log showed a genuine `rms=0.0000 peak=0.0000` (true zero signal, not even the previous noise-floor-like garbage). Back to `I2S_ROLE_MASTER` for all mic types until the actual clock direction is confirmed. Root cause of the silent/near-silent Rev5 TDM captures still open (Refs #222)
