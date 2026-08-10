@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.8 (2026-08-10)
+### Satellite Firmware
+* Changed: Rev5 TDM mic downmix now applies a fixed digital gain (`TDM_DOWNMIX_GAIN=32`, with clipping protection) — the ADAU7118 has no analog/digital gain register of its own, and after the DMA/HPF fixes (#222) the raw signal, while now correct, is very quiet (RMS ~33 even close-range loud speech vs. 32767 full scale). Same approach the existing PDM mic path already uses (×64). Starting value, not yet tuned against real-world usage distance (Refs #222)
+
 ## 0.71.7 (2026-08-10)
 ### Satellite Firmware
 * Fixed: ADAU7118's high-pass filter was left at its reset default (disabled) — confirmed real audio now reaches the ESP32 after the DMA buffer fix (#222, v0.71.6), but a DC offset of roughly -256 sits on top of the signal, dominating the RMS reading and burying the much smaller voice-correlated variation. Datasheet text confirms `HPF_EN` (Bit 0, `HPF_CONTROL`) defaults to off; `adau7118_init()` now enables it, keeping the default cutoff frequency (Refs #222)
