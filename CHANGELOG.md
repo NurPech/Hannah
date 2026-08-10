@@ -5,6 +5,10 @@
 -->
 
 
+## 0.71.7 (2026-08-10)
+### Satellite Firmware
+* Fixed: ADAU7118's high-pass filter was left at its reset default (disabled) — confirmed real audio now reaches the ESP32 after the DMA buffer fix (#222, v0.71.6), but a DC offset of roughly -256 sits on top of the signal, dominating the RMS reading and burying the much smaller voice-correlated variation. Datasheet text confirms `HPF_EN` (Bit 0, `HPF_CONTROL`) defaults to off; `adau7118_init()` now enables it, keeping the default cutoff frequency (Refs #222)
+
 ## 0.71.6 (2026-08-10)
 ### Satellite Firmware
 * Fixed: TDM I2S channel requested `dma_frame_num = 640` (STEP_SAMPLES×4), which at 8 bytes/frame (4 channels × 16-bit) exceeds the ~4092-byte DMA descriptor limit and was silently clamped by the driver to 511 (`dma frame num is out of dma buffer size, limited to 511`, present in every boot log since the first Rev5 test). Combined with known upstream ESP-IDF I2S-TDM DMA buffer sizing bugs (espressif/esp-idf#15126, #10630), this silent clamping is a plausible cause of the corrupted/frozen-looking values seen in every Rev5 capture so far, independent of ADAU7118 register config. `dma_frame_num` is now set well under the descriptor limit for TDM specifically, avoiding the clamp entirely (Refs #222)

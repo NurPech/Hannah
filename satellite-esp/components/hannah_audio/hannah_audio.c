@@ -215,11 +215,22 @@ static void IRAM_ATTR vol_down_isr_handler(void *arg)
 /* Register-Map (ADAU7118 Rev.A Datenblatt, Table 16) */
 #define ADAU7118_REG_ENABLES           0x04
 #define ADAU7118_REG_DEC_RATIO_CLK_MAP 0x05
+#define ADAU7118_REG_HPF_CONTROL       0x06
 #define ADAU7118_REG_SPT_CTRL1         0x07
 #define ADAU7118_REG_SPT_C(n)          (0x09 + (n))  /* n = 0..7 */
 #define ADAU7118_REG_RESETS            0x12
 
 #define ADAU7118_RESETS_SOFT_RESET (1 << 0)
+
+/* HPF_CONTROL (0x06): Bit0=HPF_EN, Bits[7:4]=HPF_FC (Cutoff, Table 15).
+ * Datenblatt-Fließtext (Refs #222, bestätigt 2026-08-10): Hochpassfilter ist
+ * per Default deaktiviert — durchgängiges Kapitel/Erklärungssatz, nicht nur
+ * aus der Tabellen-Bitreihenfolge geraten (Lehre aus dem TRI_STATE-Fehlgriff).
+ * Ohne HPF lässt der Wandler einen DC-Offset durch (~-256 in unseren echten
+ * Aufnahmen), der das eigentliche Audiosignal überlagert. Reset-Default
+ * 0xD0 (HPF_FC bereits sinnvoll gesetzt) bleibt bis auf das Enable-Bit
+ * unverändert. */
+#define ADAU7118_HPF_CONTROL_VALUE 0xD1
 
 /* ENABLES (0x04): Bit5=PDM_CLK1_EN, Bit4=PDM_CLK0_EN, Bit3=CHAN_67_EN,
  * Bit2=CHAN_45_EN, Bit1=CHAN_23_EN, Bit0=CHAN_01_EN. Nur PDM_DAT0
@@ -299,6 +310,7 @@ static esp_err_t adau7118_init(void)
     err  = adau7118_write(dev, ADAU7118_REG_SPT_CTRL1, ADAU7118_SPT_CTRL1_VALUE);
     err |= adau7118_write(dev, ADAU7118_REG_ENABLES, ADAU7118_ENABLES_VALUE);
     err |= adau7118_write(dev, ADAU7118_REG_DEC_RATIO_CLK_MAP, ADAU7118_DEC_RATIO_CLK_MAP_VALUE);
+    err |= adau7118_write(dev, ADAU7118_REG_HPF_CONTROL, ADAU7118_HPF_CONTROL_VALUE);
     /* SPT_C0..SPT_C3 (MK1/MK3/MK4/MK2) bleiben auf Reset-Default (Slot = Kanalindex,
      * Drive an). SPT_C4..SPT_C7 (unbestückte Kanäle) werden vom Bus genommen —
      * SLOT-Feld unverändert, nur das DRV-Bit gelöscht. */
@@ -316,16 +328,17 @@ static esp_err_t adau7118_init(void)
     /* Diagnose #222: bestätigt per Rücklesen, dass der Chip die Werte wirklich
      * übernommen hat (statt nur ACK auf den Schreibzugriff) — Verdacht auf
      * "kommt gar keine Audiodaten an" trotz sauberem Init. Temporär, bis geklärt. */
-    uint8_t rb_enables = 0, rb_clkmap = 0, rb_ctrl1 = 0, rb_c0 = 0, rb_c1 = 0, rb_c2 = 0, rb_c3 = 0;
+    uint8_t rb_enables = 0, rb_clkmap = 0, rb_hpf = 0, rb_ctrl1 = 0, rb_c0 = 0, rb_c1 = 0, rb_c2 = 0, rb_c3 = 0;
     adau7118_read(dev, ADAU7118_REG_ENABLES, &rb_enables);
     adau7118_read(dev, ADAU7118_REG_DEC_RATIO_CLK_MAP, &rb_clkmap);
+    adau7118_read(dev, ADAU7118_REG_HPF_CONTROL, &rb_hpf);
     adau7118_read(dev, ADAU7118_REG_SPT_CTRL1, &rb_ctrl1);
     adau7118_read(dev, ADAU7118_REG_SPT_C(0), &rb_c0);
     adau7118_read(dev, ADAU7118_REG_SPT_C(1), &rb_c1);
     adau7118_read(dev, ADAU7118_REG_SPT_C(2), &rb_c2);
     adau7118_read(dev, ADAU7118_REG_SPT_C(3), &rb_c3);
-    ESP_LOGI(TAG, "ADAU7118: Rueckgelesen ENABLES=0x%02X DEC_RATIO_CLK_MAP=0x%02X SPT_CTRL1=0x%02X SPT_C0=0x%02X SPT_C1=0x%02X SPT_C2=0x%02X SPT_C3=0x%02X",
-             rb_enables, rb_clkmap, rb_ctrl1, rb_c0, rb_c1, rb_c2, rb_c3);
+    ESP_LOGI(TAG, "ADAU7118: Rueckgelesen ENABLES=0x%02X DEC_RATIO_CLK_MAP=0x%02X HPF_CONTROL=0x%02X SPT_CTRL1=0x%02X SPT_C0=0x%02X SPT_C1=0x%02X SPT_C2=0x%02X SPT_C3=0x%02X",
+             rb_enables, rb_clkmap, rb_hpf, rb_ctrl1, rb_c0, rb_c1, rb_c2, rb_c3);
 
     return ESP_OK;
 }
