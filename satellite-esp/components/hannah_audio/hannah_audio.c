@@ -53,28 +53,27 @@ static const char *TAG = "hannah_audio";
 #  if CONFIG_HANNAH_MIC_TYPE_PDM
 #  define STEP_BYTES_RAW  (STEP_SAMPLES * 4)   /* 16-bit stereo PDM */
 #  elif CONFIG_HANNAH_MIC_TYPE_TDM
-/* Beamforming (Refs #222) braucht mehr Richtauflösung als bei 16kHz möglich
- * (nur ~3 Delay-Stufen zwischen gegenüberliegenden Mics) — TDM erfasst daher
- * mit 3× Überabtastung (48kHz), Delay-and-Sum + Downsample auf SAMPLE_RATE
- * passiert in mic_task(). dma_frame_num bleibt unverändert bei STEP_SAMPLES*2
- * (deutlich unter der ~511-Frame-DMA-Deskriptor-Grenze aus #222/v0.71.6) —
- * dma_desc_num*dma_frame_num (8*320=2560 Frames Ringpuffer) deckt einen
- * 480-Frame-Read pro 10ms-Schritt mit reichlich Marge ab.
+/* Beamforming (Refs #222) bräuchte für volle Richtauflösung mehr als die
+ * ~3 groben Delay-Stufen, die bei 16kHz zwischen gegenüberliegenden Mics
+ * möglich sind — ursprünglich dafür mit 3× Überabtastung (48kHz) erfasst,
+ * Delay-and-Sum + Downsample auf SAMPLE_RATE passiert in mic_task().
  *
- * Audioqualitäts-Regression seit v0.72.0 (Refs #222) — Status 2026-08-11:
- * Bisher ausgeschlossen: Delay-and-Sum-Summierung (Einzelkanal genauso
- * betroffen), AudioLib-Resample-Filter-Charakteristik (Verlust schon vor dem
- * Resample im Rohsignal vorhanden), ADAU7118-DEC_RATIO/Mikrofon-Performance-
- * Modus (32×→1.536MHz, sauber im Standard Performance Mode laut Datenblatt,
- * keine Verbesserung). 1× (16kHz, kein Oversampling — dst_rate==src_rate,
- * hannah_resample_ctx() nimmt dann den Fast-Path ohne Biquad-Filter, s.
- * `filtering = (dst_rate < src_rate)` in AudioLib) brachte die Qualität
- * zurück; 2× (32kHz, Filter aktiv) war fast so schlecht wie 3× — spricht
- * eher für Rechenzeit/Timing-Budget des Filterpfads in der 10ms-mic_task-
- * Schleife als für eine feste Taktschwelle bei 48kHz. Zurück auf 3× (volle
- * Beamforming-Auflösung) + Timing-Instrumentierung darunter, um das direkt
- * zu messen statt weiter zu raten. */
-#  define TDM_RAW_OVERSAMPLE 3
+ * Bewusste Abwägung (Refs #222, 2026-08-11): 48kHz-Rohrate brachte eine
+ * deutliche, reproduzierbare Audioqualitäts-Regression ("klingt gedämpft/
+ * wie ein alter Kassettenrekorder"). Durchgetestet und ausgeschlossen:
+ * Delay-and-Sum-Summierung, AudioLib-Resample-Filter-Charakteristik,
+ * ADAU7118-Mikrofon-Performance-Modus (DEC_RATIO), CPU-/Timing-Budget der
+ * mic_task-Schleife (per Instrumentierung nachgemessen, komfortabel unter
+ * dem 10ms-Sollwert), das bekannte ESP-IDF-TDM-Alternating-Sample-Bug-Muster
+ * (espressif/esp-idf#10630), sowie MCLK/BCLK-Ganzzahlteilung (256/64=4,
+ * exakt). Verbleibender Verdacht: Signalintegrität auf der TDM-Leitung
+ * (BCLK/Data) bei höherer Taktfrequenz — braucht einen Logic-Analyzer zum
+ * Verifizieren, den es aktuell nicht gibt. 1× (16kHz, kein Oversampling)
+ * klang durchgehend sauber. Bewusste Entscheidung: Rohrate bleibt bei 16kHz,
+ * Beamforming-Code bleibt aktiv (nicht entfernt) trotz stark eingeschränkter
+ * Richtauflösung — sauberer Klang wiegt schwerer als funktionierende
+ * Richtwirkung. Bei Bedarf mit Logic-Analyzer-Zugriff neu bewerten. */
+#  define TDM_RAW_OVERSAMPLE 1
 #  define TDM_RAW_SAMPLE_RATE (SAMPLE_RATE * TDM_RAW_OVERSAMPLE)
 #  define TDM_RAW_STEP_SAMPLES (STEP_SAMPLES * TDM_RAW_OVERSAMPLE)
 #  define STEP_BYTES_RAW  (TDM_RAW_STEP_SAMPLES * 8)   /* 4× 16-bit TDM-Slots (ADAU7118), 48kHz */

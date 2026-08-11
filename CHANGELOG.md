@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.72.7 (2026-08-11)
+### Satellite Firmware
+
+* Changed: TDM raw capture rate reverted from 48kHz (3× oversampling) back to 16kHz (no oversampling) — a deliberate trade-off, not a regression fix. The 48kHz rate (introduced in v0.72.0 for finer beamforming delay resolution) causes a reproducible audio-quality loss ("sounds muffled/like a cassette recorder") whose root cause remains unconfirmed after ruling out beamforming summation, the resample filter, the ADAU7118 mic performance mode, mic_task's CPU/timing budget, a known ESP-IDF I2S-TDM sample-corruption bug pattern, and MCLK/BCLK integer-division precision — the remaining suspect is TDM signal integrity at the higher clock rate, which needs hardware test equipment (logic analyzer) not currently available to verify further. Beamforming code stays active despite losing most of its directional resolution at 16kHz (only ~3 coarse delay steps) — clean audio quality was judged more important than working beam directionality (Refs #222)
 
 ## 0.72.6 (2026-08-11)
 ### Satellite Firmware
