@@ -5,6 +5,11 @@
 -->
 
 
+## 0.72.6 (2026-08-11)
+### Satellite Firmware
+
+* Debug: TDM raw capture rate restored to 3× oversampling (48kHz, full beamforming delay resolution) after the 16kHz/32kHz diagnostic builds (v0.72.4/v0.72.5) — those pointed at the resample filter's compute cost rather than a fixed TDM clock threshold as the likely cause of the ongoing audio-quality regression (Refs #222): 16kHz (no filtering, `hannah_resample_ctx`'s fast path since `dst_rate==src_rate`) was clean, 32kHz (filtering active) was nearly as bad as 48kHz. Added timing instrumentation to `mic_task()` — periodic log (every 2s) of the 10ms loop's compute time and `hannah_resample_ctx()` time alone (min/avg/max, count of budget-exceeding iterations), to measure this directly instead of guessing further (Refs #222)
+
 ## 0.72.5 (2026-08-11)
 ### Satellite Firmware
 

@@ -26,6 +26,7 @@
 #include <math.h>
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
@@ -60,22 +61,20 @@ static const char *TAG = "hannah_audio";
  * dma_desc_num*dma_frame_num (8*320=2560 Frames Ringpuffer) deckt einen
  * 480-Frame-Read pro 10ms-Schritt mit reichlich Marge ab.
  *
- * TEMPORÄRER DIAGNOSE-BUILD (Refs #222, 2026-08-11): Audioqualitäts-Regression
- * seit v0.72.0. Bisher ausgeschlossen: Delay-and-Sum-Summierung (Einzelkanal
- * genauso betroffen), AudioLib-Resample-Filter (schon vor dem Resample im
- * Rohsignal vorhanden), ADAU7118-DEC_RATIO/Mikrofon-Performance-Modus
- * (32×→1.536MHz, sauber im Standard Performance Mode laut Datenblatt,
- * keine Verbesserung). Ein Test mit 1× (16kHz Rohrate, kein Oversampling,
- * s. Git-History) brachte die Qualität zurück — Verlust hängt also an der
- * TDM-Erfassung bei 48kHz auf ESP32-Seite (vermutlich die TDM-BCLK,
- * 4 Kanäle × 16-bit × FSYNC = 3.072MHz bei 48kHz vs. 1.024MHz bei 16kHz —
- * andere Taktdomäne als PDM_CLK/DEC_RATIO, die schon separat getestet
- * wurde), nicht am Mikrofon selbst. 1× büßt aber die Verzögerungsauflösung
- * fürs Beamforming komplett ein. Dieser Build probiert 2× (32kHz) als
- * Mittelweg — genug Auflösung, evtl. unterhalb der Schwelle, wo das
- * ESP32-seitige Problem auftritt. NICHT so mergen — Ergebnis abwarten,
- * je nachdem auf 3 zurück oder bei 2 belassen. */
-#  define TDM_RAW_OVERSAMPLE 2
+ * Audioqualitäts-Regression seit v0.72.0 (Refs #222) — Status 2026-08-11:
+ * Bisher ausgeschlossen: Delay-and-Sum-Summierung (Einzelkanal genauso
+ * betroffen), AudioLib-Resample-Filter-Charakteristik (Verlust schon vor dem
+ * Resample im Rohsignal vorhanden), ADAU7118-DEC_RATIO/Mikrofon-Performance-
+ * Modus (32×→1.536MHz, sauber im Standard Performance Mode laut Datenblatt,
+ * keine Verbesserung). 1× (16kHz, kein Oversampling — dst_rate==src_rate,
+ * hannah_resample_ctx() nimmt dann den Fast-Path ohne Biquad-Filter, s.
+ * `filtering = (dst_rate < src_rate)` in AudioLib) brachte die Qualität
+ * zurück; 2× (32kHz, Filter aktiv) war fast so schlecht wie 3× — spricht
+ * eher für Rechenzeit/Timing-Budget des Filterpfads in der 10ms-mic_task-
+ * Schleife als für eine feste Taktschwelle bei 48kHz. Zurück auf 3× (volle
+ * Beamforming-Auflösung) + Timing-Instrumentierung darunter, um das direkt
+ * zu messen statt weiter zu raten. */
+#  define TDM_RAW_OVERSAMPLE 3
 #  define TDM_RAW_SAMPLE_RATE (SAMPLE_RATE * TDM_RAW_OVERSAMPLE)
 #  define TDM_RAW_STEP_SAMPLES (STEP_SAMPLES * TDM_RAW_OVERSAMPLE)
 #  define STEP_BYTES_RAW  (TDM_RAW_STEP_SAMPLES * 8)   /* 4× 16-bit TDM-Slots (ADAU7118), 48kHz */
@@ -202,6 +201,25 @@ static bool     s_beam_history_valid = false; /* erster Block nach Boot hat kein
 static uint16_t s_beam_last_direction_deg = 0xFFFF; /* ungültig -> erzwingt Neuberechnung beim ersten Aufruf */
 static hannah_resample_ctx_t s_tdm_resample_ctx;
 static int16_t  s_tdm_combined[TDM_RAW_STEP_SAMPLES]; /* summiertes 48kHz-Signal vor dem Downsample */
+
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+/* Timing-Instrumentierung (Refs #222, 2026-08-11): Audioqualitäts-Regression
+ * korreliert eher mit "Resample-Filter aktiv" als mit einer festen
+ * TDM-Taktschwelle (s. Kommentar bei TDM_RAW_OVERSAMPLE) — Verdacht auf
+ * Rechenzeit/Timing-Budget in der 10ms-mic_task-Schleife statt auf
+ * Frequenzgang. Misst die Iterationsdauer ab i2s_channel_read() (Read
+ * selbst + Delay-and-Sum/Rohslot-Kopie + Resample + Gain) sowie separat nur
+ * hannah_resample_ctx(), min/max/avg über ein Log-Fenster (s.
+ * TDM_TIMING_LOG_FRAMES), um zu sehen ob/wie oft das 10ms-Budget
+ * überschritten wird. */
+#define TDM_TIMING_LOG_FRAMES 200  /* 200 × 10ms = 2s */
+static int64_t s_tdm_timing_loop_sum_us     = 0;
+static int64_t s_tdm_timing_loop_max_us     = 0;
+static int64_t s_tdm_timing_resample_sum_us = 0;
+static int64_t s_tdm_timing_resample_max_us = 0;
+static int      s_tdm_timing_over_budget    = 0;  /* Iterationen > 10ms in diesem Fenster */
+static int      s_tdm_timing_frames         = 0;
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
 /* Berechnet pro Kanal die nötige Verzögerung (in Samples bei TDM_RAW_SAMPLE_RATE),
  * damit alle 4 Kanäle für Schall aus direction_deg (Grad im Uhrzeigersinn ab
@@ -887,6 +905,14 @@ static void mic_task(void *arg)
         i2s_channel_read(s_rx_chan, raw, STEP_BYTES_RAW,
                          &bytes_read, pdMS_TO_TICKS(200));
 
+#if CONFIG_HANNAH_MIC_TYPE_TDM && CONFIG_HANNAH_WAKEWORD_DEBUG
+        /* Timing-Instrumentierung (Refs #222) — Startpunkt bewusst NACH dem
+         * i2s_channel_read()-Block, der misst nur die reine Rechenzeit
+         * (Delay-and-Sum/Rohslot + Resample + Gain) gegen das 10ms-Budget
+         * der Schleife, nicht die (normale) Wartezeit auf neue DMA-Daten. */
+        int64_t tdm_timing_t0 = esp_timer_get_time();
+#endif
+
 #if CONFIG_HANNAH_MIC_TYPE_PDM
         /* PDM: 16-bit stereo → linker Kanal (SPH0641: SEL=GND → L, Index 0) */
         size_t frames    = bytes_read / 4;
@@ -941,8 +967,14 @@ static void mic_task(void *arg)
         }
 #endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+        int64_t tdm_timing_t_resample0 = esp_timer_get_time();
+#endif
         hannah_resample_ctx(&s_tdm_resample_ctx, s_tdm_combined, (int)raw_frames,
                              TDM_RAW_SAMPLE_RATE, mono, STEP_SAMPLES, SAMPLE_RATE);
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+        int64_t tdm_timing_resample_us = esp_timer_get_time() - tdm_timing_t_resample0;
+#endif
 
         int32_t tdm_gain = hannah_config_get()->tdm_downmix_gain;
         for (size_t i = 0; i < STEP_SAMPLES; i++) {
@@ -950,6 +982,34 @@ static void mic_task(void *arg)
             mono[i] = (int16_t)(amplified > 32767 ? 32767 : amplified < -32768 ? -32768 : amplified);
         }
         size_t frames = STEP_SAMPLES;
+
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+        /* Timing-Instrumentierung (Refs #222) — Auswertung/Log-Fenster, s.
+         * TDM_TIMING_LOG_FRAMES und Kommentar bei s_tdm_timing_loop_sum_us. */
+        {
+            int64_t loop_us = esp_timer_get_time() - tdm_timing_t0;
+            s_tdm_timing_loop_sum_us     += loop_us;
+            s_tdm_timing_resample_sum_us += tdm_timing_resample_us;
+            if (loop_us > s_tdm_timing_loop_max_us)         s_tdm_timing_loop_max_us     = loop_us;
+            if (tdm_timing_resample_us > s_tdm_timing_resample_max_us)
+                s_tdm_timing_resample_max_us = tdm_timing_resample_us;
+            if (loop_us > 10000) s_tdm_timing_over_budget++;  /* 10ms Sollzeit pro Iteration */
+            if (++s_tdm_timing_frames >= TDM_TIMING_LOG_FRAMES) {
+                ESP_LOGI(TAG, "TDM-Timing: loop avg=%lldus max=%lldus | resample avg=%lldus max=%lldus | %d/%d Iterationen > 10ms",
+                         (long long)(s_tdm_timing_loop_sum_us / s_tdm_timing_frames),
+                         (long long)s_tdm_timing_loop_max_us,
+                         (long long)(s_tdm_timing_resample_sum_us / s_tdm_timing_frames),
+                         (long long)s_tdm_timing_resample_max_us,
+                         s_tdm_timing_over_budget, s_tdm_timing_frames);
+                s_tdm_timing_loop_sum_us     = 0;
+                s_tdm_timing_loop_max_us     = 0;
+                s_tdm_timing_resample_sum_us = 0;
+                s_tdm_timing_resample_max_us = 0;
+                s_tdm_timing_over_budget     = 0;
+                s_tdm_timing_frames          = 0;
+            }
+        }
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 #else
         /* I2S: 32-bit slots → linker Kanal (INMP441: MSB in bits[31:8]) */
         size_t frames    = bytes_read / 8;
