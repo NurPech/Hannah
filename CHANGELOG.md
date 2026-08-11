@@ -5,6 +5,11 @@
 -->
 
 
+## 0.72.5 (2026-08-11)
+### Satellite Firmware
+
+* Debug: `TDM_RAW_OVERSAMPLE` set to 2 (32kHz raw TDM capture) as a follow-up diagnostic to the 16kHz test (v0.72.4) — that test confirmed the audio-quality regression (Refs #222) is tied to running the ESP32 I2S-TDM peripheral at 48kHz specifically (all other suspects — beamforming summation, the resample filter, the ADAU7118 mic performance mode — already ruled out). 32kHz is a middle ground: enough oversampling for some beamforming delay resolution, possibly below whatever threshold causes the ESP32-side issue at 48kHz. Not meant to be merged as-is depending on the result (Refs #222)
+
 ## 0.72.4 (2026-08-11)
 ### Satellite Firmware
 

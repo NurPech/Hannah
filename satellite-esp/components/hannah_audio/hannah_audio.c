@@ -60,18 +60,22 @@ static const char *TAG = "hannah_audio";
  * dma_desc_num*dma_frame_num (8*320=2560 Frames Ringpuffer) deckt einen
  * 480-Frame-Read pro 10ms-Schritt mit reichlich Marge ab.
  *
- * TEMPORÄRER DIAGNOSE-BUILD (Refs #222, 2026-08-11): auf 1 (= 16kHz Rohrate,
- * kein Oversampling) heruntergesetzt, um die Audioqualitäts-Regression
- * einzugrenzen. Bisher ausgeschlossen: Delay-and-Sum-Summierung (Einzelkanal
+ * TEMPORÄRER DIAGNOSE-BUILD (Refs #222, 2026-08-11): Audioqualitäts-Regression
+ * seit v0.72.0. Bisher ausgeschlossen: Delay-and-Sum-Summierung (Einzelkanal
  * genauso betroffen), AudioLib-Resample-Filter (schon vor dem Resample im
  * Rohsignal vorhanden), ADAU7118-DEC_RATIO/Mikrofon-Performance-Modus
  * (32×→1.536MHz, sauber im Standard Performance Mode laut Datenblatt,
- * keine Verbesserung). Einzige aus v0.72.0 verbleibende, noch nie isoliert
- * getestete Variable ist die Rohrate selbst — dieser Build testet, ob der
- * Verlust an der 48kHz-TDM-Erfassung auf ESP32-Seite hängt (Timing/Config),
- * unabhängig vom Mikrofon-Modus. NICHT so mergen — nach dem Test auf 3
- * zurücksetzen, sonst verliert das Beamforming seine Richtauflösung. */
-#  define TDM_RAW_OVERSAMPLE 1
+ * keine Verbesserung). Ein Test mit 1× (16kHz Rohrate, kein Oversampling,
+ * s. Git-History) brachte die Qualität zurück — Verlust hängt also an der
+ * TDM-Erfassung bei 48kHz auf ESP32-Seite (vermutlich die TDM-BCLK,
+ * 4 Kanäle × 16-bit × FSYNC = 3.072MHz bei 48kHz vs. 1.024MHz bei 16kHz —
+ * andere Taktdomäne als PDM_CLK/DEC_RATIO, die schon separat getestet
+ * wurde), nicht am Mikrofon selbst. 1× büßt aber die Verzögerungsauflösung
+ * fürs Beamforming komplett ein. Dieser Build probiert 2× (32kHz) als
+ * Mittelweg — genug Auflösung, evtl. unterhalb der Schwelle, wo das
+ * ESP32-seitige Problem auftritt. NICHT so mergen — Ergebnis abwarten,
+ * je nachdem auf 3 zurück oder bei 2 belassen. */
+#  define TDM_RAW_OVERSAMPLE 2
 #  define TDM_RAW_SAMPLE_RATE (SAMPLE_RATE * TDM_RAW_OVERSAMPLE)
 #  define TDM_RAW_STEP_SAMPLES (STEP_SAMPLES * TDM_RAW_OVERSAMPLE)
 #  define STEP_BYTES_RAW  (TDM_RAW_STEP_SAMPLES * 8)   /* 4× 16-bit TDM-Slots (ADAU7118), 48kHz */
