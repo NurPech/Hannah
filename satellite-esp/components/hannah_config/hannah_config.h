@@ -15,6 +15,7 @@ typedef struct {
     uint16_t vad_silence_ms;      /* VAD-Stille bis audio_end, Runtime-Override für CONFIG_HANNAH_VAD_SILENCE_MS */
     uint8_t  tdm_downmix_gain;    /* ADAU7118-TDM-Downmix-Verstärkung, Runtime-Override für CONFIG_HANNAH_TDM_DOWNMIX_GAIN (Refs #222) */
     uint16_t tdm_beam_direction_deg; /* Beamforming-Vorzugsrichtung, 0/45/.../315° im Uhrzeigersinn ab Norden (Strom-Seite), Default 180° = Süden/Front (Refs #222) */
+    int8_t   tdm_debug_raw_slot;  /* Debug: -1 = normales Beamforming, 0-3 = gibt genau diesen TDM-Rohslot unverzerrt aus (kein Delay-and-Sum) — zum empirischen Verifizieren der Slot->Mikrofon-Zuordnung, s. Issue #222 */
     char     ota_url[128];
     char     ota_token[128];
     char     ota_channel[32];

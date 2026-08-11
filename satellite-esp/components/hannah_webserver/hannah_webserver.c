@@ -373,6 +373,10 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         "<label>TDM-Mic-Verstärkung (Refs #222)<input type=number name=tdm_gain min=1 max=200 value=%u></label>"
         "<label>TDM-Beamforming-Richtung, Grad im Uhrzeigersinn ab Norden/Strom-Seite (Refs #222)"
           "<input type=number name=tdm_beam_dir min=0 max=315 step=45 value=%u></label>"
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+        "<label>TDM-Debug: einzelnen Rohslot ausgeben (-1 = normales Beamforming, 0-3 = Slot, Refs #222)"
+          "<input type=number name=tdm_dbg_slot min=-1 max=3 value=%d></label>"
+#endif
 #endif
         "<h3>Firmware</h3>"
         "<label>Update-Server URL<input name=ota_url value='%s'></label>"
@@ -433,6 +437,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 #if CONFIG_HANNAH_MIC_TYPE_TDM
         cfg->tdm_downmix_gain,
         cfg->tdm_beam_direction_deg,
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+        cfg->tdm_debug_raw_slot,
+#endif
 #endif
         cfg->ota_url,
         cfg->ota_channel,
@@ -523,6 +530,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         int d = atoi(tdm_beam_dir_str);
         /* nur die 8 physikalisch sinnvollen 45°-Schritte, s. Kconfig-Hilfetext */
         if (d >= 0 && d <= 315 && d % 45 == 0) new_cfg.tdm_beam_direction_deg = (uint16_t)d;
+    }
+
+    char tdm_dbg_slot_str[8] = {0};
+    if (form_get(body, "tdm_dbg_slot", tdm_dbg_slot_str, sizeof(tdm_dbg_slot_str))) {
+        int s = atoi(tdm_dbg_slot_str);
+        if (s >= -1 && s <= 3) new_cfg.tdm_debug_raw_slot = (int8_t)s;
     }
 
     char thr_str[8] = {0};

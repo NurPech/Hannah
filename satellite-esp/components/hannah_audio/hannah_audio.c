@@ -819,12 +819,22 @@ static void mic_task(void *arg)
 
         tdm_beamform_update_direction(hannah_config_get()->tdm_beam_direction_deg);
 
-        for (size_t i = 0; i < raw_frames; i++) {
-            int32_t sum = 0;
-            for (int ch = 0; ch < TDM_BEAM_NUM_CH; ch++) {
-                sum += tdm_beam_delayed_sample(s16, ch, (int)i);
+        int8_t debug_raw_slot = hannah_config_get()->tdm_debug_raw_slot;
+        if (debug_raw_slot >= 0 && debug_raw_slot < TDM_BEAM_NUM_CH) {
+            /* Diagnose (Refs #222): einzelnen Rohslot unverändert durchreichen,
+             * kein Delay-and-Sum — zum empirischen Verifizieren der
+             * Slot->Mikrofon-Zuordnung gegen eine bekannte Sprechrichtung. */
+            for (size_t i = 0; i < raw_frames; i++) {
+                s_tdm_combined[i] = s16[i * TDM_BEAM_NUM_CH + debug_raw_slot];
             }
-            s_tdm_combined[i] = (int16_t)(sum / TDM_BEAM_NUM_CH);
+        } else {
+            for (size_t i = 0; i < raw_frames; i++) {
+                int32_t sum = 0;
+                for (int ch = 0; ch < TDM_BEAM_NUM_CH; ch++) {
+                    sum += tdm_beam_delayed_sample(s16, ch, (int)i);
+                }
+                s_tdm_combined[i] = (int16_t)(sum / TDM_BEAM_NUM_CH);
+            }
         }
         tdm_beam_save_history(s16);
 

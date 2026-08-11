@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.72.1 (2026-08-11)
+### Satellite Firmware
+
+* Added: `tdm_debug_raw_slot` debug setting (WebUI, only under `CONFIG_HANNAH_WAKEWORD_DEBUG`) — bypasses beamforming's delay-and-sum and outputs a single TDM raw slot unmodified, for empirically verifying the slot-to-microphone mapping against a known speaking direction (Refs #222)
 
 ## 0.72.0 (2026-08-10)
 ### Satellite Firmware

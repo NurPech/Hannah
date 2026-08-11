@@ -66,6 +66,7 @@ void hannah_config_init(void)
 #else
         s_cfg.tdm_beam_direction_deg = 180;
 #endif
+        s_cfg.tdm_debug_raw_slot = -1;
         s_cfg.syslog_host[0] = '\0';
         s_cfg.syslog_port    = 514;
         return;
@@ -108,6 +109,10 @@ void hannah_config_init(void)
 #endif
     nvs_get_u16(h, "tdm_beam_dir", &tdm_beam_dir);
     s_cfg.tdm_beam_direction_deg = tdm_beam_dir;
+
+    int8_t tdm_debug_slot = -1;
+    nvs_get_i8(h, "tdm_dbg_slot", &tdm_debug_slot);
+    s_cfg.tdm_debug_raw_slot = tdm_debug_slot;
 
     NVS_STR(h, "ota_url",     ota_url,     CONFIG_HANNAH_OTA_URL);
     NVS_STR(h, "ota_channel", ota_channel, CONFIG_HANNAH_OTA_CHANNEL);
@@ -184,6 +189,7 @@ void hannah_config_save(const hannah_config_t *cfg)
     nvs_set_u16(h, "vad_ms",       cfg->vad_silence_ms);
     nvs_set_u8 (h, "tdm_gain",     cfg->tdm_downmix_gain);
     nvs_set_u16(h, "tdm_beam_dir", cfg->tdm_beam_direction_deg);
+    nvs_set_i8 (h, "tdm_dbg_slot", cfg->tdm_debug_raw_slot);
     nvs_set_str(h, "ota_url",      cfg->ota_url);
     nvs_set_str(h, "ota_channel",  cfg->ota_channel);
     nvs_set_str(h, "ota_token",    cfg->ota_token);
