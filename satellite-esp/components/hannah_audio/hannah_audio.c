@@ -58,8 +58,20 @@ static const char *TAG = "hannah_audio";
  * passiert in mic_task(). dma_frame_num bleibt unverändert bei STEP_SAMPLES*2
  * (deutlich unter der ~511-Frame-DMA-Deskriptor-Grenze aus #222/v0.71.6) —
  * dma_desc_num*dma_frame_num (8*320=2560 Frames Ringpuffer) deckt einen
- * 480-Frame-Read pro 10ms-Schritt mit reichlich Marge ab. */
-#  define TDM_RAW_OVERSAMPLE 3
+ * 480-Frame-Read pro 10ms-Schritt mit reichlich Marge ab.
+ *
+ * TEMPORÄRER DIAGNOSE-BUILD (Refs #222, 2026-08-11): auf 1 (= 16kHz Rohrate,
+ * kein Oversampling) heruntergesetzt, um die Audioqualitäts-Regression
+ * einzugrenzen. Bisher ausgeschlossen: Delay-and-Sum-Summierung (Einzelkanal
+ * genauso betroffen), AudioLib-Resample-Filter (schon vor dem Resample im
+ * Rohsignal vorhanden), ADAU7118-DEC_RATIO/Mikrofon-Performance-Modus
+ * (32×→1.536MHz, sauber im Standard Performance Mode laut Datenblatt,
+ * keine Verbesserung). Einzige aus v0.72.0 verbleibende, noch nie isoliert
+ * getestete Variable ist die Rohrate selbst — dieser Build testet, ob der
+ * Verlust an der 48kHz-TDM-Erfassung auf ESP32-Seite hängt (Timing/Config),
+ * unabhängig vom Mikrofon-Modus. NICHT so mergen — nach dem Test auf 3
+ * zurücksetzen, sonst verliert das Beamforming seine Richtauflösung. */
+#  define TDM_RAW_OVERSAMPLE 1
 #  define TDM_RAW_SAMPLE_RATE (SAMPLE_RATE * TDM_RAW_OVERSAMPLE)
 #  define TDM_RAW_STEP_SAMPLES (STEP_SAMPLES * TDM_RAW_OVERSAMPLE)
 #  define STEP_BYTES_RAW  (TDM_RAW_STEP_SAMPLES * 8)   /* 4× 16-bit TDM-Slots (ADAU7118), 48kHz */

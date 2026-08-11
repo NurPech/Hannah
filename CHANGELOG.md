@@ -5,6 +5,11 @@
 -->
 
 
+## 0.72.4 (2026-08-11)
+### Satellite Firmware
+
+* Debug: `TDM_RAW_OVERSAMPLE` temporarily lowered from 3 to 1 (16kHz raw TDM capture, no oversampling) — diagnostic build to isolate whether the ongoing audio-quality regression (Refs #222) is tied to running the ESP32 I2S-TDM peripheral at 48kHz specifically, now that beamforming summation, the resample filter, and the ADAU7118 mic performance mode (`DEC_RATIO`) have all been ruled out individually. Not meant to be merged as-is — beamforming loses its delay resolution at 16kHz raw; revert to 3 once the test result is in (Refs #222)
+
 ## 0.72.3 (2026-08-11)
 ### Satellite Firmware
 
