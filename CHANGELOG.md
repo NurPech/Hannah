@@ -5,6 +5,11 @@
 -->
 
 
+## 0.72.9 (2026-08-11)
+### Hannah Core
+
+* Fixed: `tool_agent`'s `get_active_devices` summary omitted a device's `power` (wattage) reading entirely, even though it's present in the device model — only `on`/`level`/`color` were formatted. This meant the LLM had no way to distinguish e.g. a smart-plug-controlled appliance idling at low wattage from one actually under load, and would fabricate a plausible-sounding but ungrounded activity guess instead. `_format_active_state()` now includes `power` when present (Refs #224)
+
 ## 0.72.8 (2026-08-11)
 ### Hannah Core
 

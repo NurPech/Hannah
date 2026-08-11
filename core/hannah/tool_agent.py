@@ -423,4 +423,7 @@ class ToolAgent:
         color = current.get("color")
         if color:
             parts.append(f"Farbe {color}")
+        power = current.get("power")
+        if power is not None:
+            parts.append(f"{power}W")
         return ", ".join(parts) if parts else "aktiv"
