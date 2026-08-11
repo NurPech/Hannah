@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.72.3 (2026-08-11)
+### Satellite Firmware
+
+* Fixed: TDM mic array's ADAU7118 `DEC_RATIO` left at 64× while the raw capture rate was raised to 48kHz for beamforming (v0.72.0) — the ADAU7118 derives the PDM microphone clock automatically as `FSYNC × DEC_RATIO`, which computes to exactly 3.072MHz, the lower boundary of the SPH0641LU4H-1's "Ultrasonic Mode" per its datasheet (vs. 1.024MHz/"Standard Performance Mode" at the previous 16kHz rate). This silently switched the mics into a different electro-acoustic operating mode with its own, separately-specified frequency response, and is the likely root cause of a perceived audible-band quality regression ("sounds muffled") reported after v0.72.0 — confirmed present even in a single unsummed raw channel via the new `/debug/wav/raw`/`tdm_debug_raw_slot` diagnostics, ruling out the beamforming summation and the resample anti-aliasing filter as the cause. `DEC_RATIO` lowered to 32× (`48000×32=1.536MHz`, back within Standard Performance Mode) while keeping the 48kHz raw rate needed for beamforming delay resolution. Not yet verified on real hardware (Refs #222)
+
 ## 0.72.2 (2026-08-11)
 ### Satellite Firmware
 

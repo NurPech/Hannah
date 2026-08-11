@@ -372,8 +372,26 @@ static void IRAM_ATTR vol_down_isr_handler(void *arg)
  * driving the PDM microphone." Bei uns hängt DAT1 (MK2+MK4) aber real an
  * PDM_CLK1, nicht CLK0 — ein bisher unentdeckter Mismatch, plausibler
  * Root-Cause für die beobachtete (praktisch) Stille auf Kanal 2/3.
- * DEC_RATIO unverändert (0, passt zur aktuellen 16kHz-Ausgabe). */
-#define ADAU7118_DEC_RATIO_CLK_MAP_VALUE 0xE0  /* DAT1_CLK_MAP=1 (CLK1) korrigiert, Rest unverändert */
+ *
+ * DEC_RATIO auf 32× runtergesetzt (Refs #222, 2026-08-11, Audioqualitäts-
+ * Regression): der ADAU7118 leitet PDM_CLK automatisch aus FSYNC×DEC_RATIO
+ * ab (kein separates Register für den Mic-Takt). Bei 64× (Reset-Default)
+ * und der seit v0.72.0 auf 48kHz angehobenen TDM-Rohrate ergibt das
+ * 48000×64=3.072MHz — laut SPH0641LU4H-1-Datenblatt exakt die untere
+ * Grenze von dessen "Ultrasonic Mode" (3.072-4.8MHz), statt "Standard
+ * Performance Mode" (1.024-2.475MHz), in dem die Mics bei der alten 16kHz-
+ * Rate liefen (16000×64=1.024MHz, exakt dessen untere Grenze). Das
+ * Mikrofon hat für Ultrasonic Mode einen eigenen, separat spezifizierten
+ * Frequenzgang ("Typical Ultrasonic Response" vs. "Typical Free Field
+ * Response") — plausible Ursache für den gemessenen, bereits im
+ * unsummierten Einzelkanal vorhandenen Höhenverlust ("klingt wie ein
+ * Kassettenrekorder"). 32× bei 48kHz ergibt 48000×32=1.536MHz, wieder
+ * innerhalb Standard Performance Mode, ohne die 48kHz-Rohrate (nötig für
+ * die Beamforming-Verzögerungsauflösung) aufzugeben. Der eigene
+ * Decimation-Filter des ADAU7118 ist von DEC_RATIO praktisch unberührt
+ * (Passband-Spec 0.45×fS gilt unabhängig vom Ratio, viel Marge zu unserem
+ * 8kHz-Zielband). Noch nicht auf echter Hardware verifiziert. */
+#define ADAU7118_DEC_RATIO_CLK_MAP_VALUE 0xE1  /* DAT1_CLK_MAP=1 (CLK1, unverändert) | DEC_RATIO=32x (01) */
 
 /* SPT_CTRL1 (0x07): Bit6=TRI_STATE, Bit5:4=SLOT_WIDTH, Bit3:1=DATA_FORMAT,
  * Bit0=SAI_MODE. Reset-Default 0x41 hat SAI_MODE bereits auf TDM (Bit0=1) —
