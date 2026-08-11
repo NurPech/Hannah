@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.72.2 (2026-08-11)
+### Satellite Firmware
+
+* Added: `/debug/wav/raw` endpoint + WebUI link — captures the TDM beamformed signal *before* `hannah_resample_ctx()`/gain (48kHz), snapshotted from the same trigger as the existing `/debug/wav` capture so both WAVs cover the identical time window. For comparing the pre- and post-resample signal directly while investigating a perceived quality regression ("sounds muffled") introduced with v0.72.0's beamforming/resample pipeline (Refs #222)
+
 ## 0.72.1 (2026-08-11)
 ### Satellite Firmware
 

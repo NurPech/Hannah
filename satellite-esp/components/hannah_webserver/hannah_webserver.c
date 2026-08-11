@@ -402,6 +402,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
           "automatisch als WAV herunter, zum Offline-Testen des Wakeword-Modells. "
           "Nach Klick sofort sprechen.</p>"
         "<a class=btn href=/debug/wav/capture>Wakeword-Debug-Aufnahme starten</a>"
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+        "<p>TDM-Rohsignal derselben Aufnahme, vor Resample/Gain (Refs #222, 48kHz): "
+          "<a class=btn href=/debug/wav/raw>Herunterladen</a> "
+          "(erst oben eine Aufnahme starten, sonst 404)</p>"
+#endif
         "<script>"
         "async function scanWifi(){"
           "const sb=document.getElementById('sb');"
@@ -818,6 +823,28 @@ static esp_err_t debug_wav_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── Handler: GET /debug/wav/raw (Refs #222) ─────────────────────────────── */
+
+/* Gegenstück zu debug_wav_handler(): dasselbe Zeitfenster, aber das
+ * TDM-Signal vor Resample/Gain (48kHz) — zum Offline-Vergleich, ob ein
+ * Pegel-/Qualitätsverlust schon vor dem Downsample-Filter da ist. Kein
+ * eigener Capture-Trigger — /debug/wav/capture (oder die Vol+/Vol--
+ * Tastenkombi) füllt beide Snapshots gemeinsam. */
+static esp_err_t debug_wav_raw_handler(httpd_req_t *req)
+{
+    const uint8_t *buf;
+    size_t len;
+    if (!hannah_audio_get_debug_wav_raw(&buf, &len)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+            "Noch keine Aufnahme, oder kein TDM-Mikrofon (nur Rev.5+) — erst /debug/wav/capture auslösen.");
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, "audio/wav");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"wakeword_debug_raw.wav\"");
+    httpd_resp_send(req, (const char *)buf, (ssize_t)len);
+    return ESP_OK;
+}
+
 /* ── Handler: GET /debug/wav/capture (#194) ──────────────────────────────── */
 
 /* Remote-Gegenstück zur Vol+/Vol--Tastenkombi — ein einziger, blockierender
@@ -978,6 +1005,7 @@ void hannah_webserver_start(void)
         { .uri = "/log/clear", .method = HTTP_POST, .handler = log_clear_handler    },
         { .uri = "/log/last",  .method = HTTP_GET,  .handler = log_last_handler     },
         { .uri = "/debug/wav", .method = HTTP_GET,  .handler = debug_wav_handler    },
+        { .uri = "/debug/wav/raw", .method = HTTP_GET, .handler = debug_wav_raw_handler },
         { .uri = "/debug/wav/capture", .method = HTTP_GET, .handler = debug_wav_capture_handler },
         { .uri = "/nvs",       .method = HTTP_POST, .handler = nvs_post_handler     },
     };

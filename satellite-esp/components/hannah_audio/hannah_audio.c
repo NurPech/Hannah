@@ -98,6 +98,20 @@ static const char *TAG = "hannah_audio";
 #define DEBUG_WAV_HOLD_FRAMES     70  /* 70 × 10ms = 700ms */
 #define WAV_HEADER_BYTES          44
 
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+/* Zweiter Debug-Ringpuffer (Refs #222): fängt s_tdm_combined mit — das
+ * Delay-and-Sum-Ergebnis bei TDM_RAW_SAMPLE_RATE (48kHz), *vor*
+ * hannah_resample_ctx()/Gain. Gleicher Trigger wie der bestehende
+ * 16kHz-Ringpuffer (debug_wav_snapshot() friert beide im selben Aufruf ein),
+ * also garantiert dasselbe Zeitfenster — zum direkten Vergleich "vor/nach
+ * Resample" ohne separate Aufnahmen abgleichen zu müssen (2026-08-11:
+ * gemutmaßte Kammfilterung durch Verzögerungs-Quantisierung ließ sich nicht
+ * bestätigen, echter Pegelverlust im Vergleich zu einer alten
+ * Nicht-TDM-Aufnahme aber schon — dieser Puffer soll klären, ob der Verlust
+ * schon vor dem Resample-Filter da ist oder erst durch ihn entsteht). */
+#define DEBUG_WAV_RING_SAMPLES_RAW (TDM_RAW_SAMPLE_RATE * DEBUG_WAV_CAPTURE_SECONDS)
+#endif
+
 /* Remote-Trigger (#194): kein Loslassen-Event wie bei der Tastenkombi, daher
  * fixes Sprechfenster nach Aufruf. 350 Frames = 3.5s, bewusst etwas unter
  * DEBUG_WAV_CAPTURE_SECONDS (4s) — die Aufnahme soll komplett im Ringpuffer
@@ -268,6 +282,16 @@ static uint32_t   s_debug_ring_frame_no = 0;
 static bool        s_debug_ring_full     = false;
 static uint8_t   *s_debug_wav_snapshot = NULL;
 static volatile size_t s_debug_wav_len = 0;
+
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+/* Pre-Resample-Gegenstück (Refs #222) — s. DEBUG_WAV_RING_SAMPLES_RAW. Gleiche
+ * Zugriffsregeln wie s_debug_ring/s_debug_wav_snapshot oben. */
+static int16_t  *s_debug_ring_raw          = NULL;
+static size_t     s_debug_ring_raw_wp       = 0;
+static bool        s_debug_ring_raw_full     = false;
+static uint8_t   *s_debug_wav_raw_snapshot = NULL;
+static volatile size_t s_debug_wav_raw_len = 0;
+#endif
 
 /* Remote-Trigger (#194) — s_debug_wav_remote_trigger wird vom Webserver-Task
  * gesetzt, ausschließlich vom mic_task wieder auf false gesetzt (einfaches
@@ -593,14 +617,13 @@ static esp_err_t speaker_init(void)
 
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
 /* Schreibt einen kompletten 44-Byte-RIFF/WAV-Header (16-bit PCM mono) nach *p. */
-static void write_wav_header(uint8_t *p, uint32_t pcm_bytes)
+static void write_wav_header(uint8_t *p, uint32_t pcm_bytes, uint32_t rate)
 {
     uint32_t riff_len   = 36 + pcm_bytes;
     uint32_t fmt_len    = 16;
     uint16_t audio_fmt  = 1;   /* PCM */
     uint16_t channels   = 1;
-    uint32_t rate       = SAMPLE_RATE;
-    uint32_t byte_rate  = SAMPLE_RATE * 2;
+    uint32_t byte_rate  = rate * 2;
     uint16_t block_align = 2;
     uint16_t bits       = 16;
 
@@ -639,8 +662,27 @@ static void debug_wav_snapshot(void)
         memcpy(pcm_out, s_debug_ring, pcm_bytes);
     }
 
-    write_wav_header(s_debug_wav_snapshot, (uint32_t)pcm_bytes);
+    write_wav_header(s_debug_wav_snapshot, (uint32_t)pcm_bytes, SAMPLE_RATE);
     s_debug_wav_len = WAV_HEADER_BYTES + pcm_bytes;
+
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+    if (s_debug_ring_raw && s_debug_wav_raw_snapshot) {
+        size_t samples_raw   = s_debug_ring_raw_full ? DEBUG_WAV_RING_SAMPLES_RAW : s_debug_ring_raw_wp;
+        size_t pcm_bytes_raw = samples_raw * 2;
+        uint8_t *pcm_out_raw = s_debug_wav_raw_snapshot + WAV_HEADER_BYTES;
+
+        if (s_debug_ring_raw_full) {
+            size_t tail = DEBUG_WAV_RING_SAMPLES_RAW - s_debug_ring_raw_wp;
+            memcpy(pcm_out_raw,            s_debug_ring_raw + s_debug_ring_raw_wp, tail * 2);
+            memcpy(pcm_out_raw + tail * 2, s_debug_ring_raw,                       s_debug_ring_raw_wp * 2);
+        } else {
+            memcpy(pcm_out_raw, s_debug_ring_raw, pcm_bytes_raw);
+        }
+
+        write_wav_header(s_debug_wav_raw_snapshot, (uint32_t)pcm_bytes_raw, TDM_RAW_SAMPLE_RATE);
+        s_debug_wav_raw_len = WAV_HEADER_BYTES + pcm_bytes_raw;
+    }
+#endif
 }
 #endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 #endif /* !CONFIG_HANNAH_MIC_TYPE_NONE */
@@ -651,6 +693,19 @@ bool hannah_audio_get_debug_wav(const uint8_t **out_buf, size_t *out_len)
     size_t len = s_debug_wav_len;
     if (!s_debug_wav_snapshot || len == 0) return false;
     *out_buf = s_debug_wav_snapshot;
+    *out_len = len;
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool hannah_audio_get_debug_wav_raw(const uint8_t **out_buf, size_t *out_len)
+{
+#if CONFIG_HANNAH_WAKEWORD_DEBUG && CONFIG_HANNAH_MIC_TYPE_TDM
+    size_t len = s_debug_wav_raw_len;
+    if (!s_debug_wav_raw_snapshot || len == 0) return false;
+    *out_buf = s_debug_wav_raw_snapshot;
     *out_len = len;
     return true;
 #else
@@ -837,6 +892,20 @@ static void mic_task(void *arg)
             }
         }
         tdm_beam_save_history(s16);
+
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+        /* Pre-Resample-Debug-Ringpuffer (Refs #222, s. DEBUG_WAV_RING_SAMPLES_RAW):
+         * exakt das Signal, das gleich in hannah_resample_ctx() reingeht. */
+        if (s_debug_ring_raw) {
+            for (size_t i = 0; i < raw_frames; i++) {
+                s_debug_ring_raw[s_debug_ring_raw_wp] = s_tdm_combined[i];
+                if (++s_debug_ring_raw_wp >= DEBUG_WAV_RING_SAMPLES_RAW) {
+                    s_debug_ring_raw_wp   = 0;
+                    s_debug_ring_raw_full = true;
+                }
+            }
+        }
+#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
         hannah_resample_ctx(&s_tdm_resample_ctx, s_tdm_combined, (int)raw_frames,
                              TDM_RAW_SAMPLE_RATE, mono, STEP_SAMPLES, SAMPLE_RATE);
@@ -1306,6 +1375,16 @@ void hannah_audio_init(void)
         WAV_HEADER_BYTES + DEBUG_WAV_RING_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_debug_ring || !s_debug_wav_snapshot)
         ESP_LOGE(TAG, "Debug-WAV-Puffer: PSRAM-Allokation fehlgeschlagen — /debug/wav bleibt leer.");
+
+#if CONFIG_HANNAH_MIC_TYPE_TDM
+    /* Pre-Resample-Gegenstück (Refs #222, s. DEBUG_WAV_RING_SAMPLES_RAW). */
+    s_debug_ring_raw = (int16_t *)heap_caps_malloc(
+        DEBUG_WAV_RING_SAMPLES_RAW * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_debug_wav_raw_snapshot = (uint8_t *)heap_caps_malloc(
+        WAV_HEADER_BYTES + DEBUG_WAV_RING_SAMPLES_RAW * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_debug_ring_raw || !s_debug_wav_raw_snapshot)
+        ESP_LOGE(TAG, "Debug-WAV-Rohpuffer: PSRAM-Allokation fehlgeschlagen — /debug/wav/raw bleibt leer.");
+#endif
 #endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 #endif
 

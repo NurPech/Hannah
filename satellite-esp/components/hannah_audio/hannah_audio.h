@@ -73,6 +73,14 @@ void hannah_audio_reinit_after_ota_failure(void);
  * mit. Liefert false, wenn seit Boot noch keine Aufnahme ausgelöst wurde. */
 bool hannah_audio_get_debug_wav(const uint8_t **out_buf, size_t *out_len);
 
+/* Debug (Refs #222): Gegenstück zu hannah_audio_get_debug_wav(), aber das
+ * Signal *vor* hannah_resample_ctx()/Gain (TDM_RAW_SAMPLE_RATE, also bei
+ * TDM 48kHz statt 16kHz) — vom selben Trigger im selben Moment eingefroren,
+ * zum direkten Vergleich vor/nach dem Downsample-Filter. Nur unter
+ * CONFIG_HANNAH_MIC_TYPE_TDM verfügbar (PDM/I2S haben keinen separaten
+ * Pre-Resample-Schritt), liefert sonst immer false. */
+bool hannah_audio_get_debug_wav_raw(const uint8_t **out_buf, size_t *out_len);
+
 /* Debug (#194): löst denselben Snapshot wie die Vol+/Vol--Tastenkombi aus,
  * aber remote (z.B. per Webserver-Endpoint) statt per physischem Tastendruck
  * — für Tests aus normalem Nutzungsabstand, wo man nicht gleichzeitig die
