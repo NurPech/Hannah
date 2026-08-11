@@ -142,6 +142,25 @@ class UDPServer:
         if self._watchdog_thread:
             self._watchdog_thread.join(timeout=2)
             self._watchdog_thread = None
+        # _watchdog_loop stirbt mit self._running=False sofort mit — _check_heartbeats()
+        # läuft danach nie wieder, damit würde jeder zu diesem Zeitpunkt registrierte
+        # Satellit für immer als "verbunden" hängen bleiben (GetSatellites() mischt
+        # registered_devices_full() unbesehen in den Live-Status). Das passiert praktisch
+        # dauerhaft: sobald irgendein Proxy verbunden ist, wird der UDP-Server disabled
+        # (s. disable_udp in main.py) und bleibt es i.d.R. auch — jeder Satellit, der
+        # jemals auch nur kurz direkt per UDP registriert war, würde sonst als
+        # unsterblicher Geist-Eintrag bestehen bleiben, unabhängig davon, was der
+        # Proxy-Pfad für ihn später korrekt meldet (beobachtet 2026-08-11: ein Satellit
+        # zeigte Stunden nach einer sauber geloggten Proxy-Abmeldung weiterhin als
+        # "online", weil dieser alte Direkt-UDP-Eintrag nie geräumt wurde).
+        had_satellites = False
+        with self._lock:
+            had_satellites = bool(self._satellites)
+            self._satellites.clear()
+        if had_satellites and self._on_satellite_change:
+            threading.Thread(
+                target=self._on_satellite_change, args=({},), daemon=True
+            ).start()
         log.info("UDP-Server gestoppt.")
 
     # ------------------------------------------------------------------

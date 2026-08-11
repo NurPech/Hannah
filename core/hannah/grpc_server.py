@@ -1086,7 +1086,28 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             if paired:
                 log.info("Satellite %s paired", device)
             else:
-                log.warning("Satellite %s: seed not found, proceeding without pairing", device)
+                # Seed nicht (mehr) in der DB — meist kein echter Fehler: die
+                # "paired"-Bestätigung an den Satelliten läuft über ein einzelnes,
+                # unbestätigtes UDP-Paket (Proxy → Satellit, s. SendPaired()); geht
+                # das verloren, löscht der Satellit seinen lokal gespeicherten Seed
+                # nie und schickt ihn bei jedem künftigen Neustart erneut mit, obwohl
+                # die eigentliche Pairing bereits (beim allerersten Mal) erfolgreich
+                # war und die device_id längst korrekt verknüpft ist. Ohne diese
+                # Unterscheidung loggt das bei jedem Neustart fälschlich eine
+                # WARNING, obwohl der Satellit ganz normal funktioniert (Refs
+                # #222-Nebenfund, 2026-08-11). already_paired treat als Erfolg,
+                # damit der Proxy die (jetzt verspätete) Bestätigung sendet und der
+                # Satellit seinen alten Seed endlich los wird (self-healing).
+                # get_satellite() findet jetzt immer eine Zeile (self._upsert_satellite()
+                # oben legt sie notfalls an) — das eigentliche Signal ist paired_at, das
+                # ausschließlich pair_satellite() bei erfolgreichem Pairing setzt.
+                sat = self._satellite_manager.get_satellite(device)
+                already_paired = bool(sat and sat.paired_at)
+                if already_paired:
+                    log.info("Satellite %s: seed already consumed, satellite already paired — resending confirmation", device)
+                    paired = True
+                else:
+                    log.warning("Satellite %s: seed not found, proceeding without pairing", device)
 
         room_id = self._resolve_satellite_room(device) or ""
         if not room_id:

@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.72.8 (2026-08-11)
+### Hannah Core
+
+* Fixed: a satellite that disconnected while never having gone through the direct-UDP registration path stayed listed as "online" indefinitely — `udp_server.py`'s `stop()` (called whenever any proxy connects, i.e. essentially always) closed sockets/threads but never cleared its `_satellites` dict, and its own 30s heartbeat-timeout watchdog dies with it — so a satellite that was ever directly UDP-registered even once became a permanent ghost entry, independent of what the (correctly-working) proxy path later reported for the same device. `stop()` now clears the dict and notifies subscribers (Refs #223)
+* Fixed: satellites logged a `WARNING: seed not found, proceeding without pairing` on every restart despite being fully paired and working correctly — the one-shot "paired" confirmation from Core back to the satellite travels over an unacknowledged UDP packet; if it's ever lost, the satellite never clears its locally-stored pairing seed and keeps re-sending it forever. `NotifySatelliteRegistered` now recognizes this case (seed lookup fails but the device already has `paired_at` set) as a harmless stale resend — logs at INFO instead of WARNING and still confirms "paired" back to the proxy so the satellite finally clears its stale seed (Refs #223)
+
 ## 0.72.7 (2026-08-11)
 ### Satellite Firmware
 
