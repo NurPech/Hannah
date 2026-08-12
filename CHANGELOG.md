@@ -5,6 +5,12 @@
 -->
 
 
+
+## 0.73.0 (2026-08-12)
+### Hannah Core
+
+* Added: `ListActivityLog`/`StreamActivityAudio` gRPC RPCs — external consumers (WebUI) can now read the Activity Log (#220) directly: transcript, intent + intent_meta, answer text via cursor-paginated `ListActivityLog`, and the associated recording via `StreamActivityAudio` (decoded server-side from the stored WAV, streamed as raw PCM chunks — no WebUI filesystem access to Core needed). Access is enforced server-side per `requestor_id`: trust level < 10 only sees its own entries — either directly attributed (`user_id`), or via a satellite it owns, as long as that entry isn't already attributed to someone else. Trust level 10 sees everything by default and can narrow to one user via `filter_user_id` (`ActivityLogManager`, `core/hannah/activity_log.py`). Refs #228
+
 ## 0.72.9 (2026-08-11)
 ### Hannah Core
 

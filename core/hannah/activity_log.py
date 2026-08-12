@@ -70,3 +70,104 @@ def log_activity(
         log.warning(f"[activity_log] Schreiben fehlgeschlagen: {e}")
     finally:
         db.close()
+
+
+class ActivityLogManager:
+    """Auth-geprüfter Lesezugriff aufs Activity Log für externe gRPC-Consumer (WebUI, #228).
+    log_activity()/save_audio_wav() oben bleiben unverändert — das ist der Fire-and-forget-
+    Schreibpfad aus der Pipeline, hier geht's nur um den Read-Pfad."""
+
+    _AUDIO_CHUNK_BYTES = 8000  # ~250ms PCM bei 16kHz/16-bit mono
+    _DEFAULT_PAGE_SIZE = 50
+    _MAX_PAGE_SIZE = 200
+
+    def __init__(self, user_manager):
+        self._user_manager = user_manager
+
+    def _trust_level(self, user_id) -> int:
+        user = self._user_manager.get_user_by_id(user_id) if user_id else None
+        return user.trust_level if user else 0
+
+    def _owned_device_ids(self, user_id) -> list:
+        user = self._user_manager.get_user_by_id(user_id) if user_id else None
+        return [s.device_id for s in user.satellites] if user else []
+
+    def _apply_visibility(self, query, target_user_id: int):
+        """Beschränkt query auf Einträge, die target_user_id sehen darf: direkt zugeordnet
+        (user_id), oder über einen ihr gehörenden Satelliten, sofern der Eintrag noch
+        keinem anderen User zugeordnet ist. Spiegelt _is_visible() unten — beide Stellen
+        müssen bei Änderungen an der Zugriffsregel synchron bleiben."""
+        device_ids = self._owned_device_ids(target_user_id)
+        if device_ids:
+            placeholders = ", ".join(["?"] * len(device_ids))
+            clause = (
+                "(user_id = ? OR (channel_type = 'satellite' "
+                f"AND channel_id IN ({placeholders}) AND (user_id IS NULL OR user_id = ?)))"
+            )
+            params = [target_user_id, *device_ids, target_user_id]
+        else:
+            clause = "user_id = ?"
+            params = [target_user_id]
+        return query.where(clause, *params)
+
+    def _is_visible(self, entry: ActivityLog, user_id) -> bool:
+        """Einzeleintrags-Variante derselben Regel wie _apply_visibility(), für den
+        Audio-Stream-Zugriff (dort steht schon eine geladene Row bereit, keine neue Query
+        nötig) — muss aber trotzdem unabhängig vom "darf grundsätzlich listen" geprüft
+        werden, sonst wäre eine erratene activity_log_id ausreichend."""
+        if entry.user_id:
+            return int(entry.user_id) == int(user_id)
+        if entry.channel_type != "satellite":
+            return False
+        return entry.channel_id in self._owned_device_ids(user_id)
+
+    def list_activity(self, requestor_id, filter_user_id, page_size, before_id):
+        """Gibt (entries: list[dict], has_more: bool) zurück. entries sind ActivityLog.to_dict()."""
+        db = get_activity_db()
+        if db is None:
+            return [], False
+        try:
+            trust = self._trust_level(requestor_id)
+            if trust >= 10:
+                target_user_id = filter_user_id or None
+            else:
+                target_user_id = requestor_id
+
+            query = ActivityLog.select(db)
+            if target_user_id is not None:
+                query = self._apply_visibility(query, target_user_id)
+            if before_id:
+                query = query.where("id < ?", before_id)
+
+            size = max(1, min(page_size or self._DEFAULT_PAGE_SIZE, self._MAX_PAGE_SIZE))
+            rows = query.order_by("id DESC").limit(size + 1).all()
+            has_more = len(rows) > size
+            return [r.to_dict() for r in rows[:size]], has_more
+        finally:
+            db.close()
+
+    def get_audio_chunks(self, requestor_id, activity_log_id):
+        """Gibt eine Liste von (pcm_bytes, sample_rate)-Tupeln zurück, oder None wenn der
+        Eintrag nicht existiert/kein Audio hat/requestor_id nicht berechtigt ist."""
+        db = get_activity_db()
+        try:
+            entry = ActivityLog.get(db, id=activity_log_id)
+        finally:
+            db.close()
+
+        if not entry or not entry.audio_path:
+            return None
+        if self._trust_level(requestor_id) < 10 and not self._is_visible(entry, requestor_id):
+            return None
+        return self._read_wav_chunks(entry.audio_path)
+
+    def _read_wav_chunks(self, path: str):
+        with wave.open(path, "rb") as w:
+            sample_rate = w.getframerate()
+            sampwidth = w.getsampwidth()
+            frames_per_chunk = max(1, self._AUDIO_CHUNK_BYTES // sampwidth)
+            while True:
+                frames = w.readframes(frames_per_chunk)
+                if not frames:
+                    break
+                yield frames, sample_rate

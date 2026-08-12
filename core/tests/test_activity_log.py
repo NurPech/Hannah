@@ -88,3 +88,210 @@ class TestLogActivity:
         monkeypatch.setattr(activity_log, "get_activity_db", lambda: closed_db)
 
         activity_log.log_activity(channel_type="satellite", raw_text="x", answer_text="y")
+
+
+def _seed(db, **kwargs):
+    defaults = dict(
+        channel_type="grpc_text", channel_id="", user_id=None,
+        raw_text="hi", answer_text="ok",
+    )
+    defaults.update(kwargs)
+    return ActivityLog.create(db, **defaults)
+
+
+class _FakeSatellite:
+    def __init__(self, device_id):
+        self.device_id = device_id
+
+
+class _FakeUser:
+    def __init__(self, id, trust_level, satellites=()):
+        self.id = id
+        self.trust_level = trust_level
+        self.satellites = list(satellites)
+
+
+class _FakeUserManager:
+    """Stellt nur die zwei Methoden bereit, die ActivityLogManager tatsächlich braucht —
+    kein echtes hannah.db/SatelliteManager-Setup nötig für diese Tests."""
+
+    def __init__(self, users):
+        self._users = {u.id: u for u in users}
+
+    def get_user_by_id(self, user_id):
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            return None
+        return self._users.get(user_id)
+
+
+class TestActivityLogManagerListActivity:
+    def test_own_direct_entries_visible(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        _seed(db, user_id=1)
+        db.close()
+
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([_FakeUser(1, trust_level=0)]))
+        entries, has_more = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=10, before_id=0)
+
+        assert len(entries) == 1
+        assert has_more is False
+
+    def test_other_users_direct_entry_invisible(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        _seed(db, user_id=2)
+        db.close()
+
+        mgr = activity_log.ActivityLogManager(
+            _FakeUserManager([_FakeUser(1, trust_level=0), _FakeUser(2, trust_level=0)])
+        )
+        entries, _ = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=10, before_id=0)
+
+        assert entries == []
+
+    def test_satellite_owner_fallback_visible_when_unattributed(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        _seed(db, channel_type="satellite", channel_id="dev1", user_id=None)
+        db.close()
+
+        owner = _FakeUser(1, trust_level=0, satellites=[_FakeSatellite("dev1")])
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([owner]))
+        entries, _ = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=10, before_id=0)
+
+        assert len(entries) == 1
+
+    def test_satellite_owner_fallback_hidden_once_attributed_to_other_user(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        _seed(db, channel_type="satellite", channel_id="dev1", user_id=2)
+        db.close()
+
+        owner = _FakeUser(1, trust_level=0, satellites=[_FakeSatellite("dev1")])
+        other = _FakeUser(2, trust_level=0)
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([owner, other]))
+        entries, _ = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=10, before_id=0)
+
+        assert entries == []
+
+    def test_satellite_fallback_does_not_apply_to_non_satellite_channels(self, tmp_path, monkeypatch):
+        """Regel (b) gilt nur für channel_type='satellite' — Telegram trägt user_id
+        immer direkt, andere Kanäle senden per Design kein Audio (siehe Plan)."""
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        _seed(db, channel_type="telegram", channel_id="dev1", user_id=None)
+        db.close()
+
+        owner = _FakeUser(1, trust_level=0, satellites=[_FakeSatellite("dev1")])
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([owner]))
+        entries, _ = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=10, before_id=0)
+
+        assert entries == []
+
+    def test_trust10_sees_everything_by_default(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        _seed(db, user_id=1)
+        _seed(db, user_id=2)
+        db.close()
+
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([_FakeUser(99, trust_level=10)]))
+        entries, _ = mgr.list_activity(requestor_id=99, filter_user_id=0, page_size=10, before_id=0)
+
+        assert len(entries) == 2
+
+    def test_trust10_filter_user_id_applies_same_fallback_logic(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        _seed(db, channel_type="satellite", channel_id="dev1", user_id=None)  # sichtbar via Ziel-Users Satelliten-Fallback
+        _seed(db, user_id=2)  # gehört einem anderen User, nicht dem Ziel
+        db.close()
+
+        target = _FakeUser(1, trust_level=0, satellites=[_FakeSatellite("dev1")])
+        admin = _FakeUser(99, trust_level=10)
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([admin, target]))
+        entries, _ = mgr.list_activity(requestor_id=99, filter_user_id=1, page_size=10, before_id=0)
+
+        assert len(entries) == 1
+        assert entries[0]["channel_id"] == "dev1"
+
+    def test_pagination_cursor_and_has_more(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        ids = [_seed(db, user_id=1).id for _ in range(5)]
+        db.close()
+
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([_FakeUser(1, trust_level=0)]))
+
+        page1, more1 = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=2, before_id=0)
+        assert [e["id"] for e in page1] == sorted(ids, reverse=True)[:2]
+        assert more1 is True
+
+        page2, more2 = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=2, before_id=page1[-1]["id"])
+        assert len(page2) == 2
+        assert more2 is True
+
+        page3, more3 = mgr.list_activity(requestor_id=1, filter_user_id=0, page_size=2, before_id=page2[-1]["id"])
+        assert len(page3) == 1
+        assert more3 is False
+
+
+class TestActivityLogManagerAudio:
+    def test_get_audio_chunks_returns_none_when_unauthorized(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        row = _seed(db, user_id=2, audio_path="/does/not/matter")
+        db.close()
+
+        mgr = activity_log.ActivityLogManager(
+            _FakeUserManager([_FakeUser(1, trust_level=0), _FakeUser(2, trust_level=0)])
+        )
+
+        assert mgr.get_audio_chunks(requestor_id=1, activity_log_id=row.id) is None
+
+    def test_get_audio_chunks_returns_none_without_audio(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        db = Database.sqlite(path)
+        row = _seed(db, user_id=1, audio_path=None)
+        db.close()
+
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([_FakeUser(1, trust_level=0)]))
+
+        assert mgr.get_audio_chunks(requestor_id=1, activity_log_id=row.id) is None
+
+    def test_get_audio_chunks_streams_pcm_for_authorized_entry(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        activity_log.configure(str(tmp_path / "audio"))
+        audio = np.zeros(1600, dtype=np.float32)
+        wav_path = activity_log.save_audio_wav(audio, 16000, "test-entry")
+
+        db = Database.sqlite(path)
+        row = _seed(db, user_id=1, audio_path=wav_path)
+        db.close()
+
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([_FakeUser(1, trust_level=0)]))
+        chunks = list(mgr.get_audio_chunks(requestor_id=1, activity_log_id=row.id))
+
+        assert chunks
+        pcm, sample_rate = chunks[0]
+        assert sample_rate == 16000
+        assert isinstance(pcm, bytes)
+
+    def test_get_audio_chunks_via_satellite_owner_fallback(self, tmp_path, monkeypatch):
+        path = _sqlite_activity_db(tmp_path, monkeypatch)
+        activity_log.configure(str(tmp_path / "audio"))
+        audio = np.zeros(1600, dtype=np.float32)
+        wav_path = activity_log.save_audio_wav(audio, 16000, "test-entry-2")
+
+        db = Database.sqlite(path)
+        row = _seed(db, channel_type="satellite", channel_id="dev1", user_id=None, audio_path=wav_path)
+        db.close()
+
+        owner = _FakeUser(1, trust_level=0, satellites=[_FakeSatellite("dev1")])
+        mgr = activity_log.ActivityLogManager(_FakeUserManager([owner]))
+
+        chunks = list(mgr.get_audio_chunks(requestor_id=1, activity_log_id=row.id))
+        assert chunks

@@ -103,6 +103,7 @@ def main():
     activity_log_cfg = cfg.get("activity_log", {})
     activity_log.configure(activity_log_cfg.get("audio_dir", "activity_audio"))
     init_activity_db(activity_log_cfg)
+    activity_log_manager = activity_log.ActivityLogManager(_user_manager)
 
     def _resolve_roomie_id(speaker_user_id: str) -> str:
         """Löst eine Hannah-User-ID auf die verlinkte ioBroker-Roomie-ID auf (sofern verlinkt).
@@ -1639,6 +1640,8 @@ def main():
         on_automation_register=lambda automation: [
             u.id for u in _user_manager.get_users_with_automation_enabled(automation)
         ],
+        list_activity=activity_log_manager.list_activity,
+        stream_activity_audio=activity_log_manager.get_audio_chunks,
     )
 
     iobroker.set_setter(grpc_servicer.agent_set_state)

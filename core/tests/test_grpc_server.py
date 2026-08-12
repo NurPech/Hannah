@@ -15,7 +15,7 @@ from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
 from hannah.weather import WeatherCache
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest
 from hannah.satellite_manager import SatellitePermissionError
 
 def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
@@ -1238,3 +1238,67 @@ def test_delete_timer_pushes_cancel_command():
     assert response.ok is True
     cmd = servicer._timer_queue.get_nowait()
     assert cmd.cancel.timer_id == "a"
+
+
+class TestActivityLogRpcs:
+    """#228 — reine Verdrahtung auf ActivityLogManager (Auth-Logik dort getestet,
+    siehe test_activity_log.py); hier nur die pb-Mapping/Fehlerpfad-Verdrahtung."""
+
+    def test_list_activity_log_maps_manager_result_to_pb(self):
+        entries = [{
+            "id": 1, "ts": "2026-08-12 10:00:00", "channel_type": "satellite", "channel_id": "dev1",
+            "user_id": 1, "raw_text": "Mach das Licht an", "intent_name": "TurnOn",
+            "intent_meta": {"device": "Licht"}, "answer_text": "OK.", "audio_path": "/tmp/x.wav",
+        }]
+        list_activity = MagicMock(return_value=(entries, True))
+        servicer = HannahServicer(
+            user_manager=MagicMock(), satellite_manager=MagicMock(), handle_text=MagicMock(),
+            handle_voice=MagicMock(), announce=MagicMock(), notificate=MagicMock(),
+            get_satellites=MagicMock(), get_car_state=MagicMock(), list_activity=list_activity,
+        )
+
+        response = servicer.ListActivityLog(
+            ListActivityLogRequest(requestor_id=1, filter_user_id=0, page_size=10, before_id=0), MagicMock()
+        )
+
+        list_activity.assert_called_once_with(1, 0, 10, 0)
+        assert response.has_more is True
+        assert len(response.entries) == 1
+        entry = response.entries[0]
+        assert entry.id == 1
+        assert entry.intent_name == "TurnOn"
+        assert json.loads(entry.intent_meta_json) == {"device": "Licht"}
+        assert entry.has_audio is True
+
+    def test_stream_activity_audio_yields_chunks(self):
+        stream_activity_audio = MagicMock(return_value=iter([(b"abc", 16000), (b"def", 16000)]))
+        servicer = HannahServicer(
+            user_manager=MagicMock(), satellite_manager=MagicMock(), handle_text=MagicMock(),
+            handle_voice=MagicMock(), announce=MagicMock(), notificate=MagicMock(),
+            get_satellites=MagicMock(), get_car_state=MagicMock(),
+            stream_activity_audio=stream_activity_audio,
+        )
+
+        chunks = list(servicer.StreamActivityAudio(
+            StreamActivityAudioRequest(requestor_id=1, activity_log_id=42), MagicMock()
+        ))
+
+        stream_activity_audio.assert_called_once_with(1, 42)
+        assert [c.pcm for c in chunks] == [b"abc", b"def"]
+        assert all(c.sample_rate == 16000 for c in chunks)
+
+    def test_stream_activity_audio_denies_when_manager_returns_none(self):
+        servicer = HannahServicer(
+            user_manager=MagicMock(), satellite_manager=MagicMock(), handle_text=MagicMock(),
+            handle_voice=MagicMock(), announce=MagicMock(), notificate=MagicMock(),
+            get_satellites=MagicMock(), get_car_state=MagicMock(),
+            stream_activity_audio=MagicMock(return_value=None),
+        )
+        context = MagicMock()
+
+        chunks = list(servicer.StreamActivityAudio(
+            StreamActivityAudioRequest(requestor_id=1, activity_log_id=42), context
+        ))
+
+        assert chunks == []
+        context.set_code.assert_called_once()

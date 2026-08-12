@@ -163,6 +163,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         delete_car: Optional[Callable[[int], bool]] = None,                      # (id) → bool
         get_residents: Optional[Callable[[], list]] = None,                      # () → [Resident]
         on_automation_register: Optional[Callable[[str], list]] = None,          # (automation) → [user_id] currently enabled
+        list_activity: Optional[Callable[..., tuple]] = None,                    # (requestor_id, filter_user_id, page_size, before_id) → (list[dict], has_more)
+        stream_activity_audio: Optional[Callable[..., object]] = None,           # (requestor_id, activity_log_id) → Iterator[(pcm, sample_rate)] | None
     ):
         self._user_manager          = user_manager
         self._satellite_manager     = satellite_manager
@@ -234,6 +236,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._delete_car                = delete_car or (lambda *_: False)
         self._get_residents             = get_residents or (lambda: [])
         self._on_automation_register    = on_automation_register or (lambda _automation: [])
+        self._list_activity             = list_activity or (lambda *_: ([], False))
+        self._stream_activity_audio     = stream_activity_audio or (lambda *_: None)
 
         self._subscribers: list[_Subscriber] = []
         self._subs_lock = threading.Lock()
@@ -1703,6 +1707,24 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         )
         return pb.StatusResponse(ok=ok, message=msg)
 
+    def ListActivityLog(self, request, _context):
+        entries, has_more = self._list_activity(
+            request.requestor_id, request.filter_user_id, request.page_size, request.before_id
+        )
+        return pb.ListActivityLogResponse(
+            entries=[_activity_log_entry_to_pb(e) for e in entries],
+            has_more=has_more,
+        )
+
+    def StreamActivityAudio(self, request, context):
+        chunks = self._stream_activity_audio(request.requestor_id, request.activity_log_id)
+        if chunks is None:
+            context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+            context.set_details("Kein Zugriff auf dieses Activity-Log-Audio.")
+            return
+        for pcm, sample_rate in chunks:
+            yield pb.ActivityAudioChunk(pcm=pcm, sample_rate=sample_rate)
+
 
 # ------------------------------------------------------------------
 # Server lifecycle
@@ -1884,6 +1906,21 @@ def _setting_to_pb(s: dict) -> pb.Setting:
         category_id=s["category"],
         name=s["name"],
         value=json.dumps(s.get("value")),
+    )
+
+
+def _activity_log_entry_to_pb(e: dict) -> pb.ActivityLogEntry:
+    return pb.ActivityLogEntry(
+        id=e["id"],
+        ts=str(e.get("ts") or ""),
+        channel_type=e.get("channel_type") or "",
+        channel_id=e.get("channel_id") or "",
+        user_id=e.get("user_id") or 0,
+        raw_text=e.get("raw_text") or "",
+        intent_name=e.get("intent_name") or "",
+        intent_meta_json=json.dumps(e.get("intent_meta")) if e.get("intent_meta") else "",
+        answer_text=e.get("answer_text") or "",
+        has_audio=bool(e.get("audio_path")),
     )
 
 
