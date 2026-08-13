@@ -83,19 +83,27 @@ class Intent:
     candidates: list = field(default_factory=list)  # [(room_id, room_name), ...] bei Mehrdeutigkeit
     weekdays: list = field(default_factory=list)     # [0-6, ...] SetAlarm: erkannter Wochentag (max. 1)
     resolved_date: Optional[object] = None           # datetime.date; DeleteAlarm: konkretes Zieldatum
+    satellite_id: Optional[str] = None       # StartCapture/StopCapture: Ziel-Satellit (nie ein Raum), z.B. "Flur01"
+    capture_sample_type: Optional[str] = None  # StartCapture: "noise" | "hey_hannah"
+    capture_mode: Optional[str] = None         # StartCapture: "manual" | "ptt" | "plink" (nur bei hey_hannah)
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None and v != []}
 
 
 class NLU:
-    def __init__(self, cfg: dict, rooms: dict[str, str], devices: dict[str, dict]):
+    def __init__(self, cfg: dict, rooms: dict[str, str], devices: dict[str, dict],
+                 satellites: Optional[dict[str, str]] = None):
         """
-        rooms  : {room_key: display_name}   — aus IoBrokerClient.rooms
-        devices: {room_key: {device_key: Device}} — aus IoBrokerClient.devices
+        rooms     : {room_key: display_name}   — aus IoBrokerClient.rooms
+        devices   : {room_key: {device_key: Device}} — aus IoBrokerClient.devices
+        satellites: {device_id: display_name} — aus SatelliteManager.get_db_satellites();
+                    Satelliten sind kein Teil des Raum/Geräte-Grids und brauchen eigene
+                    Namensauflösung (StartCapture/StopCapture, #230)
         """
         self._rooms = rooms
         self._devices = devices
+        self._satellites = satellites or {}
         self._turn_on        = set(cfg.get("turn_on_words", []))
         self._turn_off       = set(cfg.get("turn_off_words", []))
         self._pct_units      = cfg.get("percentage_units", ["prozent", "%"])
@@ -167,7 +175,7 @@ class NLU:
 
         # Stop/Pause/Resume: Wiedergabe-Steuerung
         self._stop_words: set[str] = set(cfg.get("stop_words", [
-            "stopp", "stop", "aufhoeren", "aufhoer", "abbrechen",
+            "stopp", "stoppe", "stop", "aufhoeren", "aufhoer", "abbrechen",
         ]))
         self._pause_words: set[str] = set(cfg.get("pause_words", [
             "pause", "pausieren", "pausiere", "pausier",
@@ -207,6 +215,30 @@ class NLU:
         self._alarm_query_words: set[str] = set(cfg.get("alarm_query_words", [
             "welche", "welchen", "welchem", "was", "liste", "zeig", "zeige",
         ]))
+
+        # StartCapture/StopCapture (#230): "starte die Hintergrundaufnahme auf Flur01".
+        # _capture_context_words muss zusätzlich zu Start-/Stop-Wort vorhanden sein, sonst
+        # würde jedes "starte"/"stopp" mit erkanntem Satellitennamen als Capture-Befehl
+        # durchgehen. "hey"/"hannah" sind als Filler-Wörter bereits aus tokens entfernt
+        # (jede Äußerung beginnt damit) — "weckwort" statt "hey hannah" als Sample-Type-Wort.
+        self._capture_context_words: set[str] = set(cfg.get("capture_context_words", [
+            "aufnahme", "hintergrundaufnahme", "aufzeichnung", "capture",
+        ]))
+        self._capture_start_words: set[str] = set(cfg.get("capture_start_words", [
+            "starte", "start", "beginne", "beginn",
+        ]))
+        self._capture_noise_words: set[str] = set(cfg.get("capture_noise_words", [
+            "noise", "geraeusch", "geraeusche", "hintergrundgeraeusch", "hintergrundgeraeusche",
+        ]))
+        self._capture_heyhannah_words: set[str] = set(cfg.get("capture_heyhannah_words", [
+            "weckwort", "wakeword", "wecknamen",
+        ]))
+        self._capture_mode_words: dict[str, str] = cfg.get("capture_mode_words", {
+            "manuell": "manual",
+            "ptt":     "ptt",
+            "druecken": "ptt",
+            "plink":   "plink",
+        })
 
     def _split_compounds(self, text: str) -> str:
         """Trennt deutsche Komposita aus Raumteil + Kategorie.
@@ -249,6 +281,7 @@ class NLU:
 
         room_key, room_name, room_candidates = self._find_room(joined)
         _, device                            = self._find_device(joined, room_key)
+        satellite_id, satellite_name         = self._find_satellite(joined)
         action              = self._find_action(tokens)
         level               = self._find_level(normalized)
         temperature         = self._find_temperature(normalized)
@@ -269,6 +302,22 @@ class NLU:
         no_device_context = device is None and room_key is None and category_filter is None
         # Mehrdeutige Farbwörter (z.B. "weiß" = Verb) nur werten wenn Gerätekontext vorhanden
         color               = self._find_color(joined, require_context=no_device_context)
+
+        # StartCapture/StopCapture (#230): erkannter Satellit + Kontext-Wort ("Aufnahme"/...)
+        # sind beide Pflicht, sonst würde jedes bloße "starte"/"stopp" mit zufällig erkanntem
+        # Satellitennamen im Satz durchgehen.
+        _capture_context = bool(self._capture_context_words & norm_tokens)
+        is_capture_start = (
+            satellite_id is not None
+            and _capture_context
+            and bool(self._capture_start_words & norm_tokens)
+        )
+        is_capture_stop = (
+            satellite_id is not None
+            and _capture_context
+            and not is_capture_start
+            and bool(self._stop_words & norm_tokens)
+        )
 
         # CarQuery: Auto-Wörter ohne Geräte-/Raumbezug
 
@@ -324,6 +373,7 @@ class NLU:
             not is_car and not is_weather and not is_time and not is_date
             and not is_presence_away and not is_presence_home
             and not is_query and device is None
+            and not is_capture_stop
             and bool(self._stop_words & norm_tokens)
         )
         is_pause = (
@@ -408,6 +458,8 @@ class NLU:
             and not is_volume
             and not is_delete_alarm
             and not is_query_alarms
+            and not is_capture_start
+            and not is_capture_stop
             and (action is None or not _has_action_context)
             and level is None
             and temperature is None
@@ -423,6 +475,8 @@ class NLU:
         intent_label: Optional[str] = None
         intent_weekdays: list[int] = []
         intent_resolved_date: Optional[datetime.date] = None
+        intent_capture_sample_type: Optional[str] = None
+        intent_capture_mode: Optional[str] = None
 
         if is_car:
             car_scope = self._find_car_scope(norm_tokens)
@@ -438,6 +492,12 @@ class NLU:
             intent_name, value, unit = "SetPresence", "away", None
         elif is_presence_home:
             intent_name, value, unit = "SetPresence", "home", None
+        elif is_capture_start:
+            intent_name, value, unit = "StartCapture", None, None
+            intent_capture_sample_type = self._find_capture_sample_type(norm_tokens) or "noise"
+            intent_capture_mode = self._find_capture_mode(norm_tokens)
+        elif is_capture_stop:
+            intent_name, value, unit = "StopCapture", None, None
         elif is_stop:
             intent_name, value, unit = "StopIntent", None, None
         elif is_pause:
@@ -508,11 +568,42 @@ class NLU:
             candidates=room_candidates if _actionable else [],
             weekdays=intent_weekdays,
             resolved_date=intent_resolved_date,
+            satellite_id=satellite_id if intent_name in ("StartCapture", "StopCapture") else None,
+            capture_sample_type=intent_capture_sample_type,
+            capture_mode=intent_capture_mode,
         )
         log.debug(f"NLU: {intent}")
         return intent
 
     # ------------------------------------------------------------------
+
+    def _find_satellite(self, text: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Gibt (device_id, display_name) des im Text erwähnten Satelliten zurück,
+        oder (None, None). Längster Name-Match gewinnt — analog _find_room, aber
+        gegen Satelliten-Anzeigenamen statt Räume (eigenes Namens-Set, #230).
+        """
+        norm_text = _normalize(text)
+        best_id = best_name = None
+        best_len = 0
+        for device_id, name in self._satellites.items():
+            norm_name = _normalize(name)
+            if norm_name in norm_text and len(norm_name) > best_len:
+                best_id, best_name, best_len = device_id, name, len(norm_name)
+        return best_id, best_name
+
+    def _find_capture_sample_type(self, norm_tokens: set[str]) -> Optional[str]:
+        if norm_tokens & self._capture_noise_words:
+            return "noise"
+        if norm_tokens & self._capture_heyhannah_words:
+            return "hey_hannah"
+        return None
+
+    def _find_capture_mode(self, norm_tokens: set[str]) -> Optional[str]:
+        for token in norm_tokens:
+            if token in self._capture_mode_words:
+                return self._capture_mode_words[token]
+        return None
 
     def _find_room(self, text: str) -> tuple[Optional[str], Optional[str], list[tuple[str, str]]]:
         """

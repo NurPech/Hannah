@@ -176,7 +176,8 @@ def main():
     # kennt, statt nur über die NLU-Wortliste erreichbar zu sein (#138 Nachfassrunde).
     automation_words = settings_manager.get_settings_dict("automations")
     nlu_cfg["automation_words"] = automation_words
-    nlu = NLU(nlu_cfg, iobroker.rooms, iobroker.devices)
+    nlu = NLU(nlu_cfg, iobroker.rooms, iobroker.devices,
+              satellites={s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()})
     tts = TTS(cfg.get("tts", {}))
 
     llm = load_llm(cfg.get("llm", {}))
@@ -546,6 +547,30 @@ def main():
             active = intent.value == "on"
             _apply_global_mute(active)
             _feedback(device, True, "Mikrofone stumm." if active else "Mikrofone wieder aktiv.")
+        elif intent.name == "StartCapture":
+            target = intent.satellite_id
+            if not grpc_servicer.collector_connected():
+                _feedback(device, False, "Der Collector ist nicht erreichbar.")
+            else:
+                if target == device:
+                    # Self-Target-Race (#230): die einsetzende Sampling-Mode blockt den
+                    # Speaker — erst die eigene "ok"-Antwort fertig abspielen lassen,
+                    # bevor das Capture-Command an den Collector geht (Muster wie TriggerPlink).
+                    mqtt_handler.reset_playback_done(device)
+                    _feedback(device, True, "")
+                    if not mqtt_handler.wait_for_playback_done(device, timeout=3.0):
+                        log.warning(f"[{device}] Kein playback_done erhalten (alte Firmware?) — Fallback-Sleep")
+                        time.sleep(1.0)
+                else:
+                    _feedback(device, True, "")
+                _start_collector_capture(target, intent.capture_sample_type or "noise", intent.capture_mode)
+        elif intent.name == "StopCapture":
+            target = intent.satellite_id
+            if not grpc_servicer.collector_connected():
+                _feedback(device, False, "Der Collector ist nicht erreichbar.")
+            else:
+                _feedback(device, True, "")
+                _stop_collector_capture(target)
         elif intent.name == "Smalltalk":
             history = conv_ctx.get_llm_history(device)
             answer = llm.chat(text, system_prompt=prepare_prompt(llm_system_prompt, iobroker), history=history)
@@ -727,6 +752,20 @@ def main():
             active = intent.value == "on"
             _apply_global_mute(active)
             answer = "Mikrofone stumm." if active else "Mikrofone wieder aktiv."
+        elif intent.name == "StartCapture":
+            # Kein Self-Target-Race-Handling hier (anders als im UDP-Voice-Pfad oben) —
+            # dieser Text-in/Text-out-Pfad hat keine Kontrolle über TTS-Timing beim Aufrufer.
+            if not grpc_servicer.collector_connected():
+                answer = "Der Collector ist nicht erreichbar."
+            else:
+                _start_collector_capture(intent.satellite_id, intent.capture_sample_type or "noise", intent.capture_mode)
+                answer = "OK."
+        elif intent.name == "StopCapture":
+            if not grpc_servicer.collector_connected():
+                answer = "Der Collector ist nicht erreichbar."
+            else:
+                _stop_collector_capture(intent.satellite_id)
+                answer = "OK."
         elif intent.name == "SetAutomation":
             automation = intent.value.get("automation")
             enabled = intent.value.get("enabled", True)
@@ -939,6 +978,10 @@ def main():
             return
         _device_mute[device] = muted
         log.info(f"Mute {device}: {muted}")
+        # Physischer Mute-Taster als Stop-Trigger für eine laufende Collector-Capture (#230) —
+        # reine Einbahnstraße, Un-mute startet nichts automatisch neu.
+        if muted and grpc_servicer.is_captured(device):
+            _stop_collector_capture(device)
         all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}
         room = all_devices.get(device, "")
         display_name = satellite_manager.resolve_satellite_name(device) or ""
@@ -1092,6 +1135,7 @@ def main():
             grpc_servicer.agent_satellite_update(device_id, _prev_satellite_map.get(device_id, ""), "", False)
         _known_satellites = current
         _prev_satellite_map = dict(satellite_map)
+        nlu._satellites = {s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()}
     def _rephrase_text(text: str) -> str:
         """Lässt Hannah (LLM) einen Announcement-Text frei umformulieren.
         Gibt den Originaltext zurück wenn kein LLM verfügbar oder ein Fehler auftritt."""
@@ -1426,6 +1470,16 @@ def main():
             for d in targets:
                 _device_volume[d] = int(value)
                 mqtt_handler.publish_volume_set(d, int(value))
+        elif key == "capture":
+            # capture ist immer device_id-gebunden (nie Raum-Broadcast, #230) —
+            # targets ist hier trotzdem eine Liste, weil device_id oben nicht immer gesetzt sein muss.
+            for d in targets:
+                _send_capture_command(pb.CaptureCommand(
+                    device_id=d,
+                    sample_type=value.sample_type,
+                    capture_mode=value.capture_mode,
+                    stop=value.stop,
+                ))
         elif key in ("announcement", "announcement_ssml", "announcement_rephrase"):
             if tts.enabled:
                 text = str(value)
@@ -1492,6 +1546,37 @@ def main():
         _device_dnd[device_id] = enabled
         mqtt_handler.publish_sampling_mode(device_id, enabled, sample_type)
         log.info(f"[capture] Satellit '{device_id}' Capture-Modus: {'an' if enabled else 'aus'} type={sample_type} (DND={'an' if enabled else 'aus'})")
+
+    # ------------------------------------------------------------------
+    # Voice Collector Control (#230) — Hannah-initiierte Start/Stop-Befehle an den
+    # Collector über den CollectorConnect-Stream (nicht zu verwechseln mit dem
+    # bestehenden Collector-initiierten RequestSatelliteCapture-Pfad oben).
+
+    _CAPTURE_MODE_MAP = {
+        "manual": pb.CaptureMode.CAPTURE_MODE_MANUAL,
+        "ptt":    pb.CaptureMode.CAPTURE_MODE_PTT,
+        "plink":  pb.CaptureMode.CAPTURE_MODE_PLINK,
+    }
+
+    def _make_sample_type(sample_type: str) -> pb.SampleType:
+        if sample_type == "hey_hannah":
+            return pb.SampleType(hey_hannah=pb.HeyHannahSample())
+        return pb.SampleType(noise=pb.NoiseSample())
+
+    def _send_capture_command(cmd: pb.CaptureCommand) -> bool:
+        ok = grpc_servicer.collector_send_command(cmd)
+        log.info(f"[collector] {'Stop' if cmd.stop else 'Start'}-Command für '{cmd.device_id}': {'gesendet' if ok else 'Collector nicht verbunden'}")
+        return ok
+
+    def _start_collector_capture(device_id: str, sample_type: str, capture_mode: Optional[str] = None) -> bool:
+        return _send_capture_command(pb.CaptureCommand(
+            device_id=device_id,
+            sample_type=_make_sample_type(sample_type),
+            capture_mode=_CAPTURE_MODE_MAP.get(capture_mode, pb.CaptureMode.CAPTURE_MODE_UNSPECIFIED),
+        ))
+
+    def _stop_collector_capture(device_id: str) -> bool:
+        return _send_capture_command(pb.CaptureCommand(device_id=device_id, stop=True))
 
     def _on_trigger_plink(device_id: str, record_duration: float):
         import time

@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.73.2 (2026-08-13)
+### Hannah Core
+
+* Added: Hannah can now start/stop Voice Collector captures itself, instead of only reacting to Collector-initiated requests — new `CollectorConnect` stream (`grpc_server.py`, same pattern as `TimerConnect`) plus three trigger paths: voice command (`StartCapture`/`StopCapture` intent, `nlu.py`, always targets a satellite by name, never a room), ioBroker (`AgentSatelliteControl.capture`), and WebUI (new unary RPC `TriggerCollectorCapture`). If the Collector isn't connected, Hannah reports that back instead of queueing. When the start command is spoken through the very satellite being captured, Hannah waits for `playback_done` on its own "ok" response before forwarding the command (same pattern as `TriggerPlink`) — otherwise the incoming sampling mode would cut off its own reply. The physical mute button stops an active capture automatically (one-way — unmute never auto-resumes). `hannah-proto>=3.6.0` (Refs #230)
+
 ## 0.73.1 (2026-08-13)
 ### Hannah Core
 

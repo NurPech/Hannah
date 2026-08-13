@@ -266,6 +266,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._captured_satellites: dict[str, queue.Queue] = {}
         self._capture_lock = threading.Lock()
 
+        # Single queue for the connected Voice Collector (at most one at a time)
+        self._collector_queue: Optional[queue.Queue] = None
+        self._collector_lock = threading.Lock()
+
         # Per-connection subs for active AutomationConnect streams
         self._automation_subs: list[_AutomationSub] = []
         self._automation_lock = threading.Lock()
@@ -1691,6 +1695,75 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     self._captured_satellites.pop(device_id, None)
                     self._on_set_capture(device_id, False)
                     log.info(f"[grpc/capture] '{device_id}' auto-released nach Stream-Disconnect")
+
+    # ------------------------------------------------------------------
+    # Collector Control (Voice Collector, #230)
+
+    def collector_connected(self) -> bool:
+        """True if the Voice Collector's CollectorConnect stream is currently active."""
+        with self._collector_lock:
+            return self._collector_queue is not None
+
+    def collector_send_command(self, cmd: pb.CaptureCommand) -> bool:
+        """Push a CaptureCommand to the connected Collector. False if not connected."""
+        with self._collector_lock:
+            if self._collector_queue is None:
+                return False
+            self._collector_queue.put(cmd)
+        return True
+
+    def CollectorConnect(self, request_iterator, context):
+        """
+        Bidirektionaler Stream: Collector → CollectorMessage, Hannah → CaptureCommand.
+
+        Nur ein Collector kann gleichzeitig verbunden sein. Bei erneutem
+        Connect wird die bestehende Verbindung verdrängt.
+        """
+        q: queue.Queue = queue.Queue()
+        with self._collector_lock:
+            if self._collector_queue is not None:
+                log.warning("[grpc] Collector reconnect — bestehende Verbindung wird verdrängt")
+                self._collector_queue.put(None)  # EOF für alten Stream
+            self._collector_queue = q
+        log.info("[grpc] Collector connected")
+
+        def _drain():
+            try:
+                for msg in request_iterator:
+                    which = msg.WhichOneof("payload")
+                    if which == "ack":
+                        log.info(f"[grpc] Collector Ack: {msg.ack.message!r}")
+                    else:
+                        log.warning(f"[grpc] Unbekanntes CollectorMessage-Payload: {which!r}")
+            except Exception as e:
+                log.debug(f"[grpc] Collector drain ended: {e}")
+            finally:
+                q.put(None)
+
+        drain_thread = threading.Thread(target=_drain, daemon=True, name="collector-drain")
+        drain_thread.start()
+
+        try:
+            while context.is_active():
+                try:
+                    cmd = q.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                if cmd is None:
+                    break
+                yield cmd
+        finally:
+            drain_thread.join(timeout=2)
+            with self._collector_lock:
+                if self._collector_queue is q:
+                    self._collector_queue = None
+            log.info("[grpc] Collector disconnected")
+
+    def TriggerCollectorCapture(self, request, _context):
+        """Unary trigger for callers (e.g. WebUI) that can't hold a CollectorConnect stream."""
+        if self.collector_send_command(request):
+            return pb.StatusResponse(ok=True)
+        return pb.StatusResponse(ok=False, message="Collector nicht erreichbar")
 
     def EnrollVoiceprint(self, request, _context):
         if self._enroll_voiceprint is None:

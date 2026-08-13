@@ -15,7 +15,7 @@ from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
 from hannah.weather import WeatherCache
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand
 from hannah.satellite_manager import SatellitePermissionError
 
 def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
@@ -1238,6 +1238,58 @@ def test_delete_timer_pushes_cancel_command():
     assert response.ok is True
     cmd = servicer._timer_queue.get_nowait()
     assert cmd.cancel.timer_id == "a"
+
+
+def _connect_fake_collector(servicer):
+    """Simulates a connected Voice Collector by directly wiring the internal queue —
+    bypasses the real CollectorConnect stream, same approach as _connect_fake_timer_service."""
+    servicer._collector_queue = queue.Queue()
+
+
+def test_collector_connected_false_without_collector():
+    servicer = _make_server()
+    assert servicer.collector_connected() is False
+
+
+def test_collector_connected_true_after_fake_connect():
+    servicer = _make_server()
+    _connect_fake_collector(servicer)
+    assert servicer.collector_connected() is True
+
+
+def test_collector_send_command_without_collector_returns_false():
+    servicer = _make_server()
+    ok = servicer.collector_send_command(CaptureCommand(device_id="Flur01", stop=True))
+    assert ok is False
+
+
+def test_collector_send_command_pushes_to_queue():
+    servicer = _make_server()
+    _connect_fake_collector(servicer)
+
+    ok = servicer.collector_send_command(CaptureCommand(device_id="Flur01", stop=True))
+
+    assert ok is True
+    cmd = servicer._collector_queue.get_nowait()
+    assert cmd.device_id == "Flur01"
+    assert cmd.stop is True
+
+
+def test_trigger_collector_capture_without_collector_returns_not_ok():
+    servicer = _make_server()
+    response = servicer.TriggerCollectorCapture(CaptureCommand(device_id="Flur01"), MagicMock())
+    assert response.ok is False
+
+
+def test_trigger_collector_capture_pushes_command_when_connected():
+    servicer = _make_server()
+    _connect_fake_collector(servicer)
+
+    response = servicer.TriggerCollectorCapture(CaptureCommand(device_id="Flur01"), MagicMock())
+
+    assert response.ok is True
+    cmd = servicer._collector_queue.get_nowait()
+    assert cmd.device_id == "Flur01"
 
 
 class TestActivityLogRpcs:

@@ -10,6 +10,11 @@ def nlu():
     return NLU(cfg={}, rooms={}, devices={})
 
 
+@pytest.fixture
+def nlu_with_satellite():
+    return NLU(cfg={}, rooms={}, devices={}, satellites={"flur01_id": "Flur01"})
+
+
 class TestSetAlarmWeekday:
     """#4 — SetAlarm erkennt jetzt zusätzlich zur Uhrzeit einen einzelnen Wochentag."""
 
@@ -183,3 +188,49 @@ class TestResolveClarificationAnswer:
     def test_ordinal_still_works_with_punctuation(self):
         resolved = resolve_clarification_answer("die erste.", self._candidates)
         assert resolved == ("og_zimmer_ost", "OG Zimmer Ost")
+
+
+class TestCaptureIntents:
+    """#230 — StartCapture/StopCapture: Ziel ist immer der Satellitenname, nie ein Raum."""
+
+    def test_start_capture_resolves_satellite_and_defaults_to_noise(self, nlu_with_satellite):
+        intent = nlu_with_satellite.parse("starte die hintergrundaufnahme auf flur01")
+
+        assert intent.name == "StartCapture"
+        assert intent.satellite_id == "flur01_id"
+        assert intent.capture_sample_type == "noise"
+        assert intent.capture_mode is None
+
+    def test_start_capture_recognizes_explicit_noise(self, nlu_with_satellite):
+        intent = nlu_with_satellite.parse("starte noise aufnahme auf flur01")
+        assert intent.name == "StartCapture"
+        assert intent.capture_sample_type == "noise"
+
+    def test_start_capture_recognizes_hey_hannah_via_weckwort(self, nlu_with_satellite):
+        intent = nlu_with_satellite.parse("starte weckwort aufnahme auf flur01")
+        assert intent.name == "StartCapture"
+        assert intent.capture_sample_type == "hey_hannah"
+
+    def test_start_capture_recognizes_manual_mode(self, nlu_with_satellite):
+        intent = nlu_with_satellite.parse("starte weckwort aufnahme auf flur01 manuell")
+        assert intent.capture_mode == "manual"
+
+    def test_stop_capture_resolves_satellite(self, nlu_with_satellite):
+        intent = nlu_with_satellite.parse("stoppe die aufnahme auf flur01")
+
+        assert intent.name == "StopCapture"
+        assert intent.satellite_id == "flur01_id"
+
+    def test_no_satellite_mentioned_does_not_trigger_capture(self, nlu_with_satellite):
+        intent = nlu_with_satellite.parse("starte die aufnahme")
+        assert intent.name != "StartCapture"
+
+    def test_satellite_name_without_context_word_does_not_trigger_capture(self, nlu_with_satellite):
+        intent = nlu_with_satellite.parse("starte flur01")
+        assert intent.name != "StartCapture"
+
+    def test_plain_stop_without_satellite_stays_stop_intent(self, nlu_with_satellite):
+        """Generisches 'stopp' (Wiedergabe) darf durch die neue Capture-Logik nicht
+        umgebogen werden, nur weil irgendein Satellit registriert ist."""
+        intent = nlu_with_satellite.parse("stopp")
+        assert intent.name == "StopIntent"
