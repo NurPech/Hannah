@@ -1754,8 +1754,16 @@ class GrpcServer:
         )
 
     def start(self):
+        # Der synchrone grpc.server() belegt pro Streaming-RPC (RegisterProxy,
+        # AgentConnect, TimerConnect, SubscribeEvents, StreamSatelliteAudio, ...)
+        # für dessen gesamte Verbindungsdauer einen Worker-Thread — schon die
+        # dauerhaft verbundenen Streams (Proxy/Adapter/Timer-Service) belegen
+        # ständig mehrere davon. 8 reichte nicht mehr, sobald mehrere
+        # StreamSatelliteAudio-Captures parallel liefen: neue Streams wurden am
+        # Transport zwar angenommen, ihr Handler bekam aber nie einen freien
+        # Worker zugeteilt und lieferte dadurch nie Daten, ohne jeden Fehler (#229).
         self._server = grpc.server(
-            futures.ThreadPoolExecutor(max_workers=8),
+            futures.ThreadPoolExecutor(max_workers=32),
             interceptors=[self._version_interceptor, self._compat_interceptor],
         )
         pb_grpc.add_HannahServiceServicer_to_server(self._servicer, self._server)

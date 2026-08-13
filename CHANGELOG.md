@@ -4,7 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.73.1 (2026-08-13)
+### Hannah Core
 
+* Fixed: concurrent `StreamSatelliteAudio` captures on multiple satellites silently delivered no audio at all, on any of them — the synchronous gRPC server's `ThreadPoolExecutor` (`max_workers=8`) was exhausted by the pool's own permanently-connected long-lived streams (`RegisterProxy`, `AgentConnect`, `TimerConnect`, per-subscriber `SubscribeEvents`) plus the new capture streams; excess streams are accepted at the transport level (no error, client sees an open stream) but their handler never gets a worker thread and so never yields any data. `max_workers` raised to 32 (Refs #229)
 
 ## 0.73.0 (2026-08-12)
 ### Hannah Core
