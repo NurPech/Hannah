@@ -96,7 +96,7 @@ class MQTTHandler:
 
     def publish_mute_set(self, device: str, muted: bool):
         self._client.publish(f"hannah/satellite/{device}/mute/set",
-                             "true" if muted else "false", qos=1)
+                             "true" if muted else "false", qos=1, retain=True)
 
     def publish_volume_set(self, device: str, level: int):
         self._client.publish(f"hannah/satellite/{device}/volume/set",

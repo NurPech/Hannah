@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.74.1 (2026-08-18)
+### Hannah Core
+
+* Fixed: satellite mute state was lost on every satellite reboot — `mute/set` was published without `retain=True`, so a just-rebooted satellite (which has no persistent mute state of its own) never received the last mute command on reconnect (Refs #235)
 
 ## 0.74.0 (2026-08-18)
 ### Hannah Core
