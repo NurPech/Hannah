@@ -102,6 +102,9 @@ static hannah_net_sampling_cb_t        s_sampling_cb        = NULL;
 static hannah_net_virtual_ptt_cb_t        s_virtual_ptt_cb        = NULL;
 static hannah_net_play_asset_cb_t         s_play_asset_cb         = NULL;
 static hannah_net_start_listening_cb_t    s_start_listening_cb    = NULL;
+static hannah_net_notifications_pending_cb_t s_notifications_pending_cb    = NULL;
+static bool                                  s_notifications_pending_cache = false;
+static bool                                  s_notifications_pending_cache_valid = false;
 
 /* ── Hilfsfunktionen ─────────────────────────────────────────────────────── */
 
@@ -424,6 +427,9 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/listen",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
+        snprintf(topic, sizeof(topic), "hannah/satellite/%s/notifications_pending",
+                 hannah_config_get()->device_id);
+        esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/restart",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
@@ -472,6 +478,17 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         } else if (strstr(topic, "/mute/set")) {
             bool muted = (data[0] == '1') || (strncmp(data, "true", 4) == 0);
             hannah_net_set_mute(muted);
+
+        } else if (strstr(topic, "/notifications_pending")) {
+            /* Retained, Core-gepflegt (#234) — Cache-and-replay wie assets/relevant,
+             * falls der Callback erst nach hannah_net_init() registriert wird. */
+            bool pending = (data[0] == '1') || (strncmp(data, "true", 4) == 0);
+            if (s_notifications_pending_cb) {
+                s_notifications_pending_cb(pending);
+            } else {
+                s_notifications_pending_cache = pending;
+                s_notifications_pending_cache_valid = true;
+            }
 
         } else if (strstr(topic, "/volume/set")) {
             int vol = atoi(data);
@@ -1036,6 +1053,14 @@ void hannah_net_set_sampling_callback(hannah_net_sampling_cb_t cb)       { s_sam
 void hannah_net_set_virtual_ptt_callback(hannah_net_virtual_ptt_cb_t cb)       { s_virtual_ptt_cb        = cb; }
 void hannah_net_set_play_asset_callback(hannah_net_play_asset_cb_t cb)         { s_play_asset_cb         = cb; }
 void hannah_net_set_start_listening_callback(hannah_net_start_listening_cb_t cb) { s_start_listening_cb  = cb; }
+void hannah_net_set_notifications_pending_callback(hannah_net_notifications_pending_cb_t cb)
+{
+    s_notifications_pending_cb = cb;
+    if (cb && s_notifications_pending_cache_valid) {
+        cb(s_notifications_pending_cache);
+        s_notifications_pending_cache_valid = false;
+    }
+}
 
 void hannah_net_publish_volume(int vol)
 {

@@ -176,6 +176,16 @@ CREATE TABLE IF NOT EXISTS "user_automations" (
 	PRIMARY KEY("user_id","automation"),
 	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS "messages" (
+	"id"	INTEGER NOT NULL,
+	"user_id"	INTEGER NOT NULL,
+	"content"	TEXT NOT NULL,
+	"source"	TEXT,
+	"created_at"	TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY("id" AUTOINCREMENT),
+	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE
+);
 """
 
 

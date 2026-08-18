@@ -163,8 +163,10 @@ Kein TLS auf UDP (zu teuer für ESP32, im LAN akzeptabel).
 | `hannah/server` (retained) | Discovery: Proxy-Host:Port |
 | `hannah/announce` / `hannah/announceSSML` | Extern → Core: Raum-Announcement (Text/SSML) |
 | `hannah/notification` | Extern → Core: System-Notification (severity: alert/notify/info) |
+| `hannah/message` | Extern → Core: neue Message für die passive Mailbox eines Users (`user_id`, `content`, `source` — #234) |
 | `hannah/volume` (+ `/state`) | Globale Lautstärke setzen/lesen |
 | `hannah/satellite/{device}/announcement` | Extern → Core: Text-Announcement an einen einzelnen Satelliten |
+| `hannah/satellite/{device}/notifications_pending` (retained) | Core → Satellit: ungelesene Messages vorhanden — gedimmtes gelbes Idle-LED (#234) |
 | `hannah/satellite/{device}/volume/set` (+ `/state`) | Lautstärke pro Satellit |
 | `hannah/satellite/{device}/mute/set` (+ `/state`) | Mute pro Satellit |
 | `hannah/satellite/{device}/dnd` (+ `/state`) | Do-Not-Disturb |

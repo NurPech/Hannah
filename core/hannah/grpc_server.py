@@ -165,6 +165,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         on_automation_register: Optional[Callable[[str], list]] = None,          # (automation) → [user_id] currently enabled
         list_activity: Optional[Callable[..., tuple]] = None,                    # (requestor_id, filter_user_id, page_size, before_id) → (list[dict], has_more)
         stream_activity_audio: Optional[Callable[..., object]] = None,           # (requestor_id, activity_log_id) → Iterator[(pcm, sample_rate)] | None
+        create_message: Optional[Callable[..., dict]] = None,                    # (user_id, content, source) → dict
+        list_messages: Optional[Callable[..., list]] = None,                     # (requestor_id, filter_user_id) → [{id, user_id, content, source, created_at}]
+        delete_message: Optional[Callable[[int, int], bool]] = None,             # (requestor_id, id) → bool
     ):
         self._user_manager          = user_manager
         self._satellite_manager     = satellite_manager
@@ -223,6 +226,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._create_alarm              = create_alarm or (lambda *_a, **_k: None)
         self._update_alarm              = update_alarm or (lambda *_: False)
         self._delete_alarm              = delete_alarm or (lambda *_: False)
+        self._create_message            = create_message or (lambda *_a, **_k: None)
+        self._list_messages             = list_messages or (lambda *_: [])
+        self._delete_message            = delete_message or (lambda *_: False)
         self._get_categories            = get_categories or (lambda: [])
         self._get_settings_records      = get_settings_records or (lambda: [])
         self._update_setting_value      = update_setting_value or (lambda *_: False)
@@ -769,6 +775,23 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
 
     def DeleteAlarm(self, request, _context):
         ok = self._delete_alarm(request.id)
+        return pb.StatusResponse(ok=ok, message="deleted" if ok else "not found")
+
+    # ------------------------------------------------------------------
+    # Messages (passive Mailbox, dritter Notification-Typ neben Notify/Announce, #234)
+
+    def CreateMessage(self, request, _context):
+        record = self._create_message(request.user_id, request.content, request.source)
+        if record is None:
+            return pb.StatusResponse(ok=False, message="invalid message")
+        return pb.StatusResponse(ok=True, message="created")
+
+    def ListMessages(self, request, _context):
+        records = self._list_messages(request.requestor_id, request.filter_user_id)
+        return pb.ListMessagesResponse(messages=[_message_to_pb(m) for m in records])
+
+    def DeleteMessage(self, request, _context):
+        ok = self._delete_message(request.requestor_id, request.id)
         return pb.StatusResponse(ok=ok, message="deleted" if ok else "not found")
 
     # ------------------------------------------------------------------
@@ -1970,6 +1993,16 @@ def _alarm_to_pb(a: dict) -> pb.Alarm:
         enabled=bool(a.get("enabled", True)),
         label=a.get("label") or "",
         user_id=a.get("user_id") or 0,
+    )
+
+
+def _message_to_pb(m: dict) -> pb.Message:
+    return pb.Message(
+        id=m["id"],
+        user_id=m.get("user_id") or 0,
+        content=m.get("content") or "",
+        source=m.get("source") or "",
+        created_at=m.get("created_at") or "",
     )
 
 

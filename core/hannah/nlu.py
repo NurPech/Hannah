@@ -173,6 +173,13 @@ class NLU:
             "datum", "wochentag",
         ]))
 
+        # MessageQuery: passive Mailbox abfragen (#234) — "nachrichten" ist hier
+        # bewusst als Mailbox-Wort belegt, es gibt keinen konkurrierenden
+        # News-Intent in dieser App.
+        self._message_words: set[str] = set(cfg.get("message_words", [
+            "nachrichten", "benachrichtigungen", "mitteilungen",
+        ]))
+
         # Stop/Pause/Resume: Wiedergabe-Steuerung
         self._stop_words: set[str] = set(cfg.get("stop_words", [
             "stopp", "stoppe", "stop", "aufhoeren", "aufhoer", "abbrechen",
@@ -351,18 +358,25 @@ class NLU:
             and bool(self._date_words & norm_tokens)
         )
 
+        # MessageQuery: passive Mailbox abfragen, ohne Geräte-/Raumbezug (#234)
+        is_message_query = (
+            not is_car and not is_weather and not is_time and not is_date
+            and no_device_context
+            and bool(self._message_words & norm_tokens)
+        )
+
         # SetPresence: Kommen/Gehen ohne Geräte-/Raumbezug, kein Query
         # "Ich gehe schlafen" ist kein Presence-Event — Sleep-Wörter als Veto
         _has_sleep_words = bool({"schlafen", "schlaf", "bett", "nacht", "muede"} & norm_tokens)
         is_presence_away = (
-            not is_time and not is_date
+            not is_time and not is_date and not is_message_query
             and not is_query
             and no_device_context
             and not _has_sleep_words
             and bool(self._presence_away & norm_tokens)
         )
         is_presence_home = (
-            not is_time and not is_date
+            not is_time and not is_date and not is_message_query
             and not is_query
             and no_device_context
             and bool(self._presence_home & norm_tokens)
@@ -372,20 +386,20 @@ class NLU:
         # Vorrang vor action-basierten Intents, weil "stoppe" auch in turn_off_words steht
         _has_off = action == "off"
         is_stop = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query
             and not is_presence_away and not is_presence_home
             and not is_query and device is None
             and not is_capture_stop
             and bool(self._stop_words & norm_tokens)
         )
         is_pause = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query
             and not is_presence_away and not is_presence_home
             and not is_stop and not is_query and device is None
             and bool(self._pause_words & norm_tokens)
         )
         is_resume = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query
             and not is_presence_away and not is_presence_home
             and not is_stop and not is_pause and not is_query and device is None
             and bool(self._resume_words & norm_tokens)
@@ -393,13 +407,13 @@ class NLU:
 
         # SetDND / SetMute: ohne Geräte-/Raumbezug, kein Query
         is_dnd = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query
             and not is_presence_away and not is_presence_home
             and no_device_context and not is_query
             and bool(self._dnd_words & norm_tokens)
         )
         is_mute_cmd = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query
             and not is_presence_away and not is_presence_home
             and not is_dnd
             and no_device_context and not is_query
@@ -409,7 +423,7 @@ class NLU:
         # SetAutomation: ohne Geräte-/Raumbezug, kein Query — gleiches Muster wie SetDND/SetMute
         _automation_key = self._find_automation(joined) if no_device_context and not is_query else None
         is_automation = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query
             and not is_presence_away and not is_presence_home
             and not is_dnd and not is_mute_cmd
             and no_device_context and not is_query
@@ -421,7 +435,7 @@ class NLU:
         is_volume_up = bool(self._volume_up_words & norm_tokens)
         is_volume_down = bool(self._volume_down_words & norm_tokens)
         is_volume = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query
             and not is_presence_away and not is_presence_home
             and not is_dnd and not is_mute_cmd and not is_automation
             and not is_query and device is None
@@ -449,6 +463,7 @@ class NLU:
             and not is_weather
             and not is_time
             and not is_date
+            and not is_message_query
             and not is_presence_away
             and not is_presence_home
             and not is_stop
@@ -490,6 +505,8 @@ class NLU:
             intent_name, value, unit = "TimeQuery", None, None
         elif is_date:
             intent_name, value, unit = "DateQuery", None, None
+        elif is_message_query:
+            intent_name, value, unit = "MessageQuery", None, None
         elif is_presence_away:
             intent_name, value, unit = "SetPresence", "away", None
         elif is_presence_home:

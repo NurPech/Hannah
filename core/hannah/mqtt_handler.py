@@ -17,6 +17,7 @@ class MQTTHandler:
         self._topic_announce_in         = cfg.get("topic_announce_in",      "hannah/announce")
         self._topic_announce_ssml_in    = cfg.get("topic_announce_ssml_in", "hannah/announceSSML")
         self._topic_notification_in     = cfg.get("topic_notification_in",  "hannah/notification")
+        self._topic_message_in          = cfg.get("topic_message_in",       "hannah/message")
 
         self._topic_global_volume    = cfg.get("topic_global_volume", "hannah/volume")
         self._topic_sat_volume_state = "hannah/satellite/+/volume/state"
@@ -27,6 +28,7 @@ class MQTTHandler:
         self._on_room_announce:      Optional[Callable[[str, str], None]] = None
         self._on_room_announce_ssml: Optional[Callable[[str, str], None]] = None
         self._on_notification:       Optional[Callable[[str, str], None]] = None
+        self._on_message_create:     Optional[Callable[[int, str, str], None]] = None
         self._on_volume: Optional[Callable[[Optional[str], int], None]] = None
         self._on_mute:   Optional[Callable[[str, bool], None]] = None
         self._on_dnd:    Optional[Callable[[str, bool], None]] = None
@@ -64,6 +66,12 @@ class MQTTHandler:
 
     def set_notification_handler(self, callback: Callable[[str, str], None]):
         self._on_notification = callback
+
+    def set_message_handler(self, callback: Callable[[int, str, str], None]):
+        """callback(user_id, content, source) — hannah/message (#234), Vorbild
+        hannah/notification. Anders als Notify/Announce ausschließlich für die
+        passive Mailbox gedacht, kein Broadcast/Sofort-TTS."""
+        self._on_message_create = callback
 
     # ------------------------------------------------------------------
     # Satellite volume / mute / DND
@@ -167,6 +175,13 @@ class MQTTHandler:
         self._client.publish(f"hannah/satellite/{device}/play_asset", payload, qos=1)
         log.info(f"PlayAsset '{asset_id}' → hannah/satellite/{device}/play_asset")
 
+    def publish_notifications_pending(self, device: str, pending: bool):
+        """Persistenter Zustand (retain) — solange True, zeigt der Satellit im
+        Idle-Zustand ein gedimmtes gelbes LED statt aus (#234)."""
+        self._client.publish(f"hannah/satellite/{device}/notifications_pending",
+                             "true" if pending else "false", qos=1, retain=True)
+        log.debug(f"NotificationsPending={pending} → hannah/satellite/{device}/notifications_pending")
+
     # ------------------------------------------------------------------
     # Playback-Done-Ack (generisch — jede beendete Wiedergabe auf dem
     # Satelliten, nicht nur TTS/Plink-spezifisch; siehe #155)
@@ -238,6 +253,8 @@ class MQTTHandler:
         log.info(f"SSML-Announcements abonniert: '{self._topic_announce_ssml_in}'")
         client.subscribe(self._topic_notification_in, qos=1)
         log.info(f"System-Notifications abonniert: '{self._topic_notification_in}'")
+        client.subscribe(self._topic_message_in, qos=1)
+        log.info(f"Messages abonniert: '{self._topic_message_in}'")
 
         client.subscribe(self._topic_global_volume, qos=1)
         client.subscribe(self._topic_sat_volume_state, qos=1)
@@ -380,6 +397,22 @@ class MQTTHandler:
             if text and self._on_notification:
                 log.info(f"System-Notification [{severity}]: {text!r}")
                 threading.Thread(target=self._on_notification, args=(text, severity), daemon=True).start()
+            return
+
+        if topic == self._topic_message_in:
+            raw = msg.payload.decode("utf-8", errors="replace").strip()
+            try:
+                data = json.loads(raw)
+                user_id = int(data.get("user_id", 0))
+                content = (data.get("content") or "").strip()
+                source  = (data.get("source") or "").strip()
+            except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+                user_id, content, source = 0, "", ""
+            if user_id and content and self._on_message_create:
+                log.info(f"Message für user_id={user_id}: {content!r} (source={source!r})")
+                threading.Thread(target=self._on_message_create, args=(user_id, content, source), daemon=True).start()
+            else:
+                log.warning(f"Message-Payload ungültig oder unvollständig, verworfen: {raw!r}")
             return
 
         if topic == self._topic_announce_ssml_in:

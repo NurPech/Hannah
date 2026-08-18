@@ -117,6 +117,11 @@ static void render_mute(void)
     set_all(12, 0, 0);  /* Dunkles Rot — dauerhaft sichtbar aber nicht blendend */
 }
 
+static void render_notify(void)
+{
+    set_all(15, 12, 0);  /* Dunkles Gelb — ungelesene Messages, #234 */
+}
+
 static void render_capture(uint32_t frame)
 {
     /* Lila Atemeffekt: mehr Blau als Rot → auch bei Minimum eindeutig lila */
@@ -171,6 +176,7 @@ static void led_task(void *arg)
                 case LED_STATE_MUTE:    render_mute();         break;
                 case LED_STATE_ERROR:   render_error(frame);   break;
                 case LED_STATE_CAPTURE: render_capture(frame); break;
+                case LED_STATE_NOTIFY:  render_notify();       break;
             }
 
             frame++;
@@ -203,7 +209,7 @@ void hannah_led_set_state(led_state_t state)
 {
     if (state != s_current_state) {
         static const char *names[] = {
-            "BOOT","IDLE","WAKE","STREAM","SPEAK","MUTE","ERROR","CAPTURE"
+            "BOOT","IDLE","WAKE","STREAM","SPEAK","MUTE","ERROR","CAPTURE","NOTIFY"
         };
         ESP_LOGI(TAG, "LED %s → %s",
                  names[(int)s_current_state], names[(int)state]);

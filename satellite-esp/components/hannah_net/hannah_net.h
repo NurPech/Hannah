@@ -125,6 +125,14 @@ void hannah_net_set_start_listening_callback(hannah_net_start_listening_cb_t cb)
 typedef void (*hannah_net_play_asset_cb_t)(const char *asset_id);
 void hannah_net_set_play_asset_callback(hannah_net_play_asset_cb_t cb);
 
+/* Notifications-Pending-Callback: wird aufgerufen wenn hannah/satellite/<device>/
+ * notifications_pending empfangen wird (retained, von Core gepflegt — #234).
+ * pending=true: ungelesene Messages vorhanden, IDLE zeigt gedimmtes Gelb statt aus.
+ * Cache-and-replay wie assets/relevant, falls der Callback erst nach
+ * hannah_net_init() registriert wird. */
+typedef void (*hannah_net_notifications_pending_cb_t)(bool pending);
+void hannah_net_set_notifications_pending_callback(hannah_net_notifications_pending_cb_t cb);
+
 /* Wartet bis SNTP die Systemzeit synchronisiert hat oder timeout_ms abläuft.
  * Gibt true zurück wenn die Zeit erfolgreich synchronisiert wurde.
  * Im AP-Modus oder wenn SNTP noch nicht gestartet wurde: sofort false. */

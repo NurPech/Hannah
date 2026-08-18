@@ -51,12 +51,13 @@ from hannah.weather import WeatherCache
 from hannah.trigger_engine import TriggerEngine
 from hannah.ble_location import BleLocationEngine, BleTag
 from hannah.alarms import AlarmManager, format_duration
+from hannah.messages import MessageManager
 from hannah.__version__ import VERSION as HANNAH_VERSION
 
 # Asset-IDs, die Core per play_asset anfordern könnte (#170) — Grundlage für die
 # Relevanzliste, die hannah_asset auf dem Satelliten reaktiv statt blind alles im
 # Manifest lädt. Core braucht dafür nicht das satellite-Namespace-Manifest zu lesen.
-RELEVANT_ASSET_IDS = ["alarm_ring", "timer_jingle"]
+RELEVANT_ASSET_IDS = ["alarm_ring", "timer_jingle", "message_chime"]
 
 # TimeQuery/DateQuery: rein regelbasiert aus datetime, kein LLM nötig
 _WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
@@ -276,6 +277,21 @@ def main():
                 return owner
         return None
 
+    # Message-Attribuierung (#234): dieselbe Kette wie bei Timern — Sprecher (Voice-ID)
+    # → Satelliten-Owner, ohne System-User-Fallback (eine Message ohne auflösbaren
+    # Adressaten bleibt unbekannt/anonym statt Hannah zugeschrieben zu werden).
+    def _resolve_message_user_id(speaker_user_id, device: Optional[str]) -> Optional[int]:
+        if speaker_user_id:
+            try:
+                return int(speaker_user_id)
+            except (TypeError, ValueError):
+                pass
+        if device:
+            owner = satellite_manager.get_satellite_owner(device)
+            if owner:
+                return owner
+        return None
+
     _WEEKDAY_NAMES_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
     def _next_alarm_date(time_str: str) -> datetime.date:
@@ -331,6 +347,26 @@ def main():
                 return "Ok, den ganzen Wecker gelöscht."
             return "Ok, der Rest der Serie bleibt bestehen."
         return ""
+
+    def _read_and_consume_messages(user_id) -> str:
+        """Liest alle offenen Messages eines Users vor und konsumiert sie danach
+        (gelöscht = tatsächlich vorgelesen, nicht schon beim Erzeugen, #234)."""
+        if not user_id:
+            return "Ich kann dich gerade nicht zuordnen."
+        messages = message_manager.consume_all(user_id)
+        if not messages:
+            return "Du hast keine offenen Benachrichtigungen."
+        parts = []
+        for m in messages:
+            suffix = f" von {m['source']}" if m.get("source") else ""
+            parts.append(f"{m['content']}{suffix}")
+        return "Hier sind deine Benachrichtigungen: " + " ".join(parts)
+
+    def _resolve_message_confirmation(payload: dict, text: str) -> str:
+        """Antwortet auf die Ja/Nein-Rückfrage aus dem Message-Trailer (#234)."""
+        if resolve_yes_no(text) is True:
+            return _read_and_consume_messages(payload["user_id"])
+        return "Ok."
 
     # ------------------------------------------------------------------
     # Kern-Pipeline: numpy-Array → Intent → Gerät schalten (Sprach-Pfad)
@@ -640,6 +676,18 @@ def main():
                 _user_manager.get_user_by_id(speaker_user_id)
                 or _user_manager.get_user_by_username(speaker_user_id)
             )
+            # Proaktiver Message-Trailer (#234): nur bei sicher aufgelöstem Sprecher
+            # (kein Satelliten-Owner-Fallback wie bei MessageQuery selbst — sonst würde
+            # eine fremde Person am falschen Satelliten die Nachrichten eines anderen
+            # angeboten bekommen), nicht leere Antworten (Stop/Pause/...), und nicht
+            # erneut auf die eigene MessageQuery-Antwort.
+            if resolved_user and answer and intent_name not in ("MessageQuery", "Trigger", "Ignored"):
+                pending = message_manager.count_pending(resolved_user.id)
+                if pending > 0:
+                    plural = "" if pending == 1 else "en"
+                    answer = f"{answer} Übrigens, du hast {pending} offene Benachrichtigung{plural}, möchtest du sie hören?"
+                    conv_ctx.set_clarification(_source, None, [], kind="message_playback",
+                                                payload={"user_id": resolved_user.id})
             activity_log.log_activity(
                 channel_type=channel_type or "grpc_text", channel_id=channel_id,
                 user_id=str(resolved_user.id) if resolved_user else "", raw_text=text, intent=intent,
@@ -675,6 +723,9 @@ def main():
             if kind in ("alarm_expand", "alarm_delete_series"):
                 conv_ctx.clear_clarification(_source)
                 return _logged(_resolve_alarm_confirmation(kind, clarification["payload"], text), "Alarm")
+            if kind == "message_playback":
+                conv_ctx.clear_clarification(_source)
+                return _logged(_resolve_message_confirmation(clarification["payload"], text), "MessageQuery")
             resolved = resolve_clarification_answer(text, clarification["candidates"])
             if resolved:
                 conv_ctx.clear_clarification(_source)
@@ -848,6 +899,9 @@ def main():
                         answer += f" Soll ich den Wecker für {weekday_name} bis Freitag löschen?"
         elif intent.name == "QueryAlarms":
             answer = _format_alarm_list(alarm_manager.get_alarm_records(), source)
+        elif intent.name == "MessageQuery":
+            source_device = source if source in {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()} else None
+            answer = _read_and_consume_messages(_resolve_message_user_id(speaker_user_id, source_device))
         elif intent.name == "Smalltalk":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
@@ -1092,6 +1146,31 @@ def main():
     mqtt_handler.set_play_asset_result_handler(
         lambda device, asset_id, ok: alarm_manager.on_play_result(device, asset_id, ok)
     )
+
+    # Messages (#234): Signalton + gelbes LED gehen nur an die eigenen Satelliten
+    # des Users (owner_user_id), kein Broadcast wie bei Notify/Announce.
+    def _on_message_created(user_id) -> None:
+        user = _user_manager.get_user_by_id(user_id)
+        if not user:
+            return
+        for sat in user.satellites:
+            mqtt_handler.publish_play_asset(sat.device_id, "message_chime")
+            mqtt_handler.publish_notifications_pending(sat.device_id, True)
+
+    def _on_messages_all_consumed(user_id) -> None:
+        user = _user_manager.get_user_by_id(user_id)
+        if not user:
+            return
+        for sat in user.satellites:
+            mqtt_handler.publish_notifications_pending(sat.device_id, False)
+
+    message_manager = MessageManager(
+        db=get_db,
+        user_manager=_user_manager,
+        on_created=_on_message_created,
+        on_all_consumed=_on_messages_all_consumed,
+    )
+    mqtt_handler.set_message_handler(message_manager.create_message)
 
     def _on_ble_location_change(tag : BleTag, room, satellite, rssi):
         room_str = room or ""
@@ -1728,6 +1807,9 @@ def main():
         ],
         list_activity=activity_log_manager.list_activity,
         stream_activity_audio=activity_log_manager.get_audio_chunks,
+        create_message=message_manager.create_message,
+        list_messages=message_manager.get_messages,
+        delete_message=message_manager.delete_message,
     )
 
     iobroker.set_setter(grpc_servicer.agent_set_state)

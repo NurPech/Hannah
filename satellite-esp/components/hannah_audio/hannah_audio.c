@@ -182,6 +182,7 @@ static volatile bool     s_speaking_active        = false;
 static volatile bool     s_listen_after_tts       = false;
 static volatile int      s_virtual_listen_frames  = 0;
 static volatile int      s_volume                 = CONFIG_HANNAH_VOLUME_DEFAULT;
+static volatile bool     s_notifications_pending  = false;  /* ungelesene Messages, #234 */
 static hannah_webrtc_vad_state_t s_webrtc_vad;
 static float              s_noise_floor_ema = 0.020f; /* adaptiver Noise-Floor-Schätzer */
 static int                s_stream_frames   = 0;
@@ -787,11 +788,26 @@ bool hannah_audio_trigger_debug_wav_capture(void)
 /* ------------------------------------------------------------------ */
 /* Mic-Task                                                              */
 
+/* Zeigt IDLE nur wenn weder gemutet noch ungelesene Messages vorhanden sind
+ * (Priorität MUTE > NOTIFY-pending > IDLE, #234). Zentraler Helper statt an
+ * jeder der ~14 Stellen einzeln dupliziert — unconditional (auch im
+ * CONFIG_HANNAH_MIC_TYPE_NONE-Zweig ohne mic_task gebraucht). */
+static void update_idle_led(void)
+{
+    hannah_led_set_state(
+        hannah_net_is_muted() ? LED_STATE_MUTE :
+        s_notifications_pending ? LED_STATE_NOTIFY : LED_STATE_IDLE);
+}
+
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
 static inline void mic_led(led_state_t state)
 {
-    if (!s_sampling_mode)
-        hannah_led_set_state(state);
+    if (!s_sampling_mode) {
+        if (state == LED_STATE_IDLE)
+            update_idle_led();
+        else
+            hannah_led_set_state(state);
+    }
 }
 
 static void mic_task(void *arg)
@@ -818,8 +834,7 @@ static void mic_task(void *arg)
         if (s_mute_toggle_req) {
             s_mute_toggle_req = false;
             hannah_net_set_mute(!hannah_net_is_muted());
-            if (!hannah_net_is_muted())
-                hannah_led_set_state(LED_STATE_IDLE);
+            update_idle_led();
         }
         if (s_vol_up_req) {
             s_vol_up_req = false;
@@ -886,7 +901,7 @@ static void mic_task(void *arg)
                 debug_wav_snapshot();
                 ESP_LOGI(TAG, "Debug-WAV-Snapshot (remote) ausgelöst (%u B, frame_no=%lu) — abrufbar unter /debug/wav.",
                          (unsigned)s_debug_wav_len, (unsigned long)s_debug_ring_frame_no);
-                hannah_led_set_state(hannah_net_is_muted() ? LED_STATE_MUTE : LED_STATE_IDLE);
+                update_idle_led();
                 xSemaphoreGive(s_debug_wav_done_sem);
                 s_remote_countdown = -1;
             } else if (s_remote_countdown > 0) {
@@ -1048,7 +1063,7 @@ static void mic_task(void *arg)
                 s_noise_floor_ema = s_noise_floor_ema * 0.99f + rms_warmup * 0.01f;
             }
             if (warmup_remaining == 0) {
-                hannah_led_set_state(LED_STATE_IDLE);
+                update_idle_led();
                 ESP_LOGI(TAG, "Mic-Warmup abgeschlossen. noise_ema=%.4f", s_noise_floor_ema);
             }
             vTaskDelay(pdMS_TO_TICKS(1));  /* taskYIELD reicht nicht — IDLE hat prio 0 und kommt bei vielen laufenden Boot-Tasks nie dran */
@@ -1058,7 +1073,7 @@ static void mic_task(void *arg)
         if (hannah_net_is_muted()) {
             state = AUDIO_STATE_IDLE;
             if (!s_sampling_mode)
-                hannah_led_set_state(LED_STATE_MUTE);
+                update_idle_led();
             was_ptt = false;
             if (!s_sampling_mode) {
                 vTaskDelay(pdMS_TO_TICKS(1));
@@ -1321,7 +1336,7 @@ static void speaker_task(void *arg)
                 was_speaking = false;
                 s_speaking_active = false;
                 if (!s_sampling_mode)
-                    hannah_led_set_state(LED_STATE_IDLE);
+                    update_idle_led();
             }
             continue;
         }
@@ -1340,7 +1355,7 @@ static void speaker_task(void *arg)
              * darauf warten statt eine feste Verzögerung zu raten (z.B. TriggerPlink). */
             hannah_net_mqtt_publish(playback_done_topic, "{}", 1, 0);
             if (!s_sampling_mode)
-                hannah_led_set_state(LED_STATE_IDLE);
+                update_idle_led();
             if (s_listen_after_tts && !s_sampling_mode) {
                 s_listen_after_tts = false;
                 s_virtual_listen_frames = 800;  /* 800 × 10ms = 8s */
@@ -1383,7 +1398,7 @@ static void on_sampling_mode(bool enabled, const char *sample_type)
         hannah_led_set_state(LED_STATE_CAPTURE);
         ESP_LOGI(TAG, "Capture-Modus aktiviert — type=%s, LED lila", sample_type ? sample_type : "noise");
     } else {
-        hannah_led_set_state(hannah_net_is_muted() ? LED_STATE_MUTE : LED_STATE_IDLE);
+        update_idle_led();
         ESP_LOGI(TAG, "Capture-Modus deaktiviert — normaler Betrieb");
     }
 }
@@ -1423,7 +1438,7 @@ static void on_status(const char *state)
     else if (strcmp(state, "speaking")   == 0) hannah_led_set_state(LED_STATE_SPEAK);
     else if (strcmp(state, "idle")       == 0) {
         if (!s_speaking_active)
-            hannah_led_set_state(hannah_net_is_muted() ? LED_STATE_MUTE : LED_STATE_IDLE);
+            update_idle_led();
     }
 }
 
@@ -1444,7 +1459,14 @@ static void on_hw_mute(bool muted)
 {
     gpio_set_level(CONFIG_HANNAH_MUTE_HW_GPIO, muted ? 0 : 1);
     if (!s_sampling_mode)
-        hannah_led_set_state(muted ? LED_STATE_MUTE : LED_STATE_IDLE);
+        update_idle_led();
+}
+
+static void on_notifications_pending(bool pending)
+{
+    s_notifications_pending = pending;
+    if (!s_sampling_mode)
+        update_idle_led();
 }
 
 static void on_volume_set(int vol)
@@ -1549,6 +1571,7 @@ void hannah_audio_init(void)
 #endif
     hannah_net_set_status_callback(on_status);
     hannah_net_set_hw_mute_callback(on_hw_mute);
+    hannah_net_set_notifications_pending_callback(on_notifications_pending);
     hannah_net_set_volume_callback(on_volume_set);
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
     hannah_net_set_sampling_callback(on_sampling_mode);
@@ -1561,7 +1584,7 @@ void hannah_audio_init(void)
 #endif
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);
 #else
-    hannah_led_set_state(LED_STATE_IDLE);
+    update_idle_led();
 #endif
 #if CONFIG_HANNAH_SPEAKER_ENABLED
     s_speaker_parked_sem = xSemaphoreCreateBinary();
@@ -1627,13 +1650,13 @@ void hannah_audio_stop(void)
             vRingbufferReturnItem(s_spk_ringbuf, item);
     }
     if (!s_sampling_mode)
-        hannah_led_set_state(LED_STATE_IDLE);
+        update_idle_led();
 }
 
 void hannah_audio_pause(void)
 {
     s_streaming_paused = true;
-    hannah_led_set_state(LED_STATE_IDLE);
+    update_idle_led();
 }
 
 void hannah_audio_resume(void)

@@ -5,6 +5,15 @@
 -->
 
 
+## 0.74.0 (2026-08-18)
+### Hannah Core
+
+* Added: passive per-user notification mailbox ("Message") — a third notification type alongside `Notify` (broadcast) and `Announce` (targeted immediate TTS), both of which play immediately. A Message is created via the new `CreateMessage` gRPC RPC or the new `hannah/message` MQTT topic (JSON `{user_id, content, source}`, same pattern as `hannah/notification`), is not played automatically, and is only consumed (deleted) once actually read aloud. New `MessageQuery` voice intent ("was sind meine Nachrichten") reads and consumes all open messages for the resolved speaker; when messages are pending, any other answer now ends with "...übrigens, du hast N offene Benachrichtigungen, möchtest du sie hören?", reusing the existing yes/no clarification flow. `ListMessages`/`DeleteMessage` RPCs for external viewing/dismissal, trust-level-gated like the Activity Log. Requires `hannah-proto>=3.7.0` (Refs #234)
+
+### Satellite Firmware
+
+* Added: satellites give a short chime and show a dimmed-yellow idle LED (`LED_STATE_NOTIFY`) while their owner has unread Messages, via a new retained `notifications_pending` MQTT topic — reuses the existing `play_asset` mechanism for the chime, no new playback plumbing needed. Idle-LED priority is now centralized in a single `update_idle_led()` helper (mute > notify-pending > idle) instead of the mute ternary being duplicated at every call site (Refs #234)
+
 ## 0.73.4 (2026-08-18)
 ### Satellite Firmware
 

@@ -11,6 +11,7 @@ typedef enum {
     LED_STATE_MUTE,       /* Rot, statisch — Mikrofon stummgeschaltet */
     LED_STATE_ERROR,      /* Rot, schnell blinkend — Fehler        */
     LED_STATE_CAPTURE,    /* Lila, pulsierend — Wakeword-Capture-Modus */
+    LED_STATE_NOTIFY,     /* Gelb, gedimmt, statisch — ungelesene Messages (#234) */
 } led_state_t;
 
 void hannah_led_init(void);
