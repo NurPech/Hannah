@@ -18,11 +18,14 @@ def configure(audio_dir: str) -> None:
     _audio_dir = audio_dir or "activity_audio"
 
 
-def save_audio_wav(audio_array: np.ndarray, sample_rate: int, stem: str) -> str:
+def save_audio_wav(audio_array: np.ndarray, sample_rate: int, stem: str, subdir: str = "") -> str:
     """Schreibt audio_array als WAV, analog stt.py::_to_wav(). Legt _audio_dir bei
-    Bedarf selbst an — externes NFS-Mount wird administrativ vorab bereitgestellt."""
-    os.makedirs(_audio_dir, exist_ok=True)
-    path = os.path.join(_audio_dir, f"{stem}.wav")
+    Bedarf selbst an — externes NFS-Mount wird administrativ vorab bereitgestellt.
+    subdir: optionaler Unterordner (z.B. für Ad-hoc-Debug-Dumps getrennt von den
+    regulären Activity-Log-WAVs)."""
+    target_dir = os.path.join(_audio_dir, subdir) if subdir else _audio_dir
+    os.makedirs(target_dir, exist_ok=True)
+    path = os.path.join(target_dir, f"{stem}.wav")
     pcm = (audio_array * 32767).astype(np.int16)
     with wave.open(path, "wb") as w:
         w.setnchannels(1)

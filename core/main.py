@@ -1495,6 +1495,27 @@ def main():
             log.error(f"[{device}] Satellit-Audio-Konvertierung fehlgeschlagen: {e}")
             return "", "Fehler bei der Audio-Verarbeitung.", "Unknown", b"", 0
 
+        # Ad-hoc-Debug-Dump (Refs #226, 2026-08-19): Core bekam bei mehreren
+        # Wakeword-Captures heute Nacht leere STT-Transkripte, obwohl die lokale
+        # Satelliten-Debug-WAV (/debug/wav/capture, vor Proxy/Core) sauber klang.
+        # Speichert exakt das, was hier ankommt -- direkter Vergleich gegen die
+        # Satelliten-seitige WAV, um Proxy-Forwarding/Core-Konvertierung als
+        # Fehlerquelle zu bestaetigen oder auszuschliessen. Best-effort, nie
+        # blockierend. Ueber Env-Var HANNAH_DEBUG_AUDIO_DEVICE_ID gescoped statt
+        # hart codiert -- sonst wuerde das jede echte Unterhaltung im Haushalt
+        # mitschneiden, UND jede Aenderung des Zielgeraets (oder Abschalten)
+        # braeuchte ihrerseits einen neuen Release-Zyklus, obwohl der ganze Punkt
+        # ist, das hier nur kurzlebig zu brauchen. Standardmaessig leer = aus,
+        # kein Deploy-Risiko. Temporaer, wieder rausnehmen sobald geklaert.
+        _debug_dump_device_id = os.environ.get("HANNAH_DEBUG_AUDIO_DEVICE_ID", "")
+        if _debug_dump_device_id and device == _debug_dump_device_id:
+            try:
+                stem = f"{int(time.time() * 1000)}_{device}"
+                dbg_path = activity_log.save_audio_wav(audio_array, 16000, stem, subdir="debug_capture")
+                log.info(f"[{device}] Debug-Aufnahme gespeichert: {dbg_path}")
+            except Exception as e:
+                log.warning(f"[{device}] Debug-Aufnahme fehlgeschlagen: {e}")
+
         try:
             transcript, _ = stt.transcribe(audio_array)
         except Exception as e:

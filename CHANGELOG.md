@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.74.4 (2026-08-18)
+### Hannah Core
+
+* Added: temporary debug dump of raw satellite audio to `activity_audio/debug_capture/`, gated behind the `HANNAH_DEBUG_AUDIO_DEVICE_ID` env var (empty by default = off) — for comparing what Core receives against a satellite's local debug WAV while tracking down an empty-STT-transcript issue (Refs #226)
+
 ## 0.74.3 (2026-08-18)
 ### Hannah Core
 
