@@ -49,3 +49,8 @@ CONFIG_HANNAH_SD_MISO_GPIO=7
 # Wakeword-Debug (Refs #222) — /debug/wav(/capture) für die laufende
 # Stille-Untersuchung der TDM-Mics
 CONFIG_HANNAH_WAKEWORD_DEBUG=y
+
+# Speaker-Output-Gain — Rev5-Lautsprecher subjektiv zu laut, 70% Original-
+# Pegel = 100% für den Satelliten (Refs #232, Schätzwert, ggf. nachjustiert
+# per NVS/WebUI)
+CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT=70

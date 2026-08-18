@@ -47,6 +47,20 @@ menu "Hannah Audio"
             Nutzungsentfernung abgestimmt (128, sauberes Signal ohne Clipping).
             Runtime-Override per NVS/WebUI möglich, ohne Reflash.
 
+    config HANNAH_SPK_OUTPUT_GAIN_PERCENT
+        int "Speaker-Output-Gain (%)"
+        default 100
+        range 1 100
+        depends on HANNAH_MIC_TYPE_TDM
+        help
+            Kopfraum-Reduktion für sämtliches von Hannah Core gestreamtes
+            Audio (TTS/Announcement/Asset), vor der User-Lautstärke
+            angewendet. Auf Rev.5 sind die Lautsprecher subjektiv zu laut
+            (Refs #232) — 70% Original-Pegel = 100% für den Satelliten.
+            100 = keine Reduktion (Rev.4-Verhalten). Schätzwert, ggf.
+            nachzujustieren. Runtime-Override per NVS/WebUI möglich, ohne
+            Reflash.
+
     config HANNAH_TDM_BEAM_DIRECTION_DEG
         int "TDM-Beamforming-Vorzugsrichtung (Grad)"
         default 180

@@ -34,6 +34,14 @@ static const char *TAG = "hannah_led";
 static led_strip_handle_t   s_strip         = NULL;
 static volatile led_state_t s_current_state = LED_STATE_IDLE;
 
+/* Lautstärke-Overlay — überlagert kurzzeitig die laufende Animation, ohne
+ * den State selbst zu ändern (s_current_state wird im Hintergrund weiter
+ * korrekt gepflegt, z.B. MUTE/CAPTURE). */
+#define VOLUME_DISPLAY_MS      1500
+#define VOLUME_DISPLAY_FRAMES  (VOLUME_DISPLAY_MS / TICK_MS)
+static volatile int     s_volume_overlay_frames  = 0;
+static volatile uint8_t s_volume_overlay_percent = 0;
+
 /* ── Hilfsfunktionen ─────────────────────────────────────────────────────── */
 
 static inline void set_all(uint8_t r, uint8_t g, uint8_t b)
@@ -117,6 +125,16 @@ static void render_capture(uint32_t frame)
     set_all(r, 0, b);
 }
 
+static void render_volume(uint8_t percent)
+{
+    /* Standardrundung (0.5 aufrunden) — bei 24 LEDs ergibt das die
+     * vorgerechnete Reihe 10%→2, 20%→5, ..., 100%→24. */
+    int lit = (int)((percent * LED_COUNT + 50) / 100);
+    set_all(0, 0, 0);
+    for (int i = 0; i < lit && i < LED_COUNT; i++)
+        led_strip_set_pixel(s_strip, i, 60, 60, 60);
+}
+
 static void render_error(uint32_t frame)
 {
     /* Schnelles Blinken: 10 Frames an, 10 Frames aus = 0.4s Periode */
@@ -134,25 +152,31 @@ static void led_task(void *arg)
     led_state_t   last_state = LED_STATE_BOOT;
 
     while (1) {
-        led_state_t state = s_current_state;
-        if (state != last_state) {
-            frame      = 0;
-            last_state = state;
-        }
+        if (s_volume_overlay_frames > 0) {
+            render_volume(s_volume_overlay_percent);
+            s_volume_overlay_frames--;
+        } else {
+            led_state_t state = s_current_state;
+            if (state != last_state) {
+                frame      = 0;
+                last_state = state;
+            }
 
-        switch (state) {
-            case LED_STATE_BOOT:   render_boot(frame);   break;
-            case LED_STATE_IDLE:   render_idle();        break;
-            case LED_STATE_WAKE:   render_wake(frame);   break;
-            case LED_STATE_STREAM: render_stream(frame); break;
-            case LED_STATE_SPEAK:  render_speak(frame);  break;
-            case LED_STATE_MUTE:    render_mute();         break;
-            case LED_STATE_ERROR:   render_error(frame);   break;
-            case LED_STATE_CAPTURE: render_capture(frame); break;
+            switch (state) {
+                case LED_STATE_BOOT:   render_boot(frame);   break;
+                case LED_STATE_IDLE:   render_idle();        break;
+                case LED_STATE_WAKE:   render_wake(frame);   break;
+                case LED_STATE_STREAM: render_stream(frame); break;
+                case LED_STATE_SPEAK:  render_speak(frame);  break;
+                case LED_STATE_MUTE:    render_mute();         break;
+                case LED_STATE_ERROR:   render_error(frame);   break;
+                case LED_STATE_CAPTURE: render_capture(frame); break;
+            }
+
+            frame++;
         }
 
         led_strip_refresh(s_strip);
-        frame++;
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
     }
 }
@@ -185,6 +209,12 @@ void hannah_led_set_state(led_state_t state)
                  names[(int)s_current_state], names[(int)state]);
     }
     s_current_state = state;
+}
+
+void hannah_led_show_volume(uint8_t percent)
+{
+    s_volume_overlay_percent = percent;
+    s_volume_overlay_frames  = VOLUME_DISPLAY_FRAMES;
 }
 
 void hannah_status_led_init(void)

@@ -4,6 +4,18 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.73.4 (2026-08-18)
+### Satellite Firmware
+
+* Added: Rev.5 satellites apply a configurable output-gain reduction (`HANNAH_SPK_OUTPUT_GAIN_PERCENT`, default 70%) to all audio streamed from Hannah Core (TTS/announcements/assets), before the user volume is applied — the Rev.5 speakers are subjectively too loud at full scale. Rev.4 is unaffected (default 100% = no reduction). Runtime-overridable per NVS/WebUI, same pattern as `HANNAH_TDM_DOWNMIX_GAIN` (Refs #232)
+* Added: pressing the Vol+/Vol- buttons now briefly shows the volume level as a filled bar on the LED ring (dimmed white, proportional to the 24 LEDs), overlaying whatever animation is currently running, then fading back to it after ~1.5s. Only the physical buttons trigger this, not volume changes synced in from elsewhere (Refs #233)
+
+## 0.73.3 (2026-08-13)
+### Hannah Core
+
+* Fixed: `CAPTURE_MODE_MANUAL` and `CAPTURE_MODE_PTT` (#230) were two enum values for the same thing — both mean "hand-triggered via the PTT button". NLU's `_capture_mode_words` now maps "manuell" to `"ptt"` instead of a separate `"manual"` string; Core's `_CAPTURE_MODE_MAP` no longer references `CAPTURE_MODE_MANUAL` at all, which is deprecated proto-side (hannah-proto#15)
+
 ## 0.73.2 (2026-08-13)
 ### Hannah Core
 

@@ -233,8 +233,10 @@ class NLU:
         self._capture_heyhannah_words: set[str] = set(cfg.get("capture_heyhannah_words", [
             "weckwort", "wakeword", "wecknamen",
         ]))
+        # "manuell" ist bewusst kein eigener Modus — deckungsgleich mit "ptt"
+        # (CAPTURE_MODE_MANUAL in hannah-proto ist deprecated, nie mehr benutzen).
         self._capture_mode_words: dict[str, str] = cfg.get("capture_mode_words", {
-            "manuell": "manual",
+            "manuell": "ptt",
             "ptt":     "ptt",
             "druecken": "ptt",
             "plink":   "plink",

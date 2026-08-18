@@ -827,6 +827,7 @@ static void mic_task(void *arg)
             s_volume = v > 100 ? 100 : v;
             ESP_LOGI(TAG, "Lautstärke: %d%%", s_volume);
             hannah_net_publish_volume(s_volume);
+            hannah_led_show_volume((uint8_t)s_volume);
         }
         if (s_vol_down_req) {
             s_vol_down_req = false;
@@ -834,6 +835,7 @@ static void mic_task(void *arg)
             s_volume = v < 0 ? 0 : v;
             ESP_LOGI(TAG, "Lautstärke: %d%%", s_volume);
             hannah_net_publish_volume(s_volume);
+            hannah_led_show_volume((uint8_t)s_volume);
         }
 
 #if CONFIG_HANNAH_WAKEWORD_DEBUG
@@ -1348,13 +1350,17 @@ static void speaker_task(void *arg)
         }
         was_speaking = true;
         s_speaking_active = true;
-        /* Lautstärke-Skalierung in-place (Ring-Buffer-Speicher ist schreibbar) */
+        /* Lautstärke-Skalierung in-place (Ring-Buffer-Speicher ist schreibbar).
+         * spk_gain ist die Rev5-Kopfraum-Reduktion (Refs #232, 100 = keine
+         * Reduktion auf Rev4) — ein Multiply statt zweier Skalierungsschritte
+         * gegen doppelten Rundungsfehler. */
         int vol = s_volume;
-        if (vol < 100) {
+        int spk_gain = hannah_config_get()->spk_output_gain_percent;
+        if (vol < 100 || spk_gain < 100) {
             int16_t *samples = (int16_t *)item->data;
             size_t count = item->len / 2;
             for (size_t i = 0; i < count; i++)
-                samples[i] = (int16_t)(((int32_t)samples[i] * vol) / 100);
+                samples[i] = (int16_t)(((int32_t)samples[i] * vol * spk_gain) / 10000);
         }
         size_t written;
         i2s_channel_write(s_tx_chan, item->data, item->len,

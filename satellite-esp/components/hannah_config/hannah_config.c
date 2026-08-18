@@ -61,6 +61,11 @@ void hannah_config_init(void)
 #else
         s_cfg.tdm_downmix_gain = 128;
 #endif
+#ifdef CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT
+        s_cfg.spk_output_gain_percent = CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT;
+#else
+        s_cfg.spk_output_gain_percent = 100;
+#endif
 #ifdef CONFIG_HANNAH_TDM_BEAM_DIRECTION_DEG
         s_cfg.tdm_beam_direction_deg = CONFIG_HANNAH_TDM_BEAM_DIRECTION_DEG;
 #else
@@ -101,6 +106,14 @@ void hannah_config_init(void)
 #endif
     nvs_get_u8(h, "tdm_gain", &tdm_gain);
     s_cfg.tdm_downmix_gain = tdm_gain;
+
+#ifdef CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT
+    uint8_t spk_gain = CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT;
+#else
+    uint8_t spk_gain = 100;
+#endif
+    nvs_get_u8(h, "spk_gain", &spk_gain);
+    s_cfg.spk_output_gain_percent = spk_gain;
 
 #ifdef CONFIG_HANNAH_TDM_BEAM_DIRECTION_DEG
     uint16_t tdm_beam_dir = CONFIG_HANNAH_TDM_BEAM_DIRECTION_DEG;
@@ -188,6 +201,7 @@ void hannah_config_save(const hannah_config_t *cfg)
     nvs_set_u8 (h, "ww_threshold", cfg->wakeword_threshold);
     nvs_set_u16(h, "vad_ms",       cfg->vad_silence_ms);
     nvs_set_u8 (h, "tdm_gain",     cfg->tdm_downmix_gain);
+    nvs_set_u8 (h, "spk_gain",     cfg->spk_output_gain_percent);
     nvs_set_u16(h, "tdm_beam_dir", cfg->tdm_beam_direction_deg);
     nvs_set_i8 (h, "tdm_dbg_slot", cfg->tdm_debug_raw_slot);
     nvs_set_str(h, "ota_url",      cfg->ota_url);

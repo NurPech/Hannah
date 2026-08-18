@@ -211,9 +211,11 @@ class TestCaptureIntents:
         assert intent.name == "StartCapture"
         assert intent.capture_sample_type == "hey_hannah"
 
-    def test_start_capture_recognizes_manual_mode(self, nlu_with_satellite):
+    def test_start_capture_treats_manuell_as_ptt(self, nlu_with_satellite):
+        """CAPTURE_MODE_MANUAL ist deprecated (identisch zu PTT, hannah-proto#15) —
+        "manuell" mappt bewusst auf "ptt", nicht auf einen eigenen Modus."""
         intent = nlu_with_satellite.parse("starte weckwort aufnahme auf flur01 manuell")
-        assert intent.capture_mode == "manual"
+        assert intent.capture_mode == "ptt"
 
     def test_stop_capture_resolves_satellite(self, nlu_with_satellite):
         intent = nlu_with_satellite.parse("stoppe die aufnahme auf flur01")

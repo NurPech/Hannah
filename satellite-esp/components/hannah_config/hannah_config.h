@@ -14,6 +14,7 @@ typedef struct {
     uint8_t  wakeword_threshold;  /* Erkennungsschwelle 0–100 (entspricht 0.00–1.00) */
     uint16_t vad_silence_ms;      /* VAD-Stille bis audio_end, Runtime-Override für CONFIG_HANNAH_VAD_SILENCE_MS */
     uint8_t  tdm_downmix_gain;    /* ADAU7118-TDM-Downmix-Verstärkung, Runtime-Override für CONFIG_HANNAH_TDM_DOWNMIX_GAIN (Refs #222) */
+    uint8_t  spk_output_gain_percent; /* Kopfraum-Reduktion für gestreamtes Audio (Rev5), Runtime-Override für CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT (Refs #232) */
     uint16_t tdm_beam_direction_deg; /* Beamforming-Vorzugsrichtung, 0/45/.../315° im Uhrzeigersinn ab Norden (Strom-Seite), Default 180° = Süden/Front (Refs #222) */
     int8_t   tdm_debug_raw_slot;  /* Debug: -1 = normales Beamforming, 0-3 = gibt genau diesen TDM-Rohslot unverzerrt aus (kein Delay-and-Sum) — zum empirischen Verifizieren der Slot->Mikrofon-Zuordnung, s. Issue #222 */
     char     ota_url[128];

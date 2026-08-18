@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 typedef enum {
     LED_STATE_BOOT,       /* Warmweiß, rotierend — Initialisierung */
     LED_STATE_IDLE,       /* Aus / sehr dunkel                     */
@@ -14,3 +16,8 @@ typedef enum {
 void hannah_led_init(void);
 void hannah_led_set_state(led_state_t state);
 void hannah_status_led_init(void);
+
+/* Überlagert die aktuelle Animation kurzzeitig mit einem gefüllten
+ * Lautstärke-Balken (gedimmtes Weiß), unabhängig vom laufenden State —
+ * siehe hannah_led.c für Details. */
+void hannah_led_show_volume(uint8_t percent);

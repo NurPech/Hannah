@@ -376,6 +376,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 #if CONFIG_HANNAH_WAKEWORD_DEBUG
         "<label>TDM-Debug: einzelnen Rohslot ausgeben (-1 = normales Beamforming, 0-3 = Slot, Refs #222)"
           "<input type=number name=tdm_dbg_slot min=-1 max=3 value=%d></label>"
+        "<label>Speaker-Output-Gain %% (Kopfraum-Reduktion gestreamtes Audio, Refs #232)"
+          "<input type=number name=spk_gain min=1 max=100 value=%u></label>"
 #endif
 #endif
         "<h3>Firmware</h3>"
@@ -444,6 +446,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         cfg->tdm_beam_direction_deg,
 #if CONFIG_HANNAH_WAKEWORD_DEBUG
         cfg->tdm_debug_raw_slot,
+        cfg->spk_output_gain_percent,
 #endif
 #endif
         cfg->ota_url,
@@ -541,6 +544,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (form_get(body, "tdm_dbg_slot", tdm_dbg_slot_str, sizeof(tdm_dbg_slot_str))) {
         int s = atoi(tdm_dbg_slot_str);
         if (s >= -1 && s <= 3) new_cfg.tdm_debug_raw_slot = (int8_t)s;
+    }
+
+    char spk_gain_str[8] = {0};
+    if (form_get(body, "spk_gain", spk_gain_str, sizeof(spk_gain_str))) {
+        int g = atoi(spk_gain_str);
+        if (g >= 1 && g <= 100) new_cfg.spk_output_gain_percent = (uint8_t)g;
     }
 
     char thr_str[8] = {0};

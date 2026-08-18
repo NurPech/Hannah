@@ -1552,8 +1552,9 @@ def main():
     # Collector über den CollectorConnect-Stream (nicht zu verwechseln mit dem
     # bestehenden Collector-initiierten RequestSatelliteCapture-Pfad oben).
 
+    # CAPTURE_MODE_MANUAL (hannah-proto) ist deprecated — deckungsgleich mit PTT,
+    # NLU mappt "manuell" bereits auf "ptt", hier taucht der String "manual" nie auf.
     _CAPTURE_MODE_MAP = {
-        "manual": pb.CaptureMode.CAPTURE_MODE_MANUAL,
         "ptt":    pb.CaptureMode.CAPTURE_MODE_PTT,
         "plink":  pb.CaptureMode.CAPTURE_MODE_PLINK,
     }
