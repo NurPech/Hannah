@@ -781,7 +781,12 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
     # Messages (passive Mailbox, dritter Notification-Typ neben Notify/Announce, #234)
 
     def CreateMessage(self, request, _context):
-        record = self._create_message(request.user_id, request.content, request.source)
+        # 0 = System/kein Reply-Target, gleiche Sentinel-Konvention wie filter_user_id (#237)
+        record = self._create_message(
+            request.user_id, request.content, request.source,
+            sender_user_id=request.sender_user_id or None,
+            reply_to_id=request.reply_to_id or None,
+        )
         if record is None:
             return pb.StatusResponse(ok=False, message="invalid message")
         return pb.StatusResponse(ok=True, message="created")
@@ -2003,6 +2008,8 @@ def _message_to_pb(m: dict) -> pb.Message:
         content=m.get("content") or "",
         source=m.get("source") or "",
         created_at=m.get("created_at") or "",
+        sender_user_id=m.get("sender_user_id") or 0,
+        reply_to_id=m.get("reply_to_id") or 0,
     )
 
 

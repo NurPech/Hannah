@@ -40,9 +40,17 @@ class MessageManager:
     # ------------------------------------------------------------------
     # CRUD
 
-    def create_message(self, user_id: int, content: str, source: str = "") -> dict:
-        m = Message.create(self._db(), user_id=user_id, content=content, source=source)
-        log.info(f"[messages] Message #{m.id} für user_id={user_id} angelegt (source={source!r}).")
+    def create_message(
+        self, user_id: int, content: str, source: str = "",
+        sender_user_id: Optional[int] = None, reply_to_id: Optional[int] = None,
+    ) -> dict:
+        """sender_user_id=None bedeutet Systemnachricht (nicht reply-fähig, #237).
+        reply_to_id verknüpft eine User-Antwort mit der ursprünglichen Message."""
+        m = Message.create(
+            self._db(), user_id=user_id, content=content, source=source,
+            sender_user_id=sender_user_id, reply_to_id=reply_to_id,
+        )
+        log.info(f"[messages] Message #{m.id} für user_id={user_id} angelegt (source={source!r}, sender_user_id={sender_user_id!r}).")
         self._on_created(user_id)
         return m.to_dict()
 

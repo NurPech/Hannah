@@ -180,6 +180,16 @@ class NLU:
             "nachrichten", "benachrichtigungen", "mitteilungen",
         ]))
 
+        # SendMessage: Nachricht an einen anderen User verfassen (#237). Eigene
+        # Verb-Liste + Singular-Nomen, damit "sende eine Nachricht an Leonie" nicht
+        # mit dem pluralischen MessageQuery-Wortschatz kollidiert.
+        self._send_message_verbs: set[str] = set(cfg.get("send_message_verbs", [
+            "sende", "schicke", "schick", "schreibe", "schreib",
+        ]))
+        self._send_message_nouns: set[str] = set(cfg.get("send_message_nouns", [
+            "nachricht", "mitteilung",
+        ]))
+
         # Stop/Pause/Resume: Wiedergabe-Steuerung
         self._stop_words: set[str] = set(cfg.get("stop_words", [
             "stopp", "stoppe", "stop", "aufhoeren", "aufhoer", "abbrechen",
@@ -358,9 +368,20 @@ class NLU:
             and bool(self._date_words & norm_tokens)
         )
 
+        # SendMessage: Nachricht an einen User verfassen (#237) — Vorrang vor
+        # MessageQuery, da beide "nachricht(en)" enthalten können, aber unterschiedliche
+        # Wortlisten (Singular-Nomen + Verb hier vs. reine Plural-Nomen dort) meist schon
+        # nicht überlappen.
+        is_send_message = (
+            not is_car and not is_weather and not is_time and not is_date
+            and no_device_context
+            and bool(self._send_message_verbs & norm_tokens)
+            and bool(self._send_message_nouns & norm_tokens)
+        )
+
         # MessageQuery: passive Mailbox abfragen, ohne Geräte-/Raumbezug (#234)
         is_message_query = (
-            not is_car and not is_weather and not is_time and not is_date
+            not is_car and not is_weather and not is_time and not is_date and not is_send_message
             and no_device_context
             and bool(self._message_words & norm_tokens)
         )
@@ -369,14 +390,14 @@ class NLU:
         # "Ich gehe schlafen" ist kein Presence-Event — Sleep-Wörter als Veto
         _has_sleep_words = bool({"schlafen", "schlaf", "bett", "nacht", "muede"} & norm_tokens)
         is_presence_away = (
-            not is_time and not is_date and not is_message_query
+            not is_time and not is_date and not is_message_query and not is_send_message
             and not is_query
             and no_device_context
             and not _has_sleep_words
             and bool(self._presence_away & norm_tokens)
         )
         is_presence_home = (
-            not is_time and not is_date and not is_message_query
+            not is_time and not is_date and not is_message_query and not is_send_message
             and not is_query
             and no_device_context
             and bool(self._presence_home & norm_tokens)
@@ -386,20 +407,20 @@ class NLU:
         # Vorrang vor action-basierten Intents, weil "stoppe" auch in turn_off_words steht
         _has_off = action == "off"
         is_stop = (
-            not is_car and not is_weather and not is_time and not is_date and not is_message_query
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
             and not is_query and device is None
             and not is_capture_stop
             and bool(self._stop_words & norm_tokens)
         )
         is_pause = (
-            not is_car and not is_weather and not is_time and not is_date and not is_message_query
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
             and not is_stop and not is_query and device is None
             and bool(self._pause_words & norm_tokens)
         )
         is_resume = (
-            not is_car and not is_weather and not is_time and not is_date and not is_message_query
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
             and not is_stop and not is_pause and not is_query and device is None
             and bool(self._resume_words & norm_tokens)
@@ -407,13 +428,13 @@ class NLU:
 
         # SetDND / SetMute: ohne Geräte-/Raumbezug, kein Query
         is_dnd = (
-            not is_car and not is_weather and not is_time and not is_date and not is_message_query
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
             and no_device_context and not is_query
             and bool(self._dnd_words & norm_tokens)
         )
         is_mute_cmd = (
-            not is_car and not is_weather and not is_time and not is_date and not is_message_query
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
             and not is_dnd
             and no_device_context and not is_query
@@ -423,7 +444,7 @@ class NLU:
         # SetAutomation: ohne Geräte-/Raumbezug, kein Query — gleiches Muster wie SetDND/SetMute
         _automation_key = self._find_automation(joined) if no_device_context and not is_query else None
         is_automation = (
-            not is_car and not is_weather and not is_time and not is_date and not is_message_query
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
             and not is_dnd and not is_mute_cmd
             and no_device_context and not is_query
@@ -435,7 +456,7 @@ class NLU:
         is_volume_up = bool(self._volume_up_words & norm_tokens)
         is_volume_down = bool(self._volume_down_words & norm_tokens)
         is_volume = (
-            not is_car and not is_weather and not is_time and not is_date and not is_message_query
+            not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
             and not is_dnd and not is_mute_cmd and not is_automation
             and not is_query and device is None
@@ -464,6 +485,7 @@ class NLU:
             and not is_time
             and not is_date
             and not is_message_query
+            and not is_send_message
             and not is_presence_away
             and not is_presence_home
             and not is_stop
@@ -505,6 +527,8 @@ class NLU:
             intent_name, value, unit = "TimeQuery", None, None
         elif is_date:
             intent_name, value, unit = "DateQuery", None, None
+        elif is_send_message:
+            intent_name, value, unit = "SendMessage", self._find_message_recipient(tokens), None
         elif is_message_query:
             intent_name, value, unit = "MessageQuery", None, None
         elif is_presence_away:
@@ -909,6 +933,16 @@ class NLU:
         if normalized & week_words:
             return "week"
         return "today"
+
+    def _find_message_recipient(self, tokens: list[str]) -> Optional[str]:
+        """Nimmt das Token direkt nach 'an' als Empfänger-Kandidaten (#237), z.B.
+        "sende eine nachricht an leonie" → "leonie". Auflösung gegen den echten
+        Usernamen (case-insensitiv) passiert erst in main.py, wo die User-Registry
+        verfügbar ist — hier wird nur der rohe Kandidat extrahiert."""
+        for i, t in enumerate(tokens):
+            if t == "an" and i + 1 < len(tokens):
+                return tokens[i + 1]
+        return None
 
     def _find_car_scope(self, norm_tokens: set[str]) -> str:
         """Gibt 'location', 'security', 'range', 'odometer' oder 'all' zurück."""

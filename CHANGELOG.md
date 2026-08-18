@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.74.3 (2026-08-18)
+### Hannah Core
+
+* Added: the passive Message mailbox (#234) is now bidirectional — a new `SendMessage` voice intent ("sende eine Nachricht an `<username>`", exact username match) lets one user address another, and `MessageQuery` now asks "möchtest du antworten?" after each message from a user (not after system messages, which stay one-way) before moving on to the next pending one. A "ja" opens the same content-capture step used for sending, threading the reply back to the original message. `CreateMessage` gRPC RPC and `ListMessages` now also carry `sender_user_id`/`reply_to_id`, for external callers. Requires `hannah-proto>=3.7.1` (Refs #237)
 
 ## 0.74.2 (2026-08-18)
 ### Satellite Firmware

@@ -182,9 +182,13 @@ CREATE TABLE IF NOT EXISTS "messages" (
 	"user_id"	INTEGER NOT NULL,
 	"content"	TEXT NOT NULL,
 	"source"	TEXT,
+	"sender_user_id"	INTEGER,
+	"reply_to_id"	INTEGER,
 	"created_at"	TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY("id" AUTOINCREMENT),
-	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE
+	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE,
+	FOREIGN KEY("sender_user_id") REFERENCES "users"("id") ON DELETE SET NULL,
+	FOREIGN KEY("reply_to_id") REFERENCES "messages"("id") ON DELETE SET NULL
 );
 """
 
@@ -251,6 +255,11 @@ def init_db():
 
     if "smalltalk_followup_listen" not in _col_names(db, "satellites"):
         db.execute('ALTER TABLE "satellites" ADD COLUMN "smalltalk_followup_listen" INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+
+    if "sender_user_id" not in _col_names(db, "messages"):
+        db.execute('ALTER TABLE "messages" ADD COLUMN "sender_user_id" INTEGER REFERENCES "users"("id")')
+        db.execute('ALTER TABLE "messages" ADD COLUMN "reply_to_id" INTEGER REFERENCES "messages"("id")')
         db.commit()
 
     # #56: Gruppen referenzieren jetzt Satelliten direkt statt Räume — group_rooms wird

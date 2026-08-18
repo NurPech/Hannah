@@ -292,6 +292,23 @@ def main():
                 return owner
         return None
 
+    def _source_device(source: str) -> Optional[str]:
+        """Validiert source als tatsächlich registrierten (UDP-direkten oder
+        proxy-verbundenen) Satelliten, sonst None — gleiche Prüfung wie bei der
+        Message-Attribuierung oben (#234), wiederverwendet für SendMessage (#237)."""
+        return source if source in {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()} else None
+
+    def _resolve_username(name: Optional[str]) -> Optional["User"]:
+        """Exakter, aber case-insensitiver Username-Match (#237) — NLU liefert den
+        Kandidaten bereits kleingeschrieben, echte Usernamen aber nicht notwendigerweise.
+        Bewusst kein Fuzzy-/Display-Name-Matching."""
+        if not name:
+            return None
+        for u in _user_manager.users():
+            if u.username.lower() == name.lower():
+                return u
+        return None
+
     _WEEKDAY_NAMES_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
     def _next_alarm_date(time_str: str) -> datetime.date:
@@ -348,25 +365,67 @@ def main():
             return "Ok, der Rest der Serie bleibt bestehen."
         return ""
 
-    def _read_and_consume_messages(user_id) -> str:
-        """Liest alle offenen Messages eines Users vor und konsumiert sie danach
-        (gelöscht = tatsächlich vorgelesen, nicht schon beim Erzeugen, #234)."""
+    def _play_message_queue(remaining: list[dict], _source: str) -> str:
+        """Liest bereits konsumierte (aus der DB gelöschte) Messages aus remaining
+        sequenziell vor, bis die Queue leer ist oder eine reply-fähige (User-)Message
+        auftaucht — Systemnachrichten (sender_user_id None) werden ohne Rückfrage
+        einfach angehängt, bei der ersten User-Message wird gestoppt und eine
+        Reply-Rückfrage samt Rest-Queue im Clarification-Payload vorbereitet (#237)."""
+        parts = []
+        while remaining:
+            m = remaining.pop(0)
+            suffix = f" von {m['source']}" if m.get("source") else ""
+            parts.append(f"{m['content']}{suffix}")
+            if m.get("sender_user_id"):
+                conv_ctx.set_clarification(_source, None, [], kind="message_reply_prompt",
+                                            payload={"sender_user_id": m["sender_user_id"], "message_id": m["id"],
+                                                      "remaining": remaining})
+                prefix = "Hier sind deine Benachrichtigungen: " if len(parts) > 1 else ""
+                return f"{prefix}{' '.join(parts)} Möchtest du antworten?"
+        if not parts:
+            return "Du hast keine offenen Benachrichtigungen."
+        return "Hier sind deine Benachrichtigungen: " + " ".join(parts)
+
+    def _read_and_consume_messages(user_id, _source: str) -> str:
+        """Holt alle offenen Messages eines Users (konsumiert = gelöscht, gilt weiterhin
+        als "tatsächlich vorgelesen" statt schon beim Erzeugen, #234) und spielt sie
+        über _play_message_queue ab."""
         if not user_id:
             return "Ich kann dich gerade nicht zuordnen."
         messages = message_manager.consume_all(user_id)
-        if not messages:
-            return "Du hast keine offenen Benachrichtigungen."
-        parts = []
-        for m in messages:
-            suffix = f" von {m['source']}" if m.get("source") else ""
-            parts.append(f"{m['content']}{suffix}")
-        return "Hier sind deine Benachrichtigungen: " + " ".join(parts)
+        return _play_message_queue(messages, _source)
 
-    def _resolve_message_confirmation(payload: dict, text: str) -> str:
+    def _resolve_message_confirmation(payload: dict, text: str, _source: str) -> str:
         """Antwortet auf die Ja/Nein-Rückfrage aus dem Message-Trailer (#234)."""
         if resolve_yes_no(text) is True:
-            return _read_and_consume_messages(payload["user_id"])
+            return _read_and_consume_messages(payload["user_id"], _source)
         return "Ok."
+
+    def _resolve_message_reply_prompt(payload: dict, text: str, _source: str) -> str:
+        """Antwortet auf "möchtest du antworten?" nach einer User-Message (#237).
+        Nein → Rest-Queue fortsetzen, Ja → Compose-Kontext für die Antwort öffnen."""
+        if resolve_yes_no(text) is True:
+            conv_ctx.set_clarification(_source, None, [], kind="message_compose",
+                                        payload={"recipient_id": payload["sender_user_id"],
+                                                 "reply_to_id": payload["message_id"], "remaining": payload["remaining"]})
+            return "Was möchtest du ausrichten?"
+        return _play_message_queue(payload["remaining"], _source)
+
+    def _resolve_message_compose(payload: dict, text: str, speaker_user_id, device: str, source: str, _source: str) -> str:
+        """Legt die gerade angesagte Nachricht an — Send (Schritt 4) und Reply (Schritt 5)
+        laufen beide hierüber, unterschieden nur durch reply_to_id (#237). Sender = aktueller
+        Sprecher, gleiche Attribuierungs-Kette wie MessageQuery/Send (#234)."""
+        sender_id = _resolve_message_user_id(speaker_user_id, device or _source_device(source))
+        if not sender_id:
+            return "Ich konnte dich gerade nicht zuordnen, deshalb kann ich die Nachricht nicht senden."
+        message_manager.create_message(
+            user_id=payload["recipient_id"], content=text, source="",
+            sender_user_id=sender_id, reply_to_id=payload.get("reply_to_id"),
+        )
+        remaining = payload.get("remaining") or []
+        if remaining:
+            return "Ok, ausgerichtet. " + _play_message_queue(remaining, _source)
+        return "Ok, ausgerichtet."
 
     # ------------------------------------------------------------------
     # Kern-Pipeline: numpy-Array → Intent → Gerät schalten (Sprach-Pfad)
@@ -680,8 +739,10 @@ def main():
             # (kein Satelliten-Owner-Fallback wie bei MessageQuery selbst — sonst würde
             # eine fremde Person am falschen Satelliten die Nachrichten eines anderen
             # angeboten bekommen), nicht leere Antworten (Stop/Pause/...), und nicht
-            # erneut auf die eigene MessageQuery-Antwort.
-            if resolved_user and answer and intent_name not in ("MessageQuery", "Trigger", "Ignored"):
+            # erneut auf die eigene MessageQuery-Antwort. SendMessage ebenfalls ausgeschlossen,
+            # sonst würde der Trailer die gerade gesetzte message_compose-Clarification aus
+            # dem Send-/Reply-Flow (#237) mit einer message_playback-Clarification überschreiben.
+            if resolved_user and answer and intent_name not in ("MessageQuery", "SendMessage", "Trigger", "Ignored"):
                 pending = message_manager.count_pending(resolved_user.id)
                 if pending > 0:
                     plural = "" if pending == 1 else "en"
@@ -725,7 +786,16 @@ def main():
                 return _logged(_resolve_alarm_confirmation(kind, clarification["payload"], text), "Alarm")
             if kind == "message_playback":
                 conv_ctx.clear_clarification(_source)
-                return _logged(_resolve_message_confirmation(clarification["payload"], text), "MessageQuery")
+                return _logged(_resolve_message_confirmation(clarification["payload"], text, _source), "MessageQuery")
+            if kind == "message_reply_prompt":
+                conv_ctx.clear_clarification(_source)
+                return _logged(_resolve_message_reply_prompt(clarification["payload"], text, _source), "MessageQuery")
+            if kind == "message_compose":
+                conv_ctx.clear_clarification(_source)
+                return _logged(
+                    _resolve_message_compose(clarification["payload"], text, speaker_user_id, device, source, _source),
+                    "SendMessage",
+                )
             resolved = resolve_clarification_answer(text, clarification["candidates"])
             if resolved:
                 conv_ctx.clear_clarification(_source)
@@ -900,8 +970,17 @@ def main():
         elif intent.name == "QueryAlarms":
             answer = _format_alarm_list(alarm_manager.get_alarm_records(), source)
         elif intent.name == "MessageQuery":
-            source_device = source if source in {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()} else None
-            answer = _read_and_consume_messages(_resolve_message_user_id(speaker_user_id, source_device))
+            answer = _read_and_consume_messages(_resolve_message_user_id(speaker_user_id, device or _source_device(source)), _source)
+        elif intent.name == "SendMessage":
+            target = _resolve_username(intent.value)
+            if not target:
+                answer = "Ich kenne diesen Namen nicht."
+            elif not _resolve_message_user_id(speaker_user_id, device or _source_device(source)):
+                answer = "Ich konnte dich gerade nicht zuordnen, deshalb kann ich keine Nachricht senden."
+            else:
+                conv_ctx.set_clarification(_source, None, [], kind="message_compose",
+                                            payload={"recipient_id": target.id, "reply_to_id": None, "remaining": []})
+                answer = "Was möchtest du ausrichten?"
         elif intent.name == "Smalltalk":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
