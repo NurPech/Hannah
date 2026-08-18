@@ -271,15 +271,20 @@ static void ota_update_task(void *arg)
 
         ESP_LOGI(TAG, "Starte OTA von %s", s_pending_url);
         hannah_audio_pause_wakeword();
+        ESP_LOGI(TAG, "OTA-Teardown: Wakeword pausiert.");
         hannah_wakeword_deinit();  /* PSRAM für mbedTLS-Download freigeben (#171) */
+        ESP_LOGI(TAG, "OTA-Teardown: Wakeword deinitialisiert.");
         esp_vfs_spiffs_unregister("spiffs");
+        ESP_LOGI(TAG, "OTA-Teardown: SPIFFS ausgehängt.");
         /* Business-Logik komplett abschalten (#193) — Satellit ist während OTA
          * ohnehin schon "taub" (Wakeword pausiert), vollständig offline für die
          * paar Sekunden ist kein zusätzlicher UX-Verlust. Gibt echtes internes
          * DRAM frei (I2S-DMA-Puffer), nicht nur PSRAM wie der Wakeword-Schritt
          * oben — der größte bislang ungenutzte Headroom-Hebel während OTA. */
         hannah_webserver_stop();
+        ESP_LOGI(TAG, "OTA-Teardown: Webserver gestoppt.");
         hannah_audio_deinit_for_ota();
+        ESP_LOGI(TAG, "OTA-Teardown: Audio deinitialisiert.");
         ESP_LOGI(TAG, "Free heap vor OTA: %lu", esp_get_free_heap_size());
 
         esp_http_client_config_t http_cfg = {

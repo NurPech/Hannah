@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.74.2 (2026-08-18)
+### Satellite Firmware
+
+* Added: diagnostic log lines between each teardown step in `ota_update_task` (wakeword pause/deinit, SPIFFS unmount, webserver stop, audio deinit) — a satellite was observed getting the OTA go-ahead repeatedly but never progressing past this teardown sequence on its first attempt, and the existing logs weren't granular enough to tell which call hangs (Refs #236)
+
 ## 0.74.1 (2026-08-18)
 ### Hannah Core
 
