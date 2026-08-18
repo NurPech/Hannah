@@ -250,3 +250,87 @@ func TestAudioSession_PCM_Empty(t *testing.T) {
 		t.Errorf("pcm() on empty session = %v, want []", got)
 	}
 }
+
+// --- dispatch: per-device ordering -------------------------------------------
+//
+// Before routing packets to a per-device worker, every UDP datagram was
+// handled in its own goroutine (`go s.handle(pkt, addr)`), so audio chunks
+// for the same satellite could be appended out of order under scheduler
+// jitter, and audio_end could race ahead of the last audio chunk it follows.
+// These guard against that regression.
+
+func TestDispatch_PreservesAudioOrderPerDevice(t *testing.T) {
+	const n = 100
+	s := makeServer()
+	addr := makeAddr("192.168.1.100", 7776)
+
+	s.mu.Lock()
+	s.satellites["dev1"] = &satellite{audioAddr: addr, ttsAddr: addr, lastHeartbeat: time.Now()}
+	s.mu.Unlock()
+
+	got := make(chan []byte, 1)
+	s.OnAudio(func(device string, pcm []byte) {
+		got <- pcm
+	})
+
+	for i := 0; i < n; i++ {
+		s.dispatch([]byte{typeAudio, byte(i)}, addr)
+	}
+	s.dispatch(append([]byte{typeControl}, controlPayload(t, map[string]any{
+		"type":   "audio_end",
+		"device": "dev1",
+	})...), addr)
+
+	select {
+	case pcm := <-got:
+		if len(pcm) != n {
+			t.Fatalf("got %d bytes, want %d", len(pcm), n)
+		}
+		for i := 0; i < n; i++ {
+			if pcm[i] != byte(i) {
+				t.Fatalf("byte %d out of order: got %d, want %d", i, pcm[i], i)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for onAudio callback")
+	}
+}
+
+func TestDispatch_DifferentDevicesConcurrent(t *testing.T) {
+	s := makeServer()
+	addrA := makeAddr("192.168.1.101", 7776)
+	addrB := makeAddr("192.168.1.102", 7776)
+
+	s.mu.Lock()
+	s.satellites["a"] = &satellite{audioAddr: addrA, ttsAddr: addrA, lastHeartbeat: time.Now()}
+	s.satellites["b"] = &satellite{audioAddr: addrB, ttsAddr: addrB, lastHeartbeat: time.Now()}
+	s.mu.Unlock()
+
+	release := make(chan struct{})
+	bDone := make(chan struct{}, 1)
+	s.OnSessionStart(func(device string) {
+		if device == "a" {
+			<-release // blocks worker "a" until the test releases it
+		} else {
+			bDone <- struct{}{}
+		}
+	})
+
+	s.dispatch([]byte{typeAudio, 1}, addrA) // blocks worker "a" in OnSessionStart
+
+	select {
+	case <-bDone:
+		t.Fatal("device b callback ran before being dispatched")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	s.dispatch([]byte{typeAudio, 1}, addrB)
+
+	select {
+	case <-bDone:
+	case <-time.After(time.Second):
+		t.Fatal("device b was not served while device a was still blocked — devices are not running concurrently")
+	}
+
+	close(release)
+}

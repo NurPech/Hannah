@@ -37,6 +37,11 @@ const (
 
 	maxPacket = 65535
 	ttsChunk  = 1400 // max bytes per TTS UDP packet — keeps packets below WiFi MTU (no IP fragmentation)
+
+	// workerQueueCapacity bounds each device's pending-packet queue. Handling
+	// a queued packet is just a mutex-protected append, so this only needs
+	// headroom against brief scheduling jitter, not sustained backlog.
+	workerQueueCapacity = 64
 )
 
 // AudioCallback is called when a complete audio session has been received.
@@ -64,6 +69,12 @@ type audioSession struct {
 	chunks [][]byte
 }
 
+// packetJob is one raw UDP datagram queued for a specific device's worker.
+type packetJob struct {
+	pkt  []byte
+	addr *net.UDPAddr
+}
+
 func (s *audioSession) pcm() []byte {
 	total := 0
 	for _, c := range s.chunks {
@@ -82,12 +93,13 @@ type Server struct {
 	conn *net.UDPConn
 
 	mu         sync.Mutex
-	satellites map[string]*satellite    // device → satellite
-	sessions   map[string]*audioSession // device → current session
+	satellites map[string]*satellite     // device → satellite
+	sessions   map[string]*audioSession  // device → current session
+	workers    map[string]chan packetJob // device → packet worker queue, preserves per-device order
 
-	onAudio            AudioCallback
-	onSessionStart     SessionStartCallback
-	onSatelliteChange  SatelliteChangeCallback
+	onAudio           AudioCallback
+	onSessionStart    SessionStartCallback
+	onSatelliteChange SatelliteChangeCallback
 }
 
 // NewServer creates a UDP server but does not bind yet.
@@ -99,6 +111,7 @@ func NewServer(addr string) *Server {
 		addr:       addr,
 		satellites: make(map[string]*satellite),
 		sessions:   make(map[string]*audioSession),
+		workers:    make(map[string]chan packetJob),
 	}
 }
 
@@ -278,7 +291,69 @@ func (s *Server) loop() {
 		}
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
+		s.dispatch(pkt, addr)
+	}
+}
+
+// dispatch routes a packet to its device's worker goroutine so packets from
+// the same satellite are always handled in arrival order — audio chunks
+// must not be reordered, and audio_end must never race ahead of the last
+// audio chunk it follows (both used to run as one goroutine per packet,
+// which could interleave or truncate a recording under scheduler jitter).
+// Different satellites still run fully concurrently, one worker each.
+//
+// Packets that can't be attributed to a device (audio from an unregistered
+// IP, malformed control JSON) carry no session state and are handled
+// inline — order doesn't matter for those.
+func (s *Server) dispatch(pkt []byte, addr *net.UDPAddr) {
+	device := s.routingDevice(pkt, addr)
+	if device == "" {
 		go s.handle(pkt, addr)
+		return
+	}
+	s.workerChan(device) <- packetJob{pkt: pkt, addr: addr}
+}
+
+// routingDevice extracts the device a packet belongs to without fully
+// processing it, so it can be queued to the right worker before handle()
+// parses it for real.
+func (s *Server) routingDevice(pkt []byte, addr *net.UDPAddr) string {
+	switch pkt[0] {
+	case typeControl:
+		var msg struct {
+			Device string `json:"device"`
+		}
+		if err := json.Unmarshal(pkt[1:], &msg); err != nil {
+			return ""
+		}
+		return msg.Device
+	case typeAudio:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.findDeviceByIP(addr.IP.String())
+	default:
+		return ""
+	}
+}
+
+// workerChan returns device's packet queue, starting its worker goroutine
+// lazily on first use. The channel send in dispatch happens without holding
+// s.mu, so a full queue for one device only blocks packets for that device.
+func (s *Server) workerChan(device string) chan packetJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch, ok := s.workers[device]
+	if !ok {
+		ch = make(chan packetJob, workerQueueCapacity)
+		s.workers[device] = ch
+		go s.runWorker(ch)
+	}
+	return ch
+}
+
+func (s *Server) runWorker(ch chan packetJob) {
+	for job := range ch {
+		s.handle(job.pkt, job.addr)
 	}
 }
 

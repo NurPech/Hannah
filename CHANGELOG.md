@@ -5,6 +5,12 @@
 -->
 
 
+
+## 0.74.5 (2026-08-18)
+### Hannah Proxy
+
+* Fixed: satellite UDP audio could arrive at Core reordered or truncated — every incoming packet was handled in its own goroutine (`go s.handle(pkt, addr)`), so under scheduler jitter, audio chunks for the same session could get appended out of order, and `audio_end` could race ahead of the last audio chunk it follows. Packets are now routed to one worker goroutine per satellite (`Server.dispatch`/`workerChan`), preserving per-device arrival order while different satellites still run fully concurrently — same pattern already used for outbound `PlayAudioCommand` chunks (`playAudioDispatcher`). Root-caused via a temporary Core-side debug capture (0.74.4) that showed garbled audio for a session whose satellite-local recording was clean (Refs #226)
+
 ## 0.74.4 (2026-08-18)
 ### Hannah Core
 
