@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.74.9 (2026-08-19)
+### Satellite Firmware
+
+* Fixed: a satellite that was muted at the time an OTA update became available would hang forever on the first teardown step and never complete the update. `hannah_audio_pause_wakeword()` blocks until `mic_task` reaches its `s_wakeword_paused` handshake, but the mute check earlier in `mic_task`'s loop `continue`s past that point whenever the device is muted — so a muted satellite could never give the semaphore the OTA task was waiting on. `#236`'s teardown diagnostics narrowed this down precisely by their absence: nothing after "Starte OTA von %s" ever logged. The `s_wakeword_paused` check now runs before the mute/streaming-paused checks in the loop, so OTA can always request the pause regardless of the satellite's current mute state (Refs #240)
+
 ## 0.74.8 (2026-08-19)
 ### Hannah Core
 

@@ -1070,6 +1070,22 @@ static void mic_task(void *arg)
             continue;
         }
 
+        if (s_wakeword_paused) {
+            /* Muss vor den Mute-/Streaming-Paused-Checks unten geprüft werden (#240):
+             * beide `continue`n vorher aus der Schleife, sodass dieser Block bei
+             * einem gemuteten oder streaming-pausierten Satelliten nie erreicht
+             * würde — hannah_audio_pause_wakeword() (OTA-Task) blockiert dann für
+             * immer auf das hier fällige xSemaphoreGive() und das OTA hängt sich
+             * beim allerersten Teardown-Schritt auf.
+             * OTA läuft — Inference pausieren damit IDLE0 den WDT zurücksetzen kann.
+             * xSemaphoreGive() bestätigt hannah_audio_pause_wakeword(), dass hier
+             * gerade sicher kein hannah_wakeword_process()/Invoke() mehr läuft —
+             * erst danach darf der OTA-Task die TFLite-Arena freigeben (#196). */
+            xSemaphoreGive(s_wakeword_parked_sem);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         if (hannah_net_is_muted()) {
             state = AUDIO_STATE_IDLE;
             if (!s_sampling_mode)
@@ -1083,16 +1099,6 @@ static void mic_task(void *arg)
 
         if (s_streaming_paused) {
             vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-
-        if (s_wakeword_paused) {
-            /* OTA läuft — Inference pausieren damit IDLE0 den WDT zurücksetzen kann.
-             * xSemaphoreGive() bestätigt hannah_audio_pause_wakeword(), dass hier
-             * gerade sicher kein hannah_wakeword_process()/Invoke() mehr läuft —
-             * erst danach darf der OTA-Task die TFLite-Arena freigeben (#196). */
-            xSemaphoreGive(s_wakeword_parked_sem);
-            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
