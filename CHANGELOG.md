@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.74.7 (2026-08-19)
+### Hannah Core
+
+* Fixed: deleting a Message (`DeleteMessage` gRPC, and consuming via `MessageQuery`) failed with `FOREIGN KEY constraint failed` whenever another Message referenced it via `reply_to_id`. The fresh-install schema for `messages.reply_to_id`/`sender_user_id` always had `ON DELETE SET NULL`, but the additive `ALTER TABLE` migration that adds these columns to a pre-existing `messages` table (from before #237) did not — SQLite can't retrofit a `REFERENCES` clause via `ALTER TABLE`, so any DB that went through that migration path was left with FKs defaulting to `NO ACTION`. `init_db()` now detects and rebuilds the `messages` table against the correct schema on affected DBs (Refs #238)
+
 ## 0.74.6 (2026-08-19)
 ### Satellite Firmware
 

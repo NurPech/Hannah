@@ -262,6 +262,32 @@ def init_db():
         db.execute('ALTER TABLE "messages" ADD COLUMN "reply_to_id" INTEGER REFERENCES "messages"("id")')
         db.commit()
 
+    # #238: Die additive Migration oben (ADD COLUMN "sender_user_id"/"reply_to_id")
+    # konnte kein "ON DELETE SET NULL" setzen — SQLite unterstützt das nachträgliche
+    # Ändern einer REFERENCES-Klausel per ALTER TABLE nicht. Damit hat jede DB, die
+    # diesen Pfad durchlaufen hat (statt frisch per CREATE TABLE angelegt zu werden),
+    # FKs ohne ON DELETE SET NULL und bricht beim Löschen referenzierter Messages/User
+    # mit "FOREIGN KEY constraint failed" ab. Fix: Tabelle einmalig gegen das aktuelle
+    # SCHEMA (mit korrektem ON DELETE SET NULL) neu aufbauen — klassische SQLite-FK-
+    # Migration (rename → recreate → copy → drop), da SQLite kein ALTER COLUMN kennt.
+    if "messages" in _existing_tables(db):
+        needs_fk_fix = any(
+            fk[3] in ("sender_user_id", "reply_to_id") and fk[6] != "SET NULL"
+            for fk in db.execute('PRAGMA foreign_key_list("messages")').fetchall()
+        )
+        if needs_fk_fix:
+            db.connection.execute("PRAGMA foreign_keys=OFF")
+            db.execute('ALTER TABLE "messages" RENAME TO "messages_old_238"')
+            db.connection.executescript(SCHEMA)
+            db.execute(
+                'INSERT INTO "messages" (id, user_id, content, source, sender_user_id, reply_to_id, created_at) '
+                'SELECT id, user_id, content, source, sender_user_id, reply_to_id, created_at FROM "messages_old_238"'
+            )
+            db.execute('DROP TABLE "messages_old_238"')
+            db.commit()
+            db.connection.execute("PRAGMA foreign_keys=ON")
+            _log.info("DB-Migration #238: messages-Tabelle mit korrektem ON DELETE SET NULL neu angelegt")
+
     # #56: Gruppen referenzieren jetzt Satelliten direkt statt Räume — group_rooms wird
     # einmalig nach group_satellites übernommen (jeder Satellit, der laut DB aktuell im
     # migrierten Raum sitzt) und danach gelöscht. Läuft nur einmal, da group_rooms danach
