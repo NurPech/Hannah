@@ -1119,6 +1119,13 @@ def main():
         room = all_devices.get(device, "")
         display_name = satellite_manager.resolve_satellite_name(device) or ""
         grpc_servicer.agent_satellite_update(device, room, "", True, mute=muted, display_name=display_name)
+        # #235 hat mute/set retained gemacht, damit Satelliten ihren Mute-State über
+        # Reboots hinweg behalten — das setzt aber voraus, dass mute/set immer den
+        # zuletzt bekannten Ist-Zustand trägt. Ein physischer Tastendruck ändert nur
+        # mute/state, nie mute/set; ohne dieses Echo bleibt der retained set-Topic auf
+        # dem alten Core-Kommando stehen und wird bei jedem Resubscribe erneut auf den
+        # Satelliten angewendet, der sich damit gerade selbst entmutet hat (#239).
+        mqtt_handler.publish_mute_set(device, muted)
         if room:
             for sibling, sibling_room in all_devices.items():
                 if sibling != device and sibling_room.lower() == room.lower():

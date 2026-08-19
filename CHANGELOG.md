@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.74.8 (2026-08-19)
+### Hannah Core
+
+* Fixed: physical mute button on a satellite stopped reliably unmuting — mics would briefly open, then immediately mute again. Root cause: #235 made the `mute/set` MQTT topic retained so satellites keep their mute state across reboots, but a physical button press only updates `mute/state`, never `mute/set`, so the retained topic stayed on the last Core-issued command. Any later resubscribe (satellite reconnect) redelivered that stale value and re-muted the device. `_on_mute` now also republishes `mute/set` for the reporting device itself, not just room siblings, keeping the retained topic in sync with the actual last-known state regardless of whether it changed via Core or the physical button (Refs #239)
 
 ## 0.74.7 (2026-08-19)
 ### Hannah Core
