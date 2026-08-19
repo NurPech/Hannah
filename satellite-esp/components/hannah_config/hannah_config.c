@@ -59,7 +59,7 @@ void hannah_config_init(void)
 #ifdef CONFIG_HANNAH_TDM_DOWNMIX_GAIN
         s_cfg.tdm_downmix_gain = CONFIG_HANNAH_TDM_DOWNMIX_GAIN;
 #else
-        s_cfg.tdm_downmix_gain = 128;
+        s_cfg.tdm_downmix_gain = 16;
 #endif
 #ifdef CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT
         s_cfg.spk_output_gain_percent = CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT;
@@ -102,7 +102,7 @@ void hannah_config_init(void)
 #ifdef CONFIG_HANNAH_TDM_DOWNMIX_GAIN
     uint8_t tdm_gain = CONFIG_HANNAH_TDM_DOWNMIX_GAIN;
 #else
-    uint8_t tdm_gain = 128;
+    uint8_t tdm_gain = 16;
 #endif
     nvs_get_u8(h, "tdm_gain", &tdm_gain);
     s_cfg.tdm_downmix_gain = tdm_gain;

@@ -38,14 +38,17 @@ menu "Hannah Audio"
 
     config HANNAH_TDM_DOWNMIX_GAIN
         int "TDM-Downmix-Verstärkung (Faktor)"
-        default 128
+        default 16
         range 1 200
         depends on HANNAH_MIC_TYPE_TDM
         help
             Digitale Verstärkung des ADAU7118-TDM-Rohsignals (kein eigenes
-            Gain-Register auf dem Chip, s. Issue #222). Gegen reale
-            Nutzungsentfernung abgestimmt (128, sauberes Signal ohne Clipping).
-            Runtime-Override per NVS/WebUI möglich, ohne Reflash.
+            Gain-Register auf dem Chip, s. Issue #222). 128 (ursprünglicher
+            Default) klippt normale bis laute Sprache zuverlässig (>10%
+            geklippte Samples), was STT/VoiceID verschlechtert — 16 gegen
+            reale Nutzungsentfernung (1-2m) kalibriert, sauberes Signal ohne
+            Clipping (Refs #227). Runtime-Override per NVS/WebUI möglich,
+            ohne Reflash.
 
     config HANNAH_SPK_OUTPUT_GAIN_PERCENT
         int "Speaker-Output-Gain (%)"

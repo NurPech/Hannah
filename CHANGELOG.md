@@ -4,7 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.74.6 (2026-08-19)
+### Satellite Firmware
 
+* Fixed: Rev.5 `tdm_downmix_gain` default lowered from 128 to 16 — 128 clipped normal-to-loud speech reliably (>10% clipped samples measured, peak pinned at full scale during speech), degrading STT and preventing VoiceID from ever matching a speaker on Rev.5 satellites. Calibrated against real 1-2m usage distance (not near-field); confirmed via debug-WAV clipping-ratio measurement and repeated VoiceID matches at gain=16 (Refs #227)
 
 ## 0.74.5 (2026-08-18)
 ### Hannah Proxy
