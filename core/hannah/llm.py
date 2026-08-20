@@ -67,7 +67,7 @@ def prepare_prompt(raw: str, iobroker: "IoBrokerClient | None" = None) -> str:
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_FALLBACK = "Das kann ich leider nicht beantworten."
+DEFAULT_FALLBACK = "Das kann ich leider nicht beantworten."
 _CLASSIFY_PROMPT = (
     "Antworte ausschließlich mit COMMAND, SMALLTALK oder NOT_ADDRESSED — kein anderes Wort.\n"
     "COMMAND: der Nutzer will ein Gerät steuern ODER nach dem Status von Geräten oder Sensoren fragen "
@@ -90,10 +90,13 @@ class LLMClient(ABC):
         user_message: str,
         system_prompt: str = "",
         history: list[dict] | None = None,
-    ) -> str:
+    ) -> str | None:
         """
         Schickt eine Nachricht und gibt die Antwort als String zurück.
         history: optionale Nachrichtenhistorie [{role, content}, ...] vor user_message.
+        Gibt None zurück wenn die Anfrage fehlschlägt (Timeout/Fehler) — Aufrufer
+        entscheiden selbst über ihr Fallback-Verhalten, statt einen Fehlschlag
+        ungewollt als valide Antwort zu behandeln (#215).
         """
 
     def classify(self, text: str, history: list[dict] | None = None) -> str:
@@ -101,7 +104,7 @@ class LLMClient(ABC):
         Äußerung erkennbar nicht an Hannah gerichtet, z.B. Fremdgespräch im offenen
         Smalltalk-Follow-up-Mic-Fenster) zurück. history: optionaler Gesprächsverlauf
         (#159), damit die Entscheidung den bisherigen Dialogkontext einbeziehen kann."""
-        result = self.chat(text, system_prompt=_CLASSIFY_PROMPT, history=history).upper()
+        result = (self.chat(text, system_prompt=_CLASSIFY_PROMPT, history=history) or "").upper()
         if "NOT_ADDRESSED" in result:
             return "NOT_ADDRESSED"
         if "COMMAND" in result:
@@ -115,7 +118,7 @@ class LLMClient(ABC):
             "Antworte ausschließlich mit JA oder NEIN.\n"
             f"Antwort: {text!r}"
         )
-        result = self.chat("", system_prompt=prompt)
+        result = self.chat("", system_prompt=prompt) or ""
         return "JA" in result.upper()
 
     def chat_with_tools(self, messages: list[dict], tools: list[dict]) -> dict:  # pyright: ignore[reportUnusedParameter]
@@ -129,7 +132,7 @@ class LLMClient(ABC):
         system = next((m["content"] for m in messages if m.get("role") == "system"), "")
         history = [m for m in messages if m.get("role") not in ("system", "user")]
         return {
-            "content": self.chat(user_msg, system_prompt=system, history=history or None),
+            "content": self.chat(user_msg, system_prompt=system, history=history or None) or "",
             "tool_calls": [],
             "finish_reason": "stop",
         }
@@ -138,7 +141,7 @@ class LLMClient(ABC):
 class DummyLLM(LLMClient):
     """Gibt eine feste Antwort zurück — kein API-Aufruf."""
 
-    def __init__(self, response: str = _DEFAULT_FALLBACK) -> None:
+    def __init__(self, response: str = DEFAULT_FALLBACK) -> None:
         self._response = response
         log.info("LLM: DummyLLM aktiv (kein LLM konfiguriert)")
 
@@ -187,7 +190,7 @@ class OpenAICompatibleLLM(LLMClient):
         user_message: str,
         system_prompt: str = "",
         history: list[dict] | None = None,
-    ) -> str:
+    ) -> str | None:
         messages: list[dict] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -214,10 +217,10 @@ class OpenAICompatibleLLM(LLMClient):
             return resp.json()["choices"][0]["message"]["content"].strip()
         except requests.exceptions.Timeout:
             log.warning("LLM-Anfrage: Timeout nach %.1fs", self._timeout)
-            return _DEFAULT_FALLBACK
+            return None
         except Exception as exc:
             log.error("LLM-Anfrage fehlgeschlagen: %s", exc)
-            return _DEFAULT_FALLBACK
+            return None
 
     def chat_with_tools(self, messages: list[dict], tools: list[dict]) -> dict:
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -245,10 +248,10 @@ class OpenAICompatibleLLM(LLMClient):
             }
         except requests.exceptions.Timeout:
             log.warning("LLM tool call: Timeout nach %.1fs", self._timeout)
-            return {"content": _DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop"}
+            return {"content": DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop"}
         except Exception as exc:
             log.error("LLM tool call fehlgeschlagen: %s", exc)
-            return {"content": _DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop"}
+            return {"content": DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop"}
 
 
 class OllamaLLM(LLMClient):
@@ -273,7 +276,7 @@ class OllamaLLM(LLMClient):
         user_message: str,
         system_prompt: str = "",
         history: list[dict] | None = None,
-    ) -> str:
+    ) -> str | None:
         messages: list[dict] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -292,10 +295,10 @@ class OllamaLLM(LLMClient):
             return resp.json()["message"]["content"].strip()
         except requests.exceptions.Timeout:
             log.warning("LLM-Anfrage: Timeout nach %.1fs", self._timeout)
-            return _DEFAULT_FALLBACK
+            return None
         except Exception as exc:
             log.error("LLM-Anfrage fehlgeschlagen: %s", exc)
-            return _DEFAULT_FALLBACK
+            return None
 
 
 def load(cfg: dict) -> LLMClient:
@@ -309,13 +312,13 @@ def load(cfg: dict) -> LLMClient:
       → kompatibel mit Ollama ≥ 0.1.24, GPT4All, LM Studio, Groq, ...
     """
     if not cfg or not cfg.get("enabled", False):
-        fallback = (cfg or {}).get("fallback_response", _DEFAULT_FALLBACK)
+        fallback = (cfg or {}).get("fallback_response", DEFAULT_FALLBACK)
         return DummyLLM(fallback)
 
     base_url = cfg.get("base_url", "").strip()
     if not base_url:
         log.warning("LLM: enabled=true aber base_url fehlt — DummyLLM als Fallback")
-        return DummyLLM(cfg.get("fallback_response", _DEFAULT_FALLBACK))
+        return DummyLLM(cfg.get("fallback_response", DEFAULT_FALLBACK))
 
     provider = cfg.get("provider", "openai_compat")
     timeout   = float(cfg.get("timeout", 10.0))

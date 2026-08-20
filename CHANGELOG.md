@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.74.10 (2026-08-20)
+### Hannah Core
+
+* Fixed: `LLMClient.chat()` swallowed timeouts and other request errors internally and returned the canned fallback text `"Das kann ich leider nicht beantworten."` as a normal (truthy) return value instead of signaling failure. Callers that only checked truthiness — most visibly `process_notification()` — mistook a failed LLM call for a successful one and spoke the unrelated canned fallback instead of the actual (already-composed) notification text. `chat()` now returns `None` on failure so callers can decide their own fallback; most call sites already had the correct `if result and result.strip()` guard for this and needed no change, they were just never able to see a falsy value before (Refs #215)
+* Fixed: most text-command responses (`_handle_text()` — CarQuery, WeatherQuery, Smalltalk follow-ups, Trigger phrases, alarm/message confirmations, ...) were only ever recorded via `activity_log.log_activity()`, a structured DB write with no matching human-readable log line. The only path that logged its answer as text was the `tool_agent` loop's `speak()` tool call, so any response taking a different route left no trace in journald/Loki — e.g. a Smalltalk follow-up handled by the direct LLM-classify path (once `conv_ctx` marks a conversation smalltalk-active) instead of via `tool_agent`. `_logged()`, the shared return point for nearly every branch in `_handle_text()`, now also logs the final answer text (Refs #219)
+* Fixed: conversation summaries written to long-term memory (`_on_conversation_end()`) could name the wrong person — the summarization prompt never told the LLM who it was actually talking to (unlike the regular answer path, which injects the resolved speaker via `_speaker_context()`), so the LLM sometimes filled the gap with a hallucinated placeholder name instead of writing generically about "der Nutzer". The summarizer now resolves the real display name via `UserManager` and either includes it explicitly in the prompt, or — if no user can be resolved — is told outright not to invent one (Refs #218)
 
 ## 0.74.9 (2026-08-19)
 ### Satellite Firmware

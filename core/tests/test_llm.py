@@ -1,11 +1,15 @@
-from hannah.llm import DummyLLM, LLMClient
+from unittest.mock import patch
+
+import requests
+
+from hannah.llm import DummyLLM, LLMClient, OllamaLLM, OpenAICompatibleLLM
 
 
 class _StubLLM(LLMClient):
     """LLMClient-Subklasse mit fest verdrahteter chat()-Antwort — testet nur die
     Parsing-Logik von classify(), ohne einen echten LLM-Call zu brauchen."""
 
-    def __init__(self, response: str):
+    def __init__(self, response: str | None):
         self._response = response
         self.last_history = "unset"
 
@@ -59,6 +63,22 @@ class TestClassify:
 
         assert llm.last_history is None
 
+    def test_failed_chat_defaults_to_smalltalk(self):
+        """#215 — chat() signalisiert einen Fehlschlag mit None; classify() darf
+        dabei nicht crashen (.upper() auf None) und muss auf SMALLTALK zurückfallen,
+        wie schon bei jeder anderen nicht auswertbaren Antwort."""
+        llm = _StubLLM(None)
+
+        assert llm.classify("...") == "SMALLTALK"
+
+
+class TestMatch:
+    def test_failed_chat_defaults_to_false(self):
+        """#215 — chat()==None darf match() nicht mit AttributeError crashen."""
+        llm = _StubLLM(None)
+
+        assert llm.match("...", "Zustimmung") is False
+
 
 class TestDummyLLMClassify:
     """Kein LLM konfiguriert → immer COMMAND, unabhängig von History (#159)."""
@@ -72,3 +92,36 @@ class TestDummyLLMClassify:
         llm = DummyLLM()
 
         assert llm.classify("irgendwas", history=[{"role": "user", "content": "x"}]) == "COMMAND"
+
+
+class TestOpenAICompatibleLLMChatFailure:
+    """#215 — chat() muss einen Fehlschlag erkennbar signalisieren (None) statt den
+    Fallback-Text als valide Antwort zurückzugeben, sonst halten Aufrufer, die nur
+    auf Truthy prüfen (z.B. process_notification()), einen fehlgeschlagenen Call
+    für erfolgreich."""
+
+    def test_timeout_returns_none(self):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="llama3.2")
+
+        with patch("hannah.llm.requests.post", side_effect=requests.exceptions.Timeout):
+            assert llm.chat("Hallo") is None
+
+    def test_connection_error_returns_none(self):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="llama3.2")
+
+        with patch("hannah.llm.requests.post", side_effect=requests.exceptions.ConnectionError):
+            assert llm.chat("Hallo") is None
+
+
+class TestOllamaLLMChatFailure:
+    def test_timeout_returns_none(self):
+        llm = OllamaLLM(base_url="http://localhost:11434", model="llama3.2")
+
+        with patch("hannah.llm.requests.post", side_effect=requests.exceptions.Timeout):
+            assert llm.chat("Hallo") is None
+
+    def test_connection_error_returns_none(self):
+        llm = OllamaLLM(base_url="http://localhost:11434", model="llama3.2")
+
+        with patch("hannah.llm.requests.post", side_effect=requests.exceptions.ConnectionError):
+            assert llm.chat("Hallo") is None

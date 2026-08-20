@@ -41,7 +41,7 @@ from hannah.stt import STT
 from hannah.tts import TTS
 from hannah.udp_server import UDPServer
 from hannah.conversation import ConversationContext
-from hannah.llm import load as load_llm, prepare_prompt
+from hannah.llm import DEFAULT_FALLBACK, load as load_llm, prepare_prompt
 from hannah.tool_agent import ToolAgent
 from hannah.memory import LongTermMemory
 from hannah.room_manager import RoomManager
@@ -209,11 +209,21 @@ def main():
         if source in _ANON_SOURCES or not history:
             return
         try:
+            # #218 — ohne echten Namen im Prompt erfindet das LLM sonst einen Platzhalter-
+            # namen für die zusammenfassende Erinnerung, statt "der Nutzer" zu schreiben.
+            resolved_user = _user_manager.get_user_by_id(source) or _user_manager.get_user_by_username(source)
+            speaker_label = resolved_user.display_name if resolved_user else "Nutzer"
             history_text = "\n".join(
-                f"{'Nutzer' if m['role'] == 'user' else 'Hannah'}: {m['content']}"
+                f"{speaker_label if m['role'] == 'user' else 'Hannah'}: {m['content']}"
                 for m in history
             )
-            summary = llm.chat(history_text, system_prompt=_SUMMARY_PROMPT)
+            summary_prompt = _SUMMARY_PROMPT + (
+                f" Die Person heißt {resolved_user.display_name} — nutze ausschließlich diesen Namen, erfinde keinen anderen."
+                if resolved_user else
+                " Der Name der Person ist dir nicht bekannt — erfinde keinen Namen, "
+                "formuliere stattdessen ohne Namensnennung (z.B. 'der Nutzer')."
+            )
+            summary = llm.chat(history_text, system_prompt=summary_prompt)
             if summary and summary.strip():
                 memory.add(source, summary.strip())
         except Exception as e:
@@ -669,6 +679,8 @@ def main():
         elif intent.name == "Smalltalk":
             history = conv_ctx.get_llm_history(device)
             answer = llm.chat(text, system_prompt=prepare_prompt(llm_system_prompt, iobroker), history=history)
+            if answer is None:
+                answer = DEFAULT_FALLBACK
             conv_ctx.add_llm_exchange(device, text, answer)
             _maybe_reopen_smalltalk_mic(device)
             _feedback(device, True, answer)
@@ -754,6 +766,8 @@ def main():
                 user_id=str(resolved_user.id) if resolved_user else "", raw_text=text, intent=intent,
                 answer_text=answer, audio_array=audio_array, sample_rate=sample_rate,
             )
+            if answer:
+                log.info(f"[{_source}] Antwort ({intent_name}): {answer!r}")
             return answer, intent_name
 
         phrase_reply = trigger_engine.match_phrase(text)
@@ -768,6 +782,8 @@ def main():
                 log.debug(f"[{_source}] Classifier → SMALLTALK (Modus aktiv)")
                 sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
                 answer = llm.chat(text, system_prompt=sp, history=history)
+                if answer is None:
+                    answer = DEFAULT_FALLBACK
                 conv_ctx.add_llm_exchange(_source, text, answer)
                 return _logged(answer, "Smalltalk")
             if verdict == "NOT_ADDRESSED":
