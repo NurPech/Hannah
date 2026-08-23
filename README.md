@@ -80,7 +80,9 @@ sudo apt install portaudio19-dev
 pip install -r requirements.txt
 ```
 
-### Konfiguration (`config.yaml`)
+### Konfiguration (`config.yaml`) - Auszug
+
+Vollständige Konfiguration siehe mitgelieferte Datei core/config.example.yaml. Die Datei config.yaml muss am Ende in /etc/hannah/config.yaml liegen.
 
 ```yaml
 iobroker:
