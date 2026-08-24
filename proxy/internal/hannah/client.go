@@ -51,13 +51,13 @@ func (c *Client) Close() {
 // SubmitSatelliteAudio sends a complete audio session to Hannah and waits for
 // the pipeline result (STT → NLU → TTS).
 // pcm must be raw 16-bit signed mono at 16000 Hz.
-// speakerUserID is the result of a prior Voice-ID lookup; pass "" if unknown.
-func (c *Client) SubmitSatelliteAudio(ctx context.Context, deviceID string, pcm []byte, speakerUserID string) (*pb.SubmitSatelliteAudioResponse, error) {
+// Speaker identification now happens on Hannah's side (#210) — the proxy no
+// longer resolves or forwards a speaker_user_id.
+func (c *Client) SubmitSatelliteAudio(ctx context.Context, deviceID string, pcm []byte) (*pb.SubmitSatelliteAudioResponse, error) {
 	return c.stub.SubmitSatelliteAudio(ctx, &pb.SubmitSatelliteAudioRequest{
-		DeviceId:      deviceID,
-		AudioPcm:      pcm,
-		SampleRate:    16000,
-		SpeakerUserId: speakerUserID,
+		DeviceId:   deviceID,
+		AudioPcm:   pcm,
+		SampleRate: 16000,
 	})
 }
 

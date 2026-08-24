@@ -19,13 +19,4 @@ func TestLoadExampleConfig(t *testing.T) {
 	if cfg.UDP.AdvertiseHost != "192.168.8.5" {
 		t.Errorf("udp.advertise_host mismatch: %q", cfg.UDP.AdvertiseHost)
 	}
-	if cfg.VoiceID.Enabled {
-		t.Errorf("voice_id.enabled mismatch: got true, want false")
-	}
-	if cfg.VoiceID.BaseURL != "http://localhost:8080" {
-		t.Errorf("voice_id.base_url mismatch: %q", cfg.VoiceID.BaseURL)
-	}
-	if cfg.VoiceID.TimeoutSec != 10.0 {
-		t.Errorf("voice_id.timeout_sec mismatch: %v", cfg.VoiceID.TimeoutSec)
-	}
 }

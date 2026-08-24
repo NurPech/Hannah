@@ -102,7 +102,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         get_satellites: Callable[[], dict],
         get_car_state: Callable[[], Optional[object]],      # → CarState | None (erster Tracker)
         get_all_cars: Optional[Callable[[], list]] = None,  # → [(CarState, home_address)]
-        handle_satellite_audio: Optional[Callable] = None,  # (device, room, pcm) → (transcript, answer, intent, pcm, rate)
+        handle_satellite_audio: Optional[Callable] = None,  # (device, pcm) → (transcript, answer, intent, pcm, rate)
         disable_udp: Optional[Callable[[], None]] = None,
         enable_udp: Optional[Callable[[], None]] = None,
         on_proxy_discovery: Optional[Callable[[str, int], None]] = None,  # (host, port) — None args = restore own address
@@ -1069,14 +1069,12 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             context.set_details("handle_satellite_audio not configured")
             return pb.SubmitSatelliteAudioResponse()
 
-        speaker = request.speaker_user_id or ""
         with self._proxy_sat_lock:
             known = self._proxy_satellites.get(request.device_id)
         room_id = (known or {}).get("room") or self._resolve_satellite_room(request.device_id) or ""
         log.info(
             f"[grpc] SubmitSatelliteAudio: device={request.device_id!r}"
             f" room={room_id!r} bytes={len(request.audio_pcm)}"
-            + (f" speaker={speaker!r}" if speaker else " speaker=anonymous")
         )
         if self._on_satellite_change and request.device_id and known is None:
             with self._proxy_sat_lock:
@@ -1096,7 +1094,6 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         transcript, answer, intent_name, tts_pcm, sample_rate = self._handle_satellite_audio(
             request.device_id,
             request.audio_pcm,
-            speaker,
         )
         return pb.SubmitSatelliteAudioResponse(
             transcript=transcript,

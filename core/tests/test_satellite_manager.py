@@ -54,15 +54,22 @@ def _insert_satellite(mgr, device_id, seed, days_old):
         )
 
 
-def _insert_satellite_with_last_restart(mgr, device_id, days_since_restart):
+def _insert_satellite_with_last_restart(mgr, device_id, days_since_restart, now=None):
     """Wie _insert_satellite, setzt zusätzlich last_restart_at auf vor X Tagen
     (statt NULL) — Voraussetzung dafür, dass check_and_restart_due_satellites
-    den Satelliten überhaupt betrachtet."""
+    den Satelliten überhaupt betrachtet. `now` ist der Bezugszeitpunkt für die
+    Berechnung (Default: echte aktuelle Zeit) und muss mit dem `now`, das an
+    check_and_restart_due_satellites übergeben wird, identisch sein — sonst
+    driften beide Zeitbasen mit der Zeit auseinander (#242: vorher wurde hier
+    immer die echte SQLite-Wall-Clock benutzt, während die Tests ein fest
+    verdrahtetes Kalenderdatum als `now` übergaben)."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    last_restart_at = (now - datetime.timedelta(days=days_since_restart)).strftime("%Y-%m-%d %H:%M:%S")
     with mgr._db().connection as conn:
         conn.execute(
             """INSERT INTO satellites (device_id, seed, display_name, created_at, last_restart_at)
-               VALUES (?, NULL, ?, datetime('now'), datetime('now', ?))""",
-            (device_id, device_id, f"-{days_since_restart} days"),
+               VALUES (?, NULL, ?, datetime('now'), ?)""",
+            (device_id, device_id, last_restart_at),
         )
 
 
@@ -267,13 +274,13 @@ class TestRejuvenationRestart:
 
     def test_due_and_free_triggers_restart(self, manager_with_users):
         mgr, db = manager_with_users
-        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30)
+        due_hour = _due_hour_for("wz-esp")
+        now = datetime.datetime.now(datetime.timezone.utc).replace(hour=due_hour, minute=0, second=0, microsecond=0)
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30, now=now)
         triggered = []
         mgr._trigger_restart = triggered.append
         mgr._is_device_free = lambda _d: True
         mgr._restart_interval_days = 7
-        due_hour = _due_hour_for("wz-esp")
-        now = datetime.datetime(2026, 7, 29, due_hour, 0, tzinfo=datetime.timezone.utc)
 
         restarted = mgr.check_and_restart_due_satellites(now=now)
 
@@ -283,13 +290,13 @@ class TestRejuvenationRestart:
 
     def test_due_but_not_free_is_skipped(self, manager_with_users):
         mgr, db = manager_with_users
-        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30)
+        due_hour = _due_hour_for("wz-esp")
+        now = datetime.datetime.now(datetime.timezone.utc).replace(hour=due_hour, minute=0, second=0, microsecond=0)
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30, now=now)
         triggered = []
         mgr._trigger_restart = triggered.append
         mgr._is_device_free = lambda _d: False
         mgr._restart_interval_days = 7
-        due_hour = _due_hour_for("wz-esp")
-        now = datetime.datetime(2026, 7, 29, due_hour, 0, tzinfo=datetime.timezone.utc)
         old_last_restart_at = mgr.get_satellite("wz-esp").last_restart_at
 
         restarted = mgr.check_and_restart_due_satellites(now=now)
@@ -300,13 +307,13 @@ class TestRejuvenationRestart:
 
     def test_not_yet_due_is_skipped(self, manager_with_users):
         mgr, db = manager_with_users
-        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=1)
+        due_hour = _due_hour_for("wz-esp")
+        now = datetime.datetime.now(datetime.timezone.utc).replace(hour=due_hour, minute=0, second=0, microsecond=0)
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=1, now=now)
         triggered = []
         mgr._trigger_restart = triggered.append
         mgr._is_device_free = lambda _d: True
         mgr._restart_interval_days = 7
-        due_hour = _due_hour_for("wz-esp")
-        now = datetime.datetime(2026, 7, 29, due_hour, 0, tzinfo=datetime.timezone.utc)
 
         restarted = mgr.check_and_restart_due_satellites(now=now)
 
@@ -315,13 +322,13 @@ class TestRejuvenationRestart:
 
     def test_wrong_hour_is_skipped(self, manager_with_users):
         mgr, db = manager_with_users
-        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30)
+        wrong_hour = (_due_hour_for("wz-esp") + 1) % 24
+        now = datetime.datetime.now(datetime.timezone.utc).replace(hour=wrong_hour, minute=0, second=0, microsecond=0)
+        _insert_satellite_with_last_restart(mgr, "wz-esp", days_since_restart=30, now=now)
         triggered = []
         mgr._trigger_restart = triggered.append
         mgr._is_device_free = lambda _d: True
         mgr._restart_interval_days = 7
-        wrong_hour = (_due_hour_for("wz-esp") + 1) % 24
-        now = datetime.datetime(2026, 7, 29, wrong_hour, 0, tzinfo=datetime.timezone.utc)
 
         restarted = mgr.check_and_restart_due_satellites(now=now)
 

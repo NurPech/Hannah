@@ -23,7 +23,6 @@ import (
 	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/config"
 	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/hannah"
 	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/udp"
-	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/voiceid"
 )
 
 // version is injected at build time via -ldflags="-X main.version=<tag>".
@@ -57,25 +56,10 @@ func main() {
 		"hannah", cfg.Hannah.Address,
 		"udp", cfg.UDP.ListenAddr,
 		"advertise_host", cfg.UDP.AdvertiseHost,
-		"voice_id", cfg.VoiceID.Enabled,
 	)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	// Voice-ID client (optional)
-	var voiceIDClient *voiceid.Client
-	if cfg.VoiceID.Enabled {
-		if cfg.VoiceID.BaseURL == "" {
-			slog.Error("voice_id.enabled=true but base_url is empty")
-			os.Exit(1)
-		}
-		voiceIDClient = voiceid.NewClient(
-			cfg.VoiceID.BaseURL,
-			cfg.VoiceID.TimeoutSec,
-		)
-		slog.Info("voice-id enabled", "base_url", cfg.VoiceID.BaseURL)
-	}
 
 	// gRPC client → Hannah Core
 	hannahClient, err := hannah.NewClient(cfg.Hannah.Address)
@@ -92,24 +76,12 @@ func main() {
 	udpServer := udp.NewServer(cfg.UDP.ListenAddr)
 	defer udpServer.Close()
 
-	// Wire: audio session complete → [Voice-ID] → Hannah gRPC pipeline → TTS back to satellite
+	// Wire: audio session complete → Hannah gRPC pipeline → TTS back to satellite.
+	// Speaker identification happens on Hannah's side now (#210), not here.
 	udpServer.OnAudio(func(device string, pcm []byte) {
 		udpServer.SendStatus(device, "processing")
 
-		// Speaker identification — runs before STT so Hannah can personalise the response.
-		// If Voice-ID is disabled or fails, speakerID stays "" (anonymous).
-		speakerID := ""
-		if voiceIDClient != nil {
-			id, err := voiceIDClient.Identify(ctx, pcm, 16000)
-			if err != nil {
-				slog.Warn("voice-id identify failed", "device", device, "err", err)
-			} else if id != "" {
-				slog.Info("speaker identified", "device", device, "user_id", id)
-				speakerID = id
-			}
-		}
-
-		resp, err := hannahClient.SubmitSatelliteAudio(ctx, device, pcm, speakerID)
+		resp, err := hannahClient.SubmitSatelliteAudio(ctx, device, pcm)
 		if err != nil {
 			slog.Error("SubmitSatelliteAudio failed", "device", device, "err", err)
 			udpServer.SendStatus(device, "idle")
@@ -122,7 +94,6 @@ func main() {
 			"intent", resp.IntentName,
 			"answer", resp.Answer,
 			"tts_bytes", len(resp.AudioPcm),
-			"speaker", speakerID,
 		)
 
 		if len(resp.AudioPcm) > 0 {

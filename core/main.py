@@ -42,6 +42,7 @@ from hannah.tts import TTS
 from hannah.udp_server import UDPServer
 from hannah.conversation import ConversationContext
 from hannah.llm import DEFAULT_FALLBACK, load as load_llm, prepare_prompt
+from hannah.voiceid import load as load_voiceid
 from hannah.tool_agent import ToolAgent
 from hannah.memory import LongTermMemory
 from hannah.room_manager import RoomManager
@@ -180,6 +181,7 @@ def main():
     nlu = NLU(nlu_cfg, iobroker.rooms, iobroker.devices,
               satellites={s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()})
     tts = TTS(cfg.get("tts", {}))
+    voiceid_client = load_voiceid(cfg.get("voice_id", {}))
 
     llm = load_llm(cfg.get("llm", {}))
     llm_system_prompt: str = settings_manager.get_settings_dict("llm").get(
@@ -440,7 +442,7 @@ def main():
     # ------------------------------------------------------------------
     # Kern-Pipeline: numpy-Array → Intent → Gerät schalten (Sprach-Pfad)
 
-    def pipeline(device: str, audio_array, publish_error, publish_answer):
+    def pipeline(device: str, audio_array, publish_error, publish_answer, speaker_user_id: str = ""):
         # Activity-Log (#220): kein Return-Wert in dieser Funktion (Callback-basiert),
         # daher Erfassung über lokale Wrapper statt Umbau der Dispatch-Logik. publish_answer
         # ist ein Parameter (Shadowing ohne UnboundLocalError-Risiko); _feedback ist der
@@ -461,8 +463,13 @@ def main():
             _handle_feedback(satellite_device, is_success, text)
 
         def _log_pipeline_activity():
+            resolved_user = speaker_user_id and (
+                _user_manager.get_user_by_id(speaker_user_id)
+                or _user_manager.get_user_by_username(speaker_user_id)
+            )
             activity_log.log_activity(
                 channel_type="satellite", channel_id=device, raw_text=locals_text[0],
+                user_id=str(resolved_user.id) if resolved_user else "",
                 intent=intent, answer_text=_captured_answer[0] or "", audio_array=audio_array,
             )
 
@@ -559,11 +566,18 @@ def main():
         elif intent.name == "DateQuery":
             publish_answer(_date_answer())
         elif intent.name == "SetPresence":
+            roomie_id = _resolve_roomie_id(speaker_user_id) if speaker_user_id else ""
             if intent.value == "away":
-                log.info(f"[{device}] SetPresence away — Sprecher unbekannt, Status nicht gesetzt.")
+                if roomie_id:
+                    residents.set_user_away(roomie_id)
+                else:
+                    log.info(f"[{device}] SetPresence away — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
                 _feedback(device, True, "Tschüss! Bis bald.")
             else:
-                log.info(f"[{device}] SetPresence home — Sprecher unbekannt, Status nicht gesetzt.")
+                if roomie_id:
+                    residents.set_user_home(roomie_id)
+                else:
+                    log.info(f"[{device}] SetPresence home — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
                 _feedback(device, True, "Willkommen zuhause!")
         elif intent.name in ("StopIntent", "PauseIntent", "ResumeIntent"):
             cmd_type = {"StopIntent": "stop", "PauseIntent": "pause", "ResumeIntent": "resume"}[intent.name]
@@ -592,7 +606,7 @@ def main():
             fire_at = int(time.time()) + seconds
             room_id = intent.room_id or "all"
             metadata = {"room": room_id}
-            user_id = _resolve_timer_user_id("", device)
+            user_id = _resolve_timer_user_id(speaker_user_id, device)
             if user_id:
                 metadata["user_id"] = str(user_id)
             grpc_servicer.timer_create(timer_id, label, fire_at, metadata)
@@ -601,7 +615,7 @@ def main():
                 reply = f"Timer für {format_duration(seconds)} gesetzt: {intent.label}."
             _feedback(device, True, reply)
         elif intent.name == "SetAlarm":
-            user_id = _resolve_alarm_user_id(None, device)
+            user_id = _resolve_alarm_user_id(speaker_user_id, device)
             weekday = intent.weekdays[0] if intent.weekdays else None
             if weekday is not None:
                 target_date = _alarm_weekday_to_date(weekday)
@@ -678,7 +692,8 @@ def main():
                 _stop_collector_capture(target)
         elif intent.name == "Smalltalk":
             history = conv_ctx.get_llm_history(device)
-            answer = llm.chat(text, system_prompt=prepare_prompt(llm_system_prompt, iobroker), history=history)
+            sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
+            answer = llm.chat(text, system_prompt=sp, history=history)
             if answer is None:
                 answer = DEFAULT_FALLBACK
             conv_ctx.add_llm_exchange(device, text, answer)
@@ -1504,14 +1519,16 @@ def main():
         ).astype(np.int16)
         return resampled.tobytes(), 16000
 
-    def _handle_satellite_audio(device: str, pcm_bytes: bytes, speaker_user_id: str = "") -> tuple[str, str, str, bytes, int]:
+    def _handle_satellite_audio(device: str, pcm_bytes: bytes) -> tuple[str, str, str, bytes, int]:
         """
         Verarbeitet eine vollständige Satellit-Aufnahme via Go-Proxy:
         Raw PCM → STT → NLU → TTS → (transcript, answer, intent_name, tts_pcm, sample_rate)
 
-        speaker_user_id: vom Proxy per Voice-ID identifizierter Sprecher (leer = anonym).
+        Löst den Sprecher selbst per VoiceID auf (#210) — unabhängig vom Proxy,
+        der das Feld nicht mehr befüllt.
         """
         _touch_activity(device)
+        speaker_user_id = voiceid_client.identify(pcm_bytes)
         try:
             audio_array = audio_mod.from_raw_pcm(pcm_bytes, audio_cfg)
         except Exception as e:
@@ -1862,6 +1879,7 @@ def main():
         get_car_state=lambda: car_manager.first_state,
         get_all_cars=lambda: [(t.state, t.home_address) for t in car_manager],
         handle_satellite_audio=_handle_satellite_audio,
+        enroll_voiceprint=voiceid_client.enroll,
         disable_udp=lambda: udp_server.stop(),
         enable_udp=lambda: udp_server.start(),
         on_proxy_discovery=_on_proxy_discovery,
@@ -2144,11 +2162,13 @@ def main():
         if len(audio_array) == 0:
             return
 
+        speaker_user_id = voiceid_client.identify(raw_pcm)
         pipeline(
             device,
             audio_array,
             publish_error   = lambda m: log.error(f"[{device}] {m}"),
             publish_answer  = lambda a: _handle_udp_answer(device, a),
+            speaker_user_id = speaker_user_id,
         )
 
     def _handle_udp_answer(device: str, answer: str):

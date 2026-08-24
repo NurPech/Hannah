@@ -34,9 +34,12 @@ def test_build_required_versions_covers_every_method_with_full_method_path():
     versions = build_required_versions(HANNAH_SERVICE)
 
     assert "/hannah.HannahService/SubmitText" in versions
-    # No message currently sets compat_version explicitly (per options.proto's
-    # "don't backfill" convention) — every method should require the default.
-    assert all(v == DEFAULT_COMPAT_VERSION for v in versions.values())
+    # SubmitSatelliteAudioRequest.compat_version=2 (hannah-proto#17, #210) is the
+    # first message to set it explicitly — every other method still requires
+    # the default.
+    assert versions["/hannah.HannahService/SubmitSatelliteAudio"] == 2
+    other_methods = {k: v for k, v in versions.items() if k != "/hannah.HannahService/SubmitSatelliteAudio"}
+    assert all(v == DEFAULT_COMPAT_VERSION for v in other_methods.values())
 
 
 def test_sufficient_client_version_passes_through():

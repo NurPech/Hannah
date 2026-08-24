@@ -4,6 +4,26 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.75.0 (2026-08-24)
+### Hannah Core
+
+* Fixed: `README.md`/`core/README.md` listed the old ioBroker JavaScript Virtual-Devices script as a requirement — stale, devices are reported to Core via the `iobroker.hannah` adapter over gRPC instead
+* Added: Core now resolves Speaker-ID itself via its own VoiceID client (`hannah/voiceid.py`, new `voice_id` config block) instead of trusting a value forwarded by the proxy — works for both the proxy-relayed and the direct-UDP satellite audio path (the latter never had Speaker-ID before). `EnrollVoiceprint` is wired to a real backend for the first time instead of always returning "no backend configured" (Refs #210)
+* Fixed: `TestRejuvenationRestart::test_due_and_free_triggers_restart` failed intermittently depending on the real calendar date — the test simulated `now` as a hardcoded date while the DB helper it relies on (`_insert_satellite_with_last_restart`) computed `last_restart_at` from SQLite's real wall-clock time, so the two "now"s drifted apart the longer the hardcoded date lay in the past. `_insert_satellite_with_last_restart` now takes an injectable `now` shared with the simulated check call instead of relying on real time (Refs #242)
+
+### Hannah Proxy
+
+* Removed: the proxy's own Voice-ID HTTP client (`internal/voiceid/`) — Speaker-ID resolution moved to Hannah Core, which no longer depends on proxy connectivity to work (Refs #210)
+
+### Telegram
+
+* Added: `telegram/README.md` — installation/configuration doc, split out of the root README rewrite
+
+### VoiceID
+
+* Added: `voiceid/README.md` — installation/configuration doc, split out of the root README rewrite; corrects the enrollment instructions (`enroll_voice.py` takes no CLI args, edit `PI_URL`/`USER_ID` constants instead) and the Speaker-ID architecture description to match #210 (Core calls VoiceID directly, not gated behind the Proxy)
+
 ## 0.74.10 (2026-08-20)
 ### Hannah Core
 

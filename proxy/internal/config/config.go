@@ -8,10 +8,9 @@ import (
 )
 
 type Config struct {
-	ProxyID string     `json:"proxy_id"`
-	Hannah  HannahCfg  `json:"hannah"`
-	UDP     UDPCfg     `json:"udp"`
-	VoiceID VoiceIDCfg `json:"voice_id"`
+	ProxyID string    `json:"proxy_id"`
+	Hannah  HannahCfg `json:"hannah"`
+	UDP     UDPCfg    `json:"udp"`
 }
 
 type HannahCfg struct {
@@ -26,15 +25,6 @@ type UDPCfg struct {
 	// If empty, Hannah Core will auto-detect its own IP (same as before proxy).
 	// Set this to the proxy's LAN IP so satellites connect to the proxy instead.
 	AdvertiseHost string `json:"advertise_host"`
-}
-
-type VoiceIDCfg struct {
-	// Enabled: false = Voice-ID disabled, speaker_user_id is always ""
-	Enabled bool `json:"enabled"`
-	// BaseURL: HTTP base URL of the Voice-ID service, e.g. "http://localhost:8765"
-	BaseURL string `json:"base_url"`
-	// TimeoutSec: HTTP request timeout in seconds (default: 3.0)
-	TimeoutSec float64 `json:"timeout_sec"`
 }
 
 func Load(path string) (*Config, error) {

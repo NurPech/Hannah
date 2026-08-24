@@ -110,6 +110,11 @@ tts:
 
   confirmation_sound: "/home/pi/confirmation.wav"  # leer = synthetisiert
 
+voice_id:
+  enabled: false          # true = Speaker-ID aktiv (Core löst Sprecher selbst auf, #210)
+  base_url: "http://localhost:8765"   # HTTP-Base-URL des Voice-ID-Diensts (voiceid/)
+  timeout_sec: 3.0
+
 stt:
   model: "base"          # tiny | base | small | medium | large-v3 (lokales Fallback)
   language: "de"
