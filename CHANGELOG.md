@@ -4,6 +4,22 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.1 (2026-08-28)
+### Hannah Core
+
+* Added: `core/Dockerfile` — container image build for Core, published to `quay.io/m1kad0/hannah-core` (amd64+arm64) via the CI's new `build-container-core:*`/`merge-manifest-core` jobs (Refs #243)
+
+### Hannah Proxy
+
+* Added: `proxy/Dockerfile` (`FROM scratch`) — container image build for Proxy, published to `quay.io/m1kad0/hannah-proxy`; the CI copies the already-built binary from `build:proxy:<arch>` into the Kaniko context instead of compiling inside the image (Refs #243)
+
+### Telegram
+
+* Added: `telegram/Dockerfile` — container image build for the Telegram microservice, published to `quay.io/m1kad0/hannah-telegram` (Refs #243)
+
+### VoiceID
+
+* Added: `voiceid/Dockerfile` — container image build for VoiceID, published to `quay.io/m1kad0/hannah-voiceid` (Refs #243)
 
 ## 0.75.0 (2026-08-24)
 ### Hannah Core
