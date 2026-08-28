@@ -3,6 +3,16 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+
+## 0.75.5 (2026-08-28)
+### Hannah Proxy
+
+* Fixed: `.build:proxy` never set `CGO_ENABLED=0` — Go's `net` package silently pulls in the cgo-based resolver whenever cgo is available on a native build, which can leave the binary dynamically linked against glibc. `proxy/Dockerfile` is `FROM scratch` (no libc at all), so a dynamically-linked binary fails to start (`exec /app/proxy: no such file or directory`) despite existing at the right path. Build now forces `CGO_ENABLED=0` for a fully static binary (Refs #243)
+
+### VoiceID
+
+* Fixed: VoiceID crashed on startup (`OSError: Could not load this library: .../torchaudio/lib/_torchaudio.abi3.so`) — the CPU-only torch pin added in 0.75.3 only covered `torch`, so `torchaudio` (pulled in via `speechbrain`) still resolved from the default index and ended up ABI-mismatched against the CPU-only `torch` build. `torchaudio` is now pinned to the same CPU-only index as `torch`, in both `voiceid/Dockerfile` and `test:voiceid` (Refs #243)
+
 ## 0.75.4 (2026-08-28)
 ### Hannah Proxy
 * Fixed: Corrected the default command in the proxy container image.

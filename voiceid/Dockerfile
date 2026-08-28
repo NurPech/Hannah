@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 COPY requirements.txt .
 # CPU-only torch wheel — the default index pulls full CUDA builds even on
 # arm64, where there's no GPU to use them anyway (multi-GB, blew up CI disk)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir -r requirements.txt
 
 LABEL org.opencontainers.image.description="VoiceID (CPU-only torch build)"
