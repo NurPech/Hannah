@@ -1,5 +1,11 @@
 FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
 
+# stdout is block-buffered when it's not a TTY (always true in a container),
+# so print() output (e.g. the first-run admin account announcement in
+# hannah/utils/db.py) can sit in the buffer and lag far behind logging
+# module output in `docker logs`, or not show up at all before restart.
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # System packages: git is required for config backup/restore

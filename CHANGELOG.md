@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.7 (2026-08-28)
+### Hannah Core
+
+* Fixed: the first-run admin account announcement (username/password, `hannah/utils/db.py`) could fail to show up in `docker logs` at all before the container's next restart — Python's `stdout` is block-buffered when it isn't a TTY (always the case in a container), so `print()` output can lag arbitrarily far behind `logging`-module output instead of appearing in order. `core/Dockerfile` now sets `PYTHONUNBUFFERED=1` (Refs #243)
 
 ## 0.75.6 (2026-08-28)
 ### Hannah Core
