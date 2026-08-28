@@ -52,7 +52,6 @@ asset_server:
   token: "IHR_ASSET_TOKEN"
 
 user_registry:
-  db_path: "hannah_users.db"   # SQLite-Datei (relativ zum Arbeitsverzeichnis)
   sync_interval: 60            # Sekunden zwischen ioBroker-Abfragen
 
 satellite_manager:
@@ -169,8 +168,14 @@ llm:
   #   Antworten werden per TTS vorgelesen — kurze Sätze, kein Markdown, keine Emojis.
 
 memory:
-  db: "memory.db"        # SQLite-Datei für Langzeitgedächtnis (relativ zum Arbeitsverzeichnis)
+  db: "memory.db"        # SQLite-Datei für Langzeitgedächtnis (relativ zum Arbeitsverzeichnis,
+                          # im Docker-Image z.B. auf "/app/data/memory.db" zeigen für Persistenz)
   recent_limit: 10       # Wie viele Erinnerungen in den System-Prompt injiziert werden
+
+# hannah.db (Settings/Trigger/Routines/Rooms/User-Registry) hat keinen Config-Key —
+# Pfad kommt ausschließlich aus der Env-Var DB_PATH (Default: "hannah.db", relativ
+# zum Arbeitsverzeichnis; siehe hannah/utils/db.py). Im Docker-Image auf
+# "/app/data/hannah.db" vorbelegt.
 
 # Activity-Log (#220): welcher Kanal hat wann was erkannt/getan. Separate MySQL-DB,
 # bewusst getrennt von hannah.db (SD-Karten-Last auf dem Pi + erwartete Schreiblast).

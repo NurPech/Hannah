@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.75.6 (2026-08-28)
+### Hannah Core
+
+* Fixed: Core's container image had no coherent story for persistent state — `hannah.db`'s path comes exclusively from the `DB_PATH` env var (`hannah/utils/db.py`, not wired to `config.yaml` at all) and the HuggingFace model cache used by `faster-whisper` had no dedicated location, so both landed outside any mounted volume and were lost/re-downloaded on every container restart. `core/Dockerfile` now sets `DB_PATH=/app/data/hannah.db` and `HF_HOME=/app/data/hf-cache` as container defaults and declares `/app/data` as a volume; `memory.db` (already configurable via `config.yaml`) is documented to point there too. `LongTermMemory` now creates its db file's parent directory if missing, instead of failing silently when a configured path under a fresh volume mount doesn't exist yet. None of this touches the non-Docker defaults — baremetal/systemd deployments are unaffected (Refs #243)
+
 ## 0.75.5 (2026-08-28)
 ### Hannah Proxy
 

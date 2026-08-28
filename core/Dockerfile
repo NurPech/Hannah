@@ -16,13 +16,21 @@ COPY hannah/ hannah/
 
 # Daten-Verzeichnis (wird als Volume gemountet)
 RUN useradd -r -u 1000 appuser && \
-    mkdir -p /app/activity_audio /app/audio_dumps /etc/hannah /home/appuser && \
+    mkdir -p /app/activity_audio /app/audio_dumps /app/data /etc/hannah /home/appuser && \
     chown -R appuser:appuser /app /etc/hannah /home/appuser
 USER appuser
+
+# hannah.db (DB_PATH, s. hannah/utils/db.py) und der HuggingFace-Modell-Cache
+# (faster-whisper) landen ohne diese Defaults außerhalb jedes Volumes und sind
+# nach jedem Container-Neustart weg. memory.db liegt weiterhin unter dem
+# relativen Default aus config.yaml (memory.db) — wer das persistieren will,
+# zeigt memory.db in der eigenen config.yaml auf einen Pfad unter /app/data.
+ENV DB_PATH=/app/data/hannah.db
+ENV HF_HOME=/app/data/hf-cache
 
 EXPOSE 50051
 EXPOSE 7776
 
-VOLUME ["/app/activity_audio", "/app/audio_dumps"]
+VOLUME ["/app/activity_audio", "/app/audio_dumps", "/app/data"]
 
 CMD ["python", "main.py", "-c", "/etc/hannah/config.yaml"]

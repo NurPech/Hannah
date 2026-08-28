@@ -5,6 +5,7 @@ Nach Ablauf der Konversations-TTL fasst das LLM das Gespräch in einem Satz zusa
 Beim nächsten Gespräch werden die letzten N Erinnerungen in den System-Prompt injiziert.
 """
 import logging
+import os
 import sqlite3
 import threading
 from datetime import datetime
@@ -21,6 +22,9 @@ class LongTermMemory:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
+        parent = os.path.dirname(self._db_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         return conn
