@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.3 (2026-08-28)
+### VoiceID
+
+* Fixed: `build-container-voiceid:arm64` failed with `No space left on device` — `requirements.txt`'s unpinned `torch>=2.0.0` pulled the full CUDA build on arm64 (several GB of `nvidia-*` wheels) even though VoiceID never has a GPU to use them. The Dockerfile now installs the CPU-only torch wheel first, same as `test:voiceid` already did. Since a GPU build is a real future possibility once GPU-capable runners exist, the published image is now tagged `-cpu` (`quay.io/m1kad0/hannah-voiceid:<version>-cpu`, `latest-cpu`) instead of the bare version/`latest` tags the other three components use, leaving room for a `-gpu` variant later without a breaking rename (Refs #243)
+
 ## 0.75.2 (2026-08-28)
 ### Hannah Core
 
