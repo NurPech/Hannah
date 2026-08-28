@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.2 (2026-08-28)
+### Hannah Core
+
+* Fixed: container image publishing (`quay.io/m1kad0/hannah-*`) failed on the first real release (v0.75.1) — `merge-manifest-*` couldn't assemble the multi-arch manifest list, quay.io rejected the push as referencing missing blobs/manifests. Root cause: Kaniko-built per-arch images can end up with mixed Docker/OCI-format layers, which quay validates strictly when assembling a manifest list. Each arch image is now normalized to a consistent Docker v2 Schema2 manifest via `skopeo copy --format v2s2` (new `normalize-manifest-*` jobs) before `merge-manifest-*` runs; also cleaned up the `manifest-tool` target/tags argument order (`--target` is now the version tag, `latest` an additional tag instead of being passed both ways) (Refs #243)
+
 ## 0.75.1 (2026-08-28)
 ### Hannah Core
 
