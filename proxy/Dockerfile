@@ -7,4 +7,4 @@ USER 1000:1000
 
 EXPOSE 7776
 
-ENTRYPOINT ["/app/proxy"]
+ENTRYPOINT ["/app/proxy", "--config", "/etc/hannah-proxy/config.yaml"]

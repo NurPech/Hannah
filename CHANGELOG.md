@@ -3,6 +3,9 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+## 0.75.4 (2026-08-28)
+### Hannah Proxy
+* Fixed: Corrected the default command in the proxy container image.
 
 ## 0.75.3 (2026-08-28)
 ### VoiceID
