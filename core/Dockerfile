@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # System packages: git is required for config backup/restore
-RUN apt-get update && apt-get install -y --no-install-recommends git build-essential \
+RUN apt-get update && apt-get install -y --no-install-recommends git build-essential ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first (layer cache)

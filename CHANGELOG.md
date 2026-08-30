@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.8 (2026-08-30)
+### Hannah Core
+* Fixed: Added missing FFmpeg binary to the core container image.
+
 ## 0.75.7 (2026-08-28)
 ### Hannah Core
 
