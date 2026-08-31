@@ -260,8 +260,8 @@ Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — al
 | Rev. 1 | Prototyp (nicht bestellt) | — | Machbarkeitsstudie |
 | Rev. 2 | Geliefert | 114mm rund | Maßfehler (57mm Radius statt 75mm Durchmesser); nur Elektrotest |
 | Rev. 3 | Geliefert, enthält Bugs | 88mm rund | Zieldesign; nicht nutzbar |
-| Rev. 4 | Geliefert, aktuell verbaut | 88mm rund | Zieldesign |
-| Rev. 5 | Bestellt bei PCBWay, Fertigung ausstehend | 88mm rund | 4× TDM-Mikrofone (ADAU7118), WROOM-1U (externe Antenne), USB-C→Lötpads, SD-Slot-Orientierung gefixt |
+| Rev. 4 | Geliefert, abgelöst | 88mm rund | Zieldesign |
+| Rev. 5 | Geliefert, aktuell verbaut | 88mm rund | 4× TDM-Mikrofone (ADAU7118), WROOM-1U (externe Antenne), USB-C→Lötpads, SD-Slot-Orientierung gefixt |
 
 ### PCB Rev. 4 (`hardware/Phase2/`)
 
@@ -287,7 +287,7 @@ Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — al
 **Geparkte Ideen:**
 - RP2350 als Co-Prozessor — **definitiv verworfen**, ESP32-S3 reicht
 
-### PCB Rev. 5 (`hardware/Phase2/`) — bestellt bei PCBWay, Fertigung ausstehend
+### PCB Rev. 5 (`hardware/Phase2/`) — aktuell verbaut, siehe [satellite-esp/README.md](satellite-esp/README.md)
 
 Gleiche Grundabmessung wie Rev.4 (88mm rund), passt ins bestehende Gehäuse. Änderungen ggü. Rev.4, GPIO-Belegung siehe `satellite-esp/sdkconfig.defaults.rev5` (von Leonie bestätigt, Issue #160):
 
@@ -299,7 +299,7 @@ Gleiche Grundabmessung wie Rev.4 (88mm rund), passt ins bestehende Gehäuse. Än
 - **SD-Karten-Slot:** gleiche GPIOs wie Rev.4 (CS=4, MOSI=5, CLK=6, MISO=7), aber anderer Steckertyp — der auf Rev.4 verbaute Slot hatte seine Lötpads auf der offenen (nach innen zeigenden) Seite, was Traces unnötig unter der Karte durchlaufen ließ; neuer Slot hat die Lötpads auf der gegenüberliegenden Seite und vereinfacht dadurch das Routing
 - **USB-C entfällt:** stattdessen Lötpads 5V + GND für externes Kabel zu Panel-Mount USB-C im Gehäuse; AMS1117 + Sicherungen bleiben; UART0 (Debug-Header J4) bleibt fürs Erst-Flashen
 - **Unverändert ggü. Rev.4:** Speaker (MAX98357A), BME680-Sensor (teilt sich den I2C-Bus jetzt mit dem ADAU7118), LD2410-Radar
-- **OTA-Channel:** in `sdkconfig.defaults.rev5` bewusst nicht gesetzt — übernimmt den Server-Default `satellite-esp-stable`, sobald Rev.4 vollständig auf seinen eigenen Channel (`satellite-esp-stable-rev4`) umgezogen ist (Refs #160)
+- **OTA-Channel:** in `sdkconfig.defaults.rev5` bewusst nicht gesetzt — übernimmt den Server-Default `satellite-esp-stable`. Rev.4 läuft seit dem Umzug auf ihrem eigenen Channel `satellite-esp-stable-rev4` (`sdkconfig.defaults.rev4`, Refs #160)
 
 ### Wichtige Bauteil-Entscheidungen
 

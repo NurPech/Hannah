@@ -53,20 +53,28 @@ uninstall() {
 AUTH_HEADER=()
 [[ -n "$UPDATE_SERVER_TOKEN" ]] && AUTH_HEADER=(-H "Authorization: Bearer ${UPDATE_SERVER_TOKEN}")
 
+# -S: show errors despite -s. --retry: retry transient errors (curl honors a
+# server's Retry-After header for 429/503 automatically). --retry-connrefused
+# also retries a refused connection. --retry-max-time caps total retry time so
+# a persistently unreachable server still fails eventually instead of hanging.
+CURL_OPTS=(-sS -f --retry 5 --retry-connrefused --retry-max-time 300)
+
 info "Fetching latest core release from ${UPDATE_SERVER_URL} (channel: ${CORE_CHANNEL}) ..."
-LATEST_JSON=$(curl -sf \
+LATEST_JSON=$(curl "${CURL_OPTS[@]}" \
     "${AUTH_HEADER[@]}" \
-    "${UPDATE_SERVER_URL}/latest?channel=${CORE_CHANNEL}")
+    "${UPDATE_SERVER_URL}/latest?channel=${CORE_CHANNEL}") \
+    || err "Failed to fetch latest release info from ${UPDATE_SERVER_URL} (channel: ${CORE_CHANNEL})"
 LATEST_VERSION=$(echo "$LATEST_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])")
 info "Latest version: ${LATEST_VERSION}"
 
 TMPFILE=$(mktemp /tmp/hannah-core-XXXXXX.tar.gz)
 trap 'rm -f "$TMPFILE"' EXIT
 
-curl -sf \
+curl "${CURL_OPTS[@]}" \
     "${AUTH_HEADER[@]}" \
     -o "$TMPFILE" \
-    "${UPDATE_SERVER_URL}/releases/${LATEST_VERSION}?channel=${CORE_CHANNEL}"
+    "${UPDATE_SERVER_URL}/releases/${LATEST_VERSION}?channel=${CORE_CHANNEL}" \
+    || err "Failed to download ${LATEST_VERSION} from ${UPDATE_SERVER_URL}"
 ok "Downloaded ${LATEST_VERSION}."
 
 # ── Extract to install dir ────────────────────────────────────────────────────

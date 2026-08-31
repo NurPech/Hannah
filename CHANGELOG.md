@@ -4,6 +4,24 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.10 (2026-08-31)
+### Hannah Core
+
+* Fixed: `normalize-manifest-*` pinned `quay.io/skopeo/stable:latest@sha256:0f75798d...`, which started returning 404 — quay.io garbage-collects digests once no tag references them anymore, and `latest` is a moving target upstream keeps repointing, so the pinned digest got reclaimed once a newer `latest` was pushed. Switched to the `-immutable` tag variant quay.io provides for exactly this case (`v1.22.2-immutable`), which stays resolvable regardless of what `latest` points at later (Refs #248)
+
+### Satellite Firmware
+
+* Fixed: `test:esp32`/`build:esp32:rev4`/`build:esp32:rev5` could fail with a Python-env mismatch (`idf.py` refusing to build) right after a Renovate bump of the `espressif/idf` image — the CI cache key for `satellite-esp/build/` only hashed `sdkconfig.defaults` under a static `esp32-idf6` prefix, so an image bump kept restoring a `build/` dir configured under the old image. Cache prefix bumped to `esp32-idf6.1` to match (Refs #247)
+
+## 0.75.9 (2026-08-31)
+### Hannah Core
+
+* Fixed: `core/deploy/install.sh` could abort silently right after printing the latest version, with no error at all — its two back-to-back `curl` requests (`/latest` then `/releases/<version>`) can hit rate-limiting (e.g. `429 Too Many Requests`) on the second one, and `curl -sf` swallowed that completely while `set -euo pipefail` just ended the script. `curl` calls now retry transient errors (`--retry 5`, honoring a `Retry-After` header automatically) and report a proper `[ERROR]` on final failure instead of vanishing (Refs #246)
+
+### Satellite Firmware
+
+* Docs: Added `satellite-esp/README.md` documenting PCB Rev. 5 as the currently deployed hardware revision.
+
 ## 0.75.8 (2026-08-30)
 ### Hannah Core
 * Fixed: Added missing FFmpeg binary to the core container image.
