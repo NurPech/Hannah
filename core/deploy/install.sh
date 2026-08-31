@@ -89,6 +89,14 @@ if [[ ! -d "$VENV" ]]; then
     python3 -m venv "$VENV"
 fi
 
+# Debian/Ubuntu's python3-venv package strips ensurepip's bundled wheels unless
+# python3-pip is also installed system-wide, so `python3 -m venv` succeeds but
+# silently produces a venv with no pip at all.
+if [[ ! -x "${VENV}/bin/pip" ]]; then
+    info "venv has no pip (Debian/Ubuntu strips ensurepip's bundled wheels) — bootstrapping ..."
+    "${VENV}/bin/python3" -m ensurepip --default-pip
+fi
+
 info "Installing Python dependencies ..."
 "${VENV}/bin/pip" install --upgrade pip --quiet
 "${VENV}/bin/pip" install --quiet -r "${INSTALL_DIR}/requirements.txt"

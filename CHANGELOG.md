@@ -4,6 +4,23 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.11 (2026-08-31)
+### Hannah Core
+
+* Fixed: `core/deploy/install.sh` could create a Python venv with no `pip` inside it on Ubuntu — Debian/Ubuntu strips ensurepip's bundled wheels from the `python3-venv` package unless `python3-pip` is also installed system-wide, so `python3 -m venv` succeeds silently and the following `pip install` step fails. The script now bootstraps pip via `ensurepip --default-pip` when it's missing from a freshly created venv (Refs #249)
+
+### Telegram
+
+* Fixed: same venv-without-pip issue as Hannah Core, same fix (Refs #249)
+
+### VoiceID
+
+* Fixed: same venv-without-pip issue as Hannah Core, same fix (Refs #249)
+
+### Deploy
+
+* Fixed: same venv-without-pip issue as Hannah Core, same fix (Refs #249)
+
 ## 0.75.10 (2026-08-31)
 ### Hannah Core
 
