@@ -21,6 +21,16 @@ import requests
 
 log = logging.getLogger(__name__)
 
+# Reservierter user_id-Präfix für Hannahs eigene TTS-Stimme(n) (#216). Getrennt pro
+# Backend (z.B. "hannah_self_azure", "hannah_self_piper") statt eines gemeinsamen
+# Profils, da unterschiedliche TTS-Engines akustisch unterschiedliche "Stimmen" sind.
+HANNAH_SELF_PREFIX = "hannah_self"
+
+
+def is_hannah_self(user_id: str) -> bool:
+    """True wenn user_id eines der reservierten Hannah-Eigenstimme-Profile ist."""
+    return bool(user_id) and user_id.startswith(HANNAH_SELF_PREFIX)
+
 
 class VoiceID(ABC):
     """Gemeinsame Schnittstelle für Speaker-Identification-Backends."""

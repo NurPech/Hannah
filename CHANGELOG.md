@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.75.12 (2026-09-02)
+### Hannah Core
+
+* Fixed: Hannah could transcribe her own TTS output (direct echo, or bleed-over picked up by a *different* satellite's mic) and process it as a regular command/Smalltalk input — no guard against self-talk feedback existed. Every synthesized TTS response now continuously re-enrolls a reserved VoiceID profile (`hannah_self_<backend>`, separate per TTS backend since Azure/Piper are acoustically distinct "voices"), skipping confirmations under 2.5s to avoid diluting the profile. Incoming audio identified as one of these profiles is discarded before STT/NLU runs, in both the proxy and the direct-UDP satellite path (Refs #216)
+
 ## 0.75.11 (2026-08-31)
 ### Hannah Core
 

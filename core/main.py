@@ -42,7 +42,7 @@ from hannah.tts import TTS
 from hannah.udp_server import UDPServer
 from hannah.conversation import ConversationContext
 from hannah.llm import DEFAULT_FALLBACK, load as load_llm, prepare_prompt
-from hannah.voiceid import load as load_voiceid
+from hannah.voiceid import load as load_voiceid, is_hannah_self
 from hannah.tool_agent import ToolAgent
 from hannah.memory import LongTermMemory
 from hannah.room_manager import RoomManager
@@ -182,6 +182,26 @@ def main():
               satellites={s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()})
     tts = TTS(cfg.get("tts", {}))
     voiceid_client = load_voiceid(cfg.get("voice_id", {}))
+
+    # Kontinuierliches Self-Talk-Enrollment (#216): jede frisch synthetisierte TTS-Antwort
+    # (min. Länge, sonst verwässern kurze Bestätigungen das Profil) fließt als Stimmprobe
+    # unter einem reservierten Profil pro Backend zurück in VoiceID. Fire-and-forget, damit
+    # die TTS-Auslieferung an den Satelliten nie auf den Enroll-Request wartet.
+    _MIN_ENROLL_DURATION_S = 2.5
+
+    def _enroll_hannah_voice(pcm: bytes, sample_rate: int, backend: str):
+        duration_s = len(pcm) / (2 * sample_rate)
+        if duration_s < _MIN_ENROLL_DURATION_S:
+            return
+
+        def _do():
+            ok, msg = voiceid_client.enroll(f"hannah_self_{backend}", pcm, sample_rate)
+            if not ok:
+                log.debug(f"Hannah-Selbst-Enrollment ({backend}) fehlgeschlagen: {msg}")
+
+        threading.Thread(target=_do, daemon=True, name="hannah-self-enroll").start()
+
+    tts.set_audio_handler(_enroll_hannah_voice)
 
     llm = load_llm(cfg.get("llm", {}))
     llm_system_prompt: str = settings_manager.get_settings_dict("llm").get(
@@ -1529,6 +1549,9 @@ def main():
         """
         _touch_activity(device)
         speaker_user_id = voiceid_client.identify(pcm_bytes)
+        if is_hannah_self(speaker_user_id):
+            log.info(f"[{device}] Audio als Hannahs eigene Stimme erkannt ({speaker_user_id}) — verworfen (#216).")
+            return "", "", "Ignored", b"", 0
         try:
             audio_array = audio_mod.from_raw_pcm(pcm_bytes, audio_cfg)
         except Exception as e:
@@ -2163,6 +2186,9 @@ def main():
             return
 
         speaker_user_id = voiceid_client.identify(raw_pcm)
+        if is_hannah_self(speaker_user_id):
+            log.info(f"[{device}] Audio als Hannahs eigene Stimme erkannt ({speaker_user_id}) — verworfen (#216).")
+            return
         pipeline(
             device,
             audio_array,

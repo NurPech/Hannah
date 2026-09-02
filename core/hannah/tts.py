@@ -345,6 +345,7 @@ class TTS:
 
         self._last_active_backend: str = self._primary.name if self._primary else "none"
         self._on_backend_change: Optional[Callable[[str], None]] = None
+        self._on_audio: Optional[Callable[[bytes, int, str], None]] = None
 
         if not self._primary:
             log.info("TTS deaktiviert (kein Backend konfiguriert).")
@@ -365,6 +366,19 @@ class TTS:
             self._last_active_backend = name
             if self._on_backend_change:
                 self._on_backend_change(name)
+
+    def set_audio_handler(self, callback: Callable[[bytes, int, str], None]):
+        """Callback(pcm, sample_rate, backend_name) nach jeder frisch synthetisierten
+        (nicht: aus dem Cache bedienten) Antwort. Für Self-Talk-Schutz (#216) — Backend
+        getrennt, da Azure/Piper akustisch unterschiedliche 'Stimmen' sind."""
+        self._on_audio = callback
+
+    def _fire_audio(self, pcm: bytes, sample_rate: int, backend: str):
+        if self._on_audio:
+            try:
+                self._on_audio(pcm, sample_rate, backend)
+            except Exception as e:
+                log.debug(f"TTS-Audio-Handler fehlgeschlagen: {e}")
 
     @property
     def enabled(self) -> bool:
@@ -400,6 +414,7 @@ class TTS:
             self._notify_backend(self._primary.name)
             if self._cache:
                 self._cache.put(text, pcm)
+            self._fire_audio(pcm, self._primary.sample_rate, self._primary.name)
             return pcm, self._primary.sample_rate
 
         # 3. Piper-Fallback
@@ -408,6 +423,7 @@ class TTS:
             self._notify_backend("piper")
             pcm = self._fallback.synthesize(text)
             if pcm:
+                self._fire_audio(pcm, self._fallback.sample_rate, "piper")
                 return pcm, self._fallback.sample_rate
 
         log.error("Alle TTS-Backends fehlgeschlagen.")
@@ -424,12 +440,14 @@ class TTS:
         pcm = self._primary.synthesize_ssml(ssml)
         if pcm:
             self._notify_backend(self._primary.name)
+            self._fire_audio(pcm, self._primary.sample_rate, self._primary.name)
             return pcm, self._primary.sample_rate
         if self._fallback:
             log.warning("Primäres TTS-Backend fehlgeschlagen — Fallback auf Piper (kein SSML).")
             self._notify_backend("piper")
             pcm = self._fallback.synthesize(_strip_ssml_tags(ssml))
             if pcm:
+                self._fire_audio(pcm, self._fallback.sample_rate, "piper")
                 return pcm, self._fallback.sample_rate
         log.error("Alle TTS-Backends fehlgeschlagen (SSML).")
         return None
