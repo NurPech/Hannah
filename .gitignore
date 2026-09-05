@@ -94,5 +94,5 @@ hardware/Phase2/*.step
 /webui/config.yaml
 /webui/venv/
 !hardware/Enclosure/Top.step
-!hardware/Enclosure/Base_back.step
-!hardware/Enclosure/Base_front.step
+!hardware/Enclosure/Base_Back.step
+!hardware/Enclosure/Base_Front.step

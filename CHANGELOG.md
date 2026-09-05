@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.76.1 (2026-09-05)
+### Hannah Core
+
+* Chore: fixed what gets published to the public GitHub mirror of this repo (Refs #254)
+
 ## 0.76.0 (2026-09-05)
 ### Hannah Core
 
