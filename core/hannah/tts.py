@@ -9,14 +9,18 @@ Backends:
 Kein Vendor-Lock: Backend per config.yaml wählbar, Piper ist immer der Fallback
 wenn der Cloud-Dienst nicht erreichbar ist.
 
-Disk-Cache: Cloud-Synthesen werden als .pcm-Dateien zwischengespeichert.
+Disk-Cache: kurze Synthesen (< _MAX_CACHEABLE_DURATION_S, z.B. Bestätigungen wie
+"Ok, mache ich.") werden unabhängig vom Backend als .pcm-Dateien zwischengespeichert
+— spart Latenz (alle Backends) und TTS-Kosten (Azure/Polly). Lange, kaum je
+wortgleich wiederholte LLM-/Smalltalk-Antworten fallen durch die Längen-Heuristik
+automatisch durch den Cache.
 Warm-Phrases: Standard-Antworten werden beim Start einmalig synthetisiert
-und stehen danach ohne Cloud-Aufruf zur Verfügung.
+und stehen danach ohne erneuten Backend-Aufruf zur Verfügung.
 
 config.yaml Beispiel:
   tts:
     backend: azure          # piper | azure | polly
-    cache_dir: .tts_cache   # Verzeichnis für gecachte Cloud-Synthesen
+    cache_dir: .tts_cache   # Verzeichnis für gecachte Kurz-Synthesen
 
     # Piper (Fallback — immer konfigurieren wenn Cloud-Backend aktiv)
     model: /pfad/de_DE-kerstin-low.onnx
@@ -54,6 +58,7 @@ import math
 import os
 import struct
 import wave
+from pathlib import Path
 from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
@@ -61,6 +66,12 @@ log = logging.getLogger(__name__)
 _SAMPLE_RATE_CLOUD = 16000  # Polly-PCM-Output (max 16kHz)
 _SAMPLE_RATE_AZURE = 24000  # Azure: raw-24khz-16bit-mono-pcm
 _MAX_TTS_CHARS     = 400    # Harte Obergrenze — LLM-Antworten können sehr lang werden
+
+# Nur Synthesen unterhalb dieser Länge landen im Disk-Cache (#241) — hält kurze,
+# deterministische Bestätigungen (TurnOn/TurnOff/SetLevel/...) cachebar, während
+# LLM-/Smalltalk-Antworten (lang, kaum je wortgleich wiederholt) den Cache nicht
+# mit Einträgen fluten, die nie wieder einen Treffer landen.
+_MAX_CACHEABLE_DURATION_S = 4.0
 
 
 # ── Hilfsfunktion ─────────────────────────────────────────────────────────────
@@ -115,11 +126,29 @@ class _TTSBackend(abc.ABC):
 class _PiperBackend(_TTSBackend):
     def __init__(self, cfg: dict):
         from piper import PiperVoice
-        model_path = cfg["model"]
+        model_path = Path(cfg["model"])
+        config_path = Path(f"{model_path}.json")  # Schema, das PiperVoice.load() selbst erwartet
+        if not model_path.exists() or not config_path.exists():
+            self._download_voice(model_path)
         log.info(f"Lade Piper-Stimme: {model_path} …")
         self._voice = PiperVoice.load(model_path)
         self._cfg   = cfg
         log.info("Piper bereit.")
+
+    @staticmethod
+    def _download_voice(model_path: Path):
+        """Lädt eine fehlende/unvollständige Piper-Stimme von HuggingFace nach
+        (analog zum Whisper-Modell-Cache in stt.py, #245). Bei Fehlschlag — Name
+        passt nicht ins HuggingFace-Schema, kein Netz, ... — wird hier nur gewarnt;
+        PiperVoice.load() liefert danach den gewohnten, verständlichen
+        Datei-nicht-gefunden-Fehler statt eines neuen, verwirrenden."""
+        try:
+            from piper.download_voices import download_voice
+            log.info(f"Piper-Stimme '{model_path.stem}' unvollständig unter "
+                     f"{model_path.parent} — lade von HuggingFace …")
+            download_voice(model_path.stem, model_path.parent)
+        except Exception as e:
+            log.warning(f"Piper-Autodownload für '{model_path.stem}' fehlgeschlagen: {e}")
 
     def synthesize(self, text: str) -> Optional[bytes]:
         try:
@@ -262,12 +291,33 @@ class _PollyBackend(_TTSBackend):
 
 # ── Disk-Cache ─────────────────────────────────────────────────────────────────
 
+def _tts_cache_key(backend: _TTSBackend, cfg: dict) -> str:
+    """Verzeichnisname für den Disk-Cache eines Backends (#241) — Sample-Rate ist
+    immer Teil des Keys (verhindert Pitch-Fehler bei Format-Änderungen). Bei Piper
+    zusätzlich die Synthese-Parameter, die die Audio-Ausgabe direkt beeinflussen:
+    ohne die würde ein config.yaml-Änderung (z.B. length_scale) stillschweigend
+    stale Audio mit der alten Geschwindigkeit/Tonhöhe weiterservieren."""
+    parts = [backend.name, f"{backend.sample_rate}hz"]
+    if isinstance(backend, _PiperBackend):
+        parts.append(
+            f"ls{cfg.get('length_scale', 1.0)}"
+            f"_ns{cfg.get('noise_scale', 0.667)}"
+            f"_nw{cfg.get('noise_w', 0.8)}"
+            f"_sp{cfg.get('speaker_id', '')}"
+        )
+    return "_".join(str(p) for p in parts)
+
+
+def _pcm_duration_s(pcm: bytes, sample_rate: int) -> float:
+    """Länge von 16-bit-mono-PCM in Sekunden."""
+    return (len(pcm) / 2) / sample_rate
+
+
 class _TTSCache:
     """Speichert synthetisierte PCM-Dateien auf der Festplatte."""
 
-    def __init__(self, cache_dir: str, backend_name: str, sample_rate: int):
-        # Sample-Rate im Verzeichnisnamen — verhindert Pitch-Fehler bei Format-Änderungen
-        self._dir = os.path.join(cache_dir, f"{backend_name}_{sample_rate}hz")
+    def __init__(self, cache_dir: str, cache_key: str):
+        self._dir = os.path.join(cache_dir, cache_key)
         os.makedirs(self._dir, exist_ok=True)
 
     def _path(self, text: str) -> str:
@@ -329,12 +379,15 @@ class TTS:
             if self._fallback:
                 log.info("Piper als Fallback konfiguriert.")
 
-        # Disk-Cache (nur für Cloud-Backends sinnvoll)
+        # Disk-Cache — für alle Backends (auch lokales Piper: Latenz zählt genauso
+        # auf einem Pi), aber nur für kurze Synthesen (< _MAX_CACHEABLE_DURATION_S,
+        # siehe synthesize()) — #241
         self._cache: Optional[_TTSCache] = None
-        if self._primary and backend_name != "piper":
+        if self._primary:
             cache_dir = cfg.get("cache_dir", ".tts_cache")
-            self._cache = _TTSCache(cache_dir, self._primary.name, self._primary.sample_rate)
-            log.info(f"TTS-Cache: {cache_dir}/{self._primary.name}_{self._primary.sample_rate}hz/")
+            cache_key = _tts_cache_key(self._primary, cfg)
+            self._cache = _TTSCache(cache_dir, cache_key)
+            log.info(f"TTS-Cache: {cache_dir}/{cache_key}/")
 
         # Bestätigungston laden
         self._confirmation_pcm:  Optional[bytes] = None
@@ -412,7 +465,7 @@ class TTS:
         pcm = self._primary.synthesize(text)
         if pcm:
             self._notify_backend(self._primary.name)
-            if self._cache:
+            if self._cache and _pcm_duration_s(pcm, self._primary.sample_rate) < _MAX_CACHEABLE_DURATION_S:
                 self._cache.put(text, pcm)
             self._fire_audio(pcm, self._primary.sample_rate, self._primary.name)
             return pcm, self._primary.sample_rate

@@ -4,6 +4,14 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.76.0 (2026-09-05)
+### Hannah Core
+
+* Chore: `core/Dockerfile` now uses a multi-stage build — `build-essential` (only needed to compile C-extension deps like `miniaudio`) is isolated in a builder stage and no longer present in the runtime image (Refs #251)
+* Chore: replaced the two `ffmpeg` subprocess calls in `_handle_voice` (OGG/Opus ↔ PCM transcoding for Telegram voice messages) with PyAV, an in-process binding already pulled in transitively by `faster-whisper` — lets `apt-get install ffmpeg` (448MB, drags in the full video/codec stack for what is audio-only transcoding) drop out of the runtime image entirely (Refs #244)
+* Fixed: `_PiperBackend` could fail to start with a confusing `[Errno 2] No such file or directory: '....onnx.json'` if the voice's config file was missing or misnamed (easy to get wrong when downloading/renaming Piper voices by hand). It now checks for both the `.onnx` model and its `.onnx.json` config before loading and, if either is missing, auto-downloads the voice from HuggingFace via `piper-tts`'s own `download_voice()` — analogous to how `faster-whisper` already self-downloads Whisper models. Falls back cleanly to the original error if the voice name doesn't match HuggingFace's naming scheme or the download itself fails (Refs #245)
+* Improved: the TTS disk cache (previously only used for cloud backends) now also covers Piper — latency matters just as much on a Pi as Azure/Polly's per-call cost did. Only synthesized audio under 4 seconds gets cached, so short deterministic confirmations (TurnOn/TurnOff/SetLevel/..., NLU fallback replies) are cachable while long, rarely-repeated LLM/Smalltalk answers no longer flood the cache with entries that never hit again — the threshold was measured against the actual German confirmation/fallback strings in `main.py` (the most common one, the NLU-fallback reply, synthesizes to ~3.1s, so 3s would have missed it). The cache key now also folds in Piper's own synthesis parameters (`length_scale`/`noise_scale`/`noise_w`/`speaker_id`) so changing them in `config.yaml` can no longer serve stale audio at the old speed/pitch (Refs #241)
+
 ## 0.75.12 (2026-09-02)
 ### Hannah Core
 

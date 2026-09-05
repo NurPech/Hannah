@@ -1,4 +1,18 @@
-FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5
+# ---- builder ----
+# build-essential is only needed to compile C-extension deps (e.g. miniaudio,
+# which has no prebuilt wheel yet for this Python version) — isolated here so
+# gcc/make/headers never end up in the runtime image.
+FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ---- runtime ----
+FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 # stdout is block-buffered when it's not a TTY (always true in a container),
 # so print() output (e.g. the first-run admin account announcement in
@@ -9,12 +23,10 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # System packages: git is required for config backup/restore
-RUN apt-get update && apt-get install -y --no-install-recommends git build-essential ffmpeg \
+RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
-# Dependencies first (layer cache)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=builder /install /usr/local
 
 # App-Code
 COPY main.py ./

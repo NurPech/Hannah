@@ -7,18 +7,18 @@ und steuert Geräte via ioBroker REST-API.
 """
 import argparse
 import datetime
+import io
 import json
 import time
 import uuid
 import logging
 import os
 import signal
-import subprocess
 import sys
-import tempfile
 import threading
 from typing import Callable, Optional
 
+import av
 import numpy as np
 
 from hannah.models.linked_account import LinkedAccount
@@ -71,6 +71,46 @@ def _time_answer() -> str:
 def _date_answer() -> str:
     now = datetime.datetime.now()
     return f"Heute ist {_WEEKDAYS_DE[now.weekday()]}, der {now.strftime('%d.%m.%Y')}."
+
+
+# Opus unterstützt nur 8/12/16/24/48kHz — TTS-Ausgaben (Piper 22050Hz, Azure
+# 24000Hz) werden dafür beim Encode auf diese Rate resampled (#244).
+_OPUS_ENCODE_RATE = 48000
+
+
+def _ogg_opus_to_pcm16k(audio_ogg: bytes) -> bytes:
+    """Dekodiert OGG/Opus-Bytes zu mono 16kHz PCM s16le (ersetzt den ffmpeg-Subprocess, #244)."""
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+    chunks = []
+    with av.open(io.BytesIO(audio_ogg)) as container:
+        stream = container.streams.audio[0]
+        for frame in container.decode(stream):
+            for resampled in resampler.resample(frame):
+                chunks.append(bytes(resampled.to_ndarray()))
+        for resampled in resampler.resample(None):
+            chunks.append(bytes(resampled.to_ndarray()))
+    return b"".join(chunks)
+
+
+def _pcm_to_ogg_opus(pcm: bytes, sample_rate: int) -> bytes:
+    """Encodiert mono s16le PCM zu OGG/Opus (ersetzt den ffmpeg-Subprocess, #244)."""
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=_OPUS_ENCODE_RATE)
+    out_buf = io.BytesIO()
+    with av.open(out_buf, mode="w", format="ogg") as out_container:
+        out_stream = out_container.add_stream("libopus", rate=_OPUS_ENCODE_RATE)
+        out_stream.layout = "mono"
+        samples = np.frombuffer(pcm, dtype=np.int16).reshape(1, -1)
+        in_frame = av.AudioFrame.from_ndarray(samples, format="s16", layout="mono")
+        in_frame.sample_rate = sample_rate
+        for resampled in resampler.resample(in_frame):
+            for packet in out_stream.encode(resampled):
+                out_container.mux(packet)
+        for resampled in resampler.resample(None):
+            for packet in out_stream.encode(resampled):
+                out_container.mux(packet)
+        for packet in out_stream.encode(None):
+            out_container.mux(packet)
+    return out_buf.getvalue()
 
 
 def setup_logging(level: str):
@@ -1474,24 +1514,14 @@ def main():
         audio_ogg: bytes, speaker_user_id: str = "", channel_type: str = "", channel_id: str = "",
     ) -> tuple[str, str, str, bytes]:
         """OGG/Opus bytes → (transcript, answer, intent_name, audio_ogg_out)"""
-        # OGG → raw PCM (16kHz, mono, s16le) via ffmpeg
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
-            f.write(audio_ogg)
-            ogg_path = f.name
+        # OGG → raw PCM (16kHz, mono, s16le)
         try:
-            proc = subprocess.run(
-                ["ffmpeg", "-y", "-i", ogg_path,
-                 "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
-                capture_output=True,
-            )
-        finally:
-            os.unlink(ogg_path)
-
-        if proc.returncode != 0 or not proc.stdout:
-            log.error(f"[grpc/voice] ffmpeg OGG→PCM fehlgeschlagen: {proc.stderr.decode()}")
+            pcm_in = _ogg_opus_to_pcm16k(audio_ogg)
+        except Exception as e:
+            log.error(f"[grpc/voice] OGG→PCM-Decode fehlgeschlagen: {e}")
             return "", "Ich konnte die Sprachnachricht nicht verarbeiten.", "Unknown", b""
 
-        audio_array = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+        audio_array = np.frombuffer(pcm_in, dtype=np.int16).astype(np.float32) / 32768.0
 
         try:
             transcript, _ = stt.transcribe(audio_array)
@@ -1508,22 +1538,16 @@ def main():
             channel_type=channel_type or "grpc_voice", channel_id=channel_id, audio_array=audio_array,
         )
 
-        # TTS → PCM → OGG/Opus via ffmpeg
+        # TTS → PCM → OGG/Opus
         audio_ogg_out = b""
         if tts.enabled and answer:
             result = tts.synthesize(answer)
             if result:
                 pcm, sample_rate = result
-                ff = subprocess.run(
-                    ["ffmpeg", "-y",
-                     "-f", "s16le", "-ac", "1", "-ar", str(sample_rate), "-i", "pipe:0",
-                     "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", "pipe:1"],
-                    input=pcm, capture_output=True,
-                )
-                if ff.returncode == 0:
-                    audio_ogg_out = ff.stdout
-                else:
-                    log.warning(f"[grpc/voice] ffmpeg PCM→OGG fehlgeschlagen: {ff.stderr.decode()}")
+                try:
+                    audio_ogg_out = _pcm_to_ogg_opus(pcm, sample_rate)
+                except Exception as e:
+                    log.warning(f"[grpc/voice] PCM→OGG-Encode fehlgeschlagen: {e}")
 
         return transcript, answer, intent_name, audio_ogg_out
 
