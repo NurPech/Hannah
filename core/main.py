@@ -164,15 +164,17 @@ def main():
                 return payload.get("roomie_id", "") if isinstance(payload, dict) else ""
         return ""
 
-    # Settings (nlu.*/llm.system_prompt/iobroker.state_names — #27 Phase 5, aus config.yaml
-    # migriert via deploy/migrate_config_settings.py). Fällt auf cfg/Code-Defaults zurück,
-    # solange eine Kategorie noch nicht migriert ist. ble.tags/cars haben seit #115 eigene
-    # Modelle (BleTagManager/CarRegistry) statt hier als JSON-Blob zu laufen.
+    # Settings (nlu.*/llm.system_prompt — #27 Phase 5, aus config.yaml migriert via
+    # deploy/migrate_config_settings.py). Fällt auf cfg/Code-Defaults zurück, solange eine
+    # Kategorie noch nicht migriert ist. iobroker.state_names war hier bis #257 auch dabei,
+    # ist jetzt ein hartkodierter Fallback in hannah.iobroker (nicht mehr editierbar).
+    # ble.tags/cars haben seit #115 eigene Modelle (BleTagManager/CarRegistry) statt hier
+    # als JSON-Blob zu laufen.
     settings_manager = SettingsManager(get_db)
     ble_tag_manager = BleTagManager(get_db)
     car_registry = CarRegistry(get_db)
-    # nlu/iobroker.state_names/llm.system_prompt automatisch mit generischen Defaults
-    # befüllen, falls die Kategorie noch leer ist (Neuinstallation, #114/#115).
+    # nlu/llm.system_prompt automatisch mit generischen Defaults befüllen, falls die
+    # Kategorie noch leer ist (Neuinstallation, #114/#115).
     settings_manager.seed_defaults()
 
     # Hannah selbst als Roomie verlinken (für Trust-Level/Announcements über die
@@ -190,11 +192,9 @@ def main():
                 provider_payload={"resident_type": "roomie", "roomie_id": _hannah_roomie},
             )
 
-    # ioBroker
+    # ioBroker — state_names ist seit #257 kein DB-Setting mehr, iobroker.py bringt
+    # den hartkodierten Fallback (DEFAULT_IOBROKER_STATE_NAMES) selbst mit.
     iobroker_cfg = {**cfg.get("iobroker", {})}
-    _state_names = settings_manager.get_settings_dict("iobroker").get("state_names")
-    if _state_names:
-        iobroker_cfg["state_names"] = _state_names
     iobroker = IoBrokerClient(iobroker_cfg)
 
     if not iobroker.rooms:

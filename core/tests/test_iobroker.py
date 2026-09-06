@@ -1,5 +1,6 @@
 import pytest
 from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient, Device
+from hannah.nlu import Intent
 from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
 
 
@@ -387,6 +388,129 @@ class TestHandleStateUpdate:
             client.handle_state_update(f"{device_id}.voc_equiv", "0.95")
 
         assert sum("voc_equiv" in r.message for r in caplog.records) == 1
+
+
+class TestHandleDeviceSnapshotStateNameTranslation:
+    """#256 — der Control-Pfad (dev.states, für execute()/SetState) wurde beim Snapshot nie
+    durch state_names übersetzt, nur dev.current beim Live-Update (siehe TestHandleStateUpdate,
+    #21). Für Geräte mit nicht-kanonischem State-Suffix (z.B. Homematic 'STATE' statt 'on')
+    konnte Hannah dadurch nie einen Steuerbefehl ausführen, unabhängig von der
+    state_names-Konfiguration."""
+
+    def _client(self):
+        return IoBrokerClient({
+            "host": "localhost", "port": 8093,
+            "virtual_device_prefix": "",  # raw Homematic-IDs statt javascript.0.virtualDevice
+            "state_names": {"on": "STATE", "level": "LEVEL"},
+        })
+
+    def _device_msg(self, suffix: str, device_type: str = "socket") -> AgentDevice:
+        return AgentDevice(
+            state_id=f"hm-rpc.0.NEQ1234567.1.{suffix}",
+            room="wohnzimmer",
+            device="Schalter",
+            device_type=device_type,
+            value=AgentStateValue(value="false", ack=True),
+            room_names={"de": "Wohnzimmer"},
+            writable=True,
+        )
+
+    def test_mapped_suffix_stored_under_canonical_key(self):
+        client = self._client()
+        client.handle_device_snapshot([self._device_msg("STATE")])
+
+        dev = client._devices_by_id["hm-rpc.0.NEQ1234567.1"]
+        assert "on" in dev.states
+        assert "STATE" not in dev.states
+        assert dev.current["on"] is False
+
+    def test_unmapped_suffix_keeps_raw_key(self):
+        """Suffixe ohne state_names-Eintrag (z.B. Homematic-eigene WORKING/DIRECTION)
+        bleiben wie bisher unter ihrem rohen Namen erreichbar (Geräte-Menü/control_direct)."""
+        client = self._client()
+        client.handle_device_snapshot([self._device_msg("WORKING")])
+
+        dev = client._devices_by_id["hm-rpc.0.NEQ1234567.1"]
+        assert "WORKING" in dev.states
+
+    def test_control_now_finds_state_for_non_canonical_suffix(self):
+        """Vorher: execute() suchte dev.states['on'], das Dict enthielt aber nur 'STATE' —
+        TurnOn/TurnOff liefen für jedes nicht-kanonisch benannte Gerät ins Leere."""
+        client = self._client()
+        client.handle_device_snapshot([self._device_msg("STATE")])
+        client.set_setter(lambda state_id, value: True)
+
+        dev = client._devices_by_id["hm-rpc.0.NEQ1234567.1"]
+        intent = Intent(name="TurnOn", room="Wohnzimmer", device_id=dev.id)
+
+        assert client.execute(intent) == 1
+
+
+class TestHandleDeviceSnapshotAdapterResolvedKeys:
+    """#257 — der Adapter (>=3.8.0) löst device_id (Grouping) und canonical_key (Rolle,
+    z.B. on/level/color) selbst auf und schickt sie direkt mit, statt dass Core sie aus
+    der Pfadtiefe von state_id bzw. der state_names-Suffix-Tabelle errät. Beide Felder
+    sind optional/leer bei Adaptern <3.8.0 — dann greift weiterhin die alte Heuristik
+    (siehe TestHandleDeviceSnapshotStateNameTranslation)."""
+
+    def _device_msg(self, state_id: str, device_id: str = "", canonical_key: str = "",
+                     device_type: str = "light") -> AgentDevice:
+        return AgentDevice(
+            state_id=state_id,
+            device_id=device_id,
+            canonical_key=canonical_key,
+            room="wohnzimmer",
+            device="Deckenlampe",
+            device_type=device_type,
+            value=AgentStateValue(value="true", ack=True),
+            room_names={"de": "Wohnzimmer"},
+            writable=True,
+        )
+
+    def test_device_id_from_adapter_used_as_grouping_key(self):
+        """Ohne AgentDevice.device_id würde diese state_id (Pfadtiefe 3 relativ zum
+        Prefix) von der Heuristik verworfen — mit device_id greift sie trotzdem."""
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("hm-rpc.0.NEQ1234567.STATE", device_id="hm-rpc.0.NEQ1234567"),
+        ])
+
+        assert "hm-rpc.0.NEQ1234567" in client._devices_by_id
+
+    def test_canonical_key_from_adapter_used_directly(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg(
+                "hm-rpc.0.NEQ1234567.STATE",
+                device_id="hm-rpc.0.NEQ1234567",
+                canonical_key="on",
+            ),
+        ])
+
+        dev = client._devices_by_id["hm-rpc.0.NEQ1234567"]
+        assert dev.states["on"] == "hm-rpc.0.NEQ1234567.STATE"
+        assert dev.current["on"] is True
+
+    def test_empty_device_id_falls_back_to_path_heuristic(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe.on"),
+        ])
+
+        assert "javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe" in client._devices_by_id
+
+    def test_empty_canonical_key_falls_back_to_state_names_lookup(self):
+        client = IoBrokerClient({
+            "host": "localhost", "port": 8093,
+            "virtual_device_prefix": "",
+            "state_names": {"on": "STATE"},
+        })
+        client.handle_device_snapshot([
+            self._device_msg("hm-rpc.0.NEQ1234567.STATE", device_id="hm-rpc.0.NEQ1234567"),
+        ])
+
+        dev = client._devices_by_id["hm-rpc.0.NEQ1234567"]
+        assert "on" in dev.states
 
 
 class TestGetStateRaw:

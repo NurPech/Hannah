@@ -5,6 +5,12 @@
 -->
 
 
+## 0.77.0 (2026-09-06)
+### Hannah Core
+
+* Fixed: devices whose ioBroker state suffix didn't already match Hannah's canonical names (e.g. Homematic's `LEVEL`/`STATE` instead of `level`/`on`) could never be controlled via voice, regardless of `iobroker.state_names` configuration — the snapshot path never consulted `state_names`, only live updates did, so `execute()`'s canonical-key lookup always missed. The snapshot now applies the same suffix→canonical translation as live updates (Refs #256)
+* Improved: device grouping and canonical state-key resolution now prefer the adapter-provided `AgentDevice.device_id`/`canonical_key` fields (adapter >=3.8.0) over guessing from `state_id`'s path depth and the `iobroker.state_names` suffix table — the adapter already has more reliable data for both (its own grouping ID, and ioBroker's `common.role` taxonomy). Deployments with an older adapter keep working unchanged via the existing heuristics. `iobroker.state_names` is no longer an editable Settings/DB value — it's now a hardcoded fallback used only for that older-adapter case (Refs #257)
+
 ## 0.76.1 (2026-09-05)
 ### Hannah Core
 

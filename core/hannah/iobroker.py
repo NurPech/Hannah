@@ -13,6 +13,17 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+# Hartkodierter Fallback für Deployments mit Adapter <3.8.0, der noch keine
+# AgentDevice.canonical_key sendet (#257) — vorher aus Settings/DB editierbar
+# (siehe deploy/migrate_config_settings.py), jetzt nur noch Code-Konstante, da der
+# Adapter die Rolle selbst aus common.role auflöst und kein Nutzer-Mapping mehr nötig ist.
+DEFAULT_IOBROKER_STATE_NAMES: dict = {
+    "on": "on", "level": "level", "color": "color", "colorTemp": "colorTemp",
+    "current": "current", "expected": "expected", "illuminance": "illuminance",
+    "open": "open", "iaq": "iaq", "co2_equiv": "co2_equiv", "voc_equiv": "voc_equiv",
+    "power": "power",
+}
+
 _UMLAUT_MAP = {"ae": "ä", "oe": "ö", "ue": "ü", "Ae": "Ä", "Oe": "Ö", "Ue": "Ü"}
 
 _CATEGORY_LABELS: dict[str, str] = {
@@ -87,13 +98,10 @@ class IoBrokerClient:
     def __init__(self, cfg: dict):
         self._prefix = cfg.get("virtual_device_prefix", "javascript.0.virtualDevice")
         # YAML parst 'on'/'off' als Boolean — Keys explizit zu str konvertieren
-        raw_names = cfg.get("state_names", {
-            "on":        "on",
-            "level":     "level",
-            "color":     "color",
-            "colorTemp": "colorTemp",
-        })
+        raw_names = cfg.get("state_names", DEFAULT_IOBROKER_STATE_NAMES)
         self._state_names: dict[str, str] = {str(k): str(v) for k, v in raw_names.items()}
+        # roher ioBroker-Suffix → kanonischer Key, für Snapshot UND Live-Update (#256)
+        self._suffix_to_canon: dict[str, str] = {v: k for k, v in self._state_names.items()}
 
         # {room_lower: display_name}
         self.rooms: dict[str, str] = {}
@@ -164,13 +172,17 @@ class IoBrokerClient:
                     new_state_cache[device.state_id] = self._parse_payload(device.value.value)
                     continue
 
-                prefix_parts = self._prefix.split(".")
                 parts = device.state_id.split(".")
-                n = len(parts) - len(prefix_parts)
-                if n not in (4, 5):
-                    continue
-
-                device_id = ".".join(parts[:-1])
+                # device_id vom Adapter übernehmen wenn vorhanden (#257) — sonst Pfadtiefen-
+                # Heuristik als Fallback für Deployments mit Adapter <3.8.0.
+                if device.device_id:
+                    device_id = device.device_id
+                else:
+                    prefix_parts = self._prefix.split(".")
+                    n = len(parts) - len(prefix_parts)
+                    if n not in (4, 5):
+                        continue
+                    device_id = ".".join(parts[:-1])
 
                 if device_id not in new_device_map:
                     room_display_name = dict(device.room_names).get("de") or device.room
@@ -191,13 +203,25 @@ class IoBrokerClient:
                 # überschreiben — erster nicht-leerer Wert gewinnt (#133).
                 if not dev.category and device.device_type:
                     dev.category = device.device_type
-                state_suffix = parts[-1]
-                dev.states[state_suffix] = device.state_id
-                dev.current[state_suffix] = self._parse_payload(device.value.value)
-                dev.state_types[state_suffix] = device.state_type
-                dev.state_writable[state_suffix] = device.writable
+                # canonical_key vom Adapter übernehmen wenn vorhanden (#257) — vom Adapter
+                # aus common.role aufgelöst, zuverlässiger als die alte suffix-basierte
+                # state_names-Übersetzung. Fallback für Adapter <3.8.0: state_names-Lookup
+                # auf den rohen Suffix (#256) — sonst bliebe dev.states für Geräte mit
+                # nicht-kanonischem Suffix (z.B. Homematic "STATE"/"LEVEL") für
+                # execute()/SetState für immer unauffindbar. Unbekannte Suffixe (z.B.
+                # Homematic-eigene WORKING/DIRECTION) bleiben roh — weiterhin nutzbar über
+                # das Geräte-Menü (control_direct/GetDevices).
+                if device.canonical_key:
+                    canon = device.canonical_key
+                else:
+                    state_suffix = parts[-1]
+                    canon = self._suffix_to_canon.get(state_suffix, state_suffix)
+                dev.states[canon] = device.state_id
+                dev.current[canon] = self._parse_payload(device.value.value)
+                dev.state_types[canon] = device.state_type
+                dev.state_writable[canon] = device.writable
                 if device.enum_values.values:
-                    dev.enum_values[state_suffix] = dict(device.enum_values.values)
+                    dev.enum_values[canon] = dict(device.enum_values.values)
 
                 log.debug(f"Neues Gerät: {device_id} → {new_device_map[device_id]}")
             except Exception as e:
@@ -628,8 +652,7 @@ class IoBrokerClient:
         if not device:
             return
 
-        state_suffix_map = {v: k for k, v in self._state_names.items()}
-        canon = state_suffix_map.get(state_suffix)
+        canon = self._suffix_to_canon.get(state_suffix)
         if not canon:
             if state_suffix not in self._warned_suffixes:
                 self._warned_suffixes.add(state_suffix)

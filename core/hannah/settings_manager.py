@@ -2,7 +2,11 @@
 Hannah Settings Manager
 
 Verwaltet, über hannah.models, Persistenz für konfigurierbare Werte, die aus
-config.yaml in die DB gewandert sind (nlu.*, llm.system_prompt, iobroker.state_names).
+config.yaml in die DB gewandert sind (nlu.*, llm.system_prompt). iobroker.state_names
+war hier bis #257 auch dabei — der Adapter löst die semantische Rolle eines States
+inzwischen selbst über common.role auf (AgentDevice.canonical_key), state_names ist
+nur noch ein hartkodierter Fallback in hannah.iobroker für Deployments mit Adapter
+<3.8.0 (siehe dort DEFAULT_IOBROKER_STATE_NAMES), nicht mehr nutzereditierbar.
 ble.tags/cars haben seit #115 eigene Modelle + CRUD (siehe hannah.ble_tags/hannah.car_registry)
 statt hier als JSON-Blob zu laufen. Zwei Tabellen:
   - settings_category: hierarchisch (self-referencing parent), name = voller
@@ -57,13 +61,6 @@ DEFAULT_AUTOMATION_WORDS: dict = {
     ],
 }
 
-DEFAULT_IOBROKER_STATE_NAMES: dict = {
-    "on": "on", "level": "level", "color": "color", "colorTemp": "colorTemp",
-    "current": "current", "expected": "expected", "illuminance": "illuminance",
-    "open": "open", "iaq": "iaq", "co2_equiv": "co2_equiv", "voc_equiv": "voc_equiv",
-    "power": "power",
-}
-
 
 class SettingsManager:
     def __init__(self, db: Callable):
@@ -116,18 +113,16 @@ class SettingsManager:
         return {s["name"]: s["value"] for s in self.get_settings() if s["category"] == cat_id}
 
     def seed_defaults(self) -> None:
-        """Befüllt "nlu", "iobroker" (state_names) und "llm" (system_prompt) mit generischen
-        Defaults, falls die jeweilige Kategorie noch komplett leer ist — für Neuinstallationen
-        mit leerer DB, die früher über Beispielwerte in config.example.yaml liefen (#114).
-        Migrierte oder per Admin-UI editierte Werte werden nie überschrieben, da nur bei einer
-        leeren Kategorie überhaupt geschrieben wird."""
+        """Befüllt "nlu" und "llm" (system_prompt) mit generischen Defaults, falls die
+        jeweilige Kategorie noch komplett leer ist — für Neuinstallationen mit leerer DB,
+        die früher über Beispielwerte in config.example.yaml liefen (#114). Migrierte oder
+        per Admin-UI editierte Werte werden nie überschrieben, da nur bei einer leeren
+        Kategorie überhaupt geschrieben wird. iobroker.state_names wird seit #257 nicht mehr
+        geseedet — nur noch hartkodierter Fallback in hannah.iobroker, nicht editierbar."""
         if not self.get_settings_dict("nlu"):
             cat = self.ensure_category("nlu")
             for name, value in DEFAULT_NLU_SETTINGS.items():
                 self.create_setting(cat, name, value)
-        if not self.get_settings_dict("iobroker"):
-            cat = self.ensure_category("iobroker")
-            self.create_setting(cat, "state_names", DEFAULT_IOBROKER_STATE_NAMES)
         if not self.get_settings_dict("automations"):
             cat = self.ensure_category("automations")
             for name, value in DEFAULT_AUTOMATION_WORDS.items():
