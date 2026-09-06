@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.78.0 (2026-09-06)
+### Hannah Core
+
+* Added: guided voice-enrollment dialog for Speaker-ID — once triggered (via `StartVoiceEnrollment`, from an already-authenticated client), Hannah asks a few open questions at the target satellite and enrolls the collected speech automatically once enough material was gathered (Refs #8)
 
 ## 0.77.1 (2026-09-06)
 ### Hannah Core

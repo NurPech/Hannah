@@ -61,6 +61,35 @@ DEFAULT_AUTOMATION_WORDS: dict = {
     ],
 }
 
+# Fragen-Pool für den geführten Voice-Enrollment-Dialog (hannah#8) — offene Fragen mit
+# unterschiedlicher Satzlänge/Register für Varianz in Tonlage/Sprechtempo, einmalig per
+# LLM-Prompt generiert statt zur Laufzeit. target_speech_s/max_questions steuern, wann der
+# Dialog abbricht (siehe hannah.voice_enrollment.VoiceEnrollmentManager).
+DEFAULT_VOICE_ENROLLMENT_SETTINGS: dict = {
+    "questions": [
+        "Wie ist gerade das Wetter bei dir?",
+        "Was hast du heute schon alles gemacht?",
+        "Was machst du eigentlich beruflich?",
+        "Erzähl mir von deinem Lieblingsessen.",
+        "Wie war dein letzter Urlaub?",
+        "Was für Musik hörst du gerne?",
+        "Wenn du einen Tag frei hättest, was würdest du machen?",
+        "Was war das Erste, was du heute Morgen gemacht hast?",
+        "Erzähl mir kurz, wie dein Weg zur Arbeit oder Uni aussieht.",
+        "Was ist dein Lieblingsort in deiner Wohnung, und warum?",
+        "Wie würdest du dein Zuhause jemandem beschreiben, der es noch nie gesehen hat?",
+        "Was hast du dir zuletzt Neues gekauft?",
+        "Was machst du normalerweise am Wochenende?",
+        "Erzähl mir von einem Hobby, das dir wichtig ist.",
+        "Wie sieht für dich ein perfekter Feierabend aus?",
+        "Was war das letzte Buch oder die letzte Serie, die dich richtig gefesselt hat?",
+        "Wenn du kochen müsstest, was würdest du zubereiten?",
+        "Was war heute das Interessanteste, das dir passiert ist?",
+    ],
+    "target_speech_s": 20.0,
+    "max_questions": 10,
+}
+
 
 class SettingsManager:
     def __init__(self, db: Callable):
@@ -130,3 +159,7 @@ class SettingsManager:
         if not self.get_settings_dict("llm"):
             cat = self.ensure_category("llm")
             self.create_setting(cat, "system_prompt", "")
+        if not self.get_settings_dict("voice_enrollment"):
+            cat = self.ensure_category("voice_enrollment")
+            for name, value in DEFAULT_VOICE_ENROLLMENT_SETTINGS.items():
+                self.create_setting(cat, name, value)

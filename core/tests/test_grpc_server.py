@@ -15,7 +15,7 @@ from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
 from hannah.weather import WeatherCache
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand, StartVoiceEnrollmentRequest
 from hannah.satellite_manager import SatellitePermissionError
 
 def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
@@ -1354,3 +1354,38 @@ class TestActivityLogRpcs:
 
         assert chunks == []
         context.set_code.assert_called_once()
+
+
+class TestStartVoiceEnrollment:
+    """hannah#8 — reine Verdrahtung auf VoiceEnrollmentManager.start (dessen Trust-
+    Gate/Dialog-Logik in test_voice_enrollment.py getestet ist)."""
+
+    def test_delegates_to_callback_and_maps_result(self):
+        start_voice_enrollment = MagicMock(return_value=(True, "Enrollment gestartet."))
+        servicer = HannahServicer(
+            user_manager=MagicMock(), satellite_manager=MagicMock(), handle_text=MagicMock(),
+            handle_voice=MagicMock(), announce=MagicMock(), notificate=MagicMock(),
+            get_satellites=MagicMock(), get_car_state=MagicMock(),
+            start_voice_enrollment=start_voice_enrollment,
+        )
+
+        response = servicer.StartVoiceEnrollment(
+            StartVoiceEnrollmentRequest(requestor_id=1, user_id=2, satellite_id="dev1"), MagicMock()
+        )
+
+        start_voice_enrollment.assert_called_once_with(1, 2, "dev1")
+        assert response.ok is True
+        assert response.message == "Enrollment gestartet."
+
+    def test_defaults_to_not_configured_without_callback(self):
+        servicer = HannahServicer(
+            user_manager=MagicMock(), satellite_manager=MagicMock(), handle_text=MagicMock(),
+            handle_voice=MagicMock(), announce=MagicMock(), notificate=MagicMock(),
+            get_satellites=MagicMock(), get_car_state=MagicMock(),
+        )
+
+        response = servicer.StartVoiceEnrollment(
+            StartVoiceEnrollmentRequest(requestor_id=1, user_id=1, satellite_id="dev1"), MagicMock()
+        )
+
+        assert response.ok is False

@@ -6,6 +6,7 @@ import hannah.utils.db as db_module
 from hannah.settings_manager import (
     DEFAULT_AUTOMATION_WORDS,
     DEFAULT_NLU_SETTINGS,
+    DEFAULT_VOICE_ENROLLMENT_SETTINGS,
     SettingsManager,
 )
 
@@ -91,11 +92,31 @@ class TestSeedDefaults:
 
         assert manager.get_settings_dict("llm") == {"system_prompt": "Du bist Hannah."}
 
+    def test_seeds_voice_enrollment_when_empty(self, manager):
+        """hannah#8: Fragen-Pool/Ziel-Sprechzeit/Max-Fragenanzahl für den Voice-
+        Enrollment-Dialog laufen wie nlu/llm über SettingsManager statt als Code-
+        Konstanten, damit sie über die bestehende Settings-Admin-API editierbar sind."""
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("voice_enrollment") == DEFAULT_VOICE_ENROLLMENT_SETTINGS
+
+    def test_does_not_overwrite_existing_voice_enrollment_values(self, manager):
+        cat_id = manager.ensure_category("voice_enrollment")
+        manager.create_setting(cat_id, "target_speech_s", 5.0)
+
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("voice_enrollment") == {"target_speech_s": 5.0}
+
     def test_idempotent_on_repeated_calls(self, manager):
         manager.seed_defaults()
         manager.seed_defaults()
 
         assert manager.get_settings_dict("nlu") == DEFAULT_NLU_SETTINGS
         assert manager.get_settings_dict("automations") == DEFAULT_AUTOMATION_WORDS
+        assert manager.get_settings_dict("voice_enrollment") == DEFAULT_VOICE_ENROLLMENT_SETTINGS
         # + llm.system_prompt
-        assert len(manager.get_settings()) == len(DEFAULT_NLU_SETTINGS) + len(DEFAULT_AUTOMATION_WORDS) + 1
+        assert len(manager.get_settings()) == (
+            len(DEFAULT_NLU_SETTINGS) + len(DEFAULT_AUTOMATION_WORDS)
+            + len(DEFAULT_VOICE_ENROLLMENT_SETTINGS) + 1
+        )

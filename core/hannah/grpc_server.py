@@ -109,6 +109,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         get_devices: Optional[Callable[[], list]] = None,           # → [{key,name,devices:[...]}]
         control_device: Optional[Callable[[str, str, str], bool]] = None,  # (device_id, state, value) → bool
         enroll_voiceprint: Optional[Callable[[str, bytes, int], tuple]] = None,  # (user_id, pcm, rate) → (ok, msg)
+        start_voice_enrollment: Optional[Callable[[int, int, str], tuple]] = None,  # (requestor_id, user_id, satellite_id) → (ok, msg)
         on_satellite_change: Optional[Callable[[dict], None]] = None,           # ({device: room}) bei Register/Disconnect via Proxy
         on_agent_state: Optional[Callable[[str, str, bool, int], None]] = None,      # (state_id, value, ack, ts)
         on_agent_resident: Optional[Callable[[str, Optional[str], Optional[int], pb.ResidentType, Optional[int]], None]] = None,   # (roomie_id, name, presence_state, type, mood_level) — name/presence_state/mood_level None wenn im Update nicht gesetzt (proto3 optional, #206)
@@ -185,6 +186,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._get_devices           = get_devices or (lambda: [])
         self._control_device        = control_device or (lambda *_: False)
         self._enroll_voiceprint     = enroll_voiceprint
+        self._start_voice_enrollment = start_voice_enrollment or (lambda *_: (False, "Nicht konfiguriert."))
         self._on_satellite_change   = on_satellite_change
         self._on_agent_state        = on_agent_state
         self._on_agent_resident     = on_agent_resident
@@ -1802,6 +1804,12 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         )
         ok, msg = self._enroll_voiceprint(
             request.user_id, request.audio_pcm, request.sample_rate
+        )
+        return pb.StatusResponse(ok=ok, message=msg)
+
+    def StartVoiceEnrollment(self, request, _context):
+        ok, msg = self._start_voice_enrollment(
+            request.requestor_id, request.user_id, request.satellite_id
         )
         return pb.StatusResponse(ok=ok, message=msg)
 

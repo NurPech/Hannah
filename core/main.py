@@ -43,6 +43,7 @@ from hannah.udp_server import UDPServer
 from hannah.conversation import ConversationContext
 from hannah.llm import DEFAULT_FALLBACK, load as load_llm, prepare_prompt
 from hannah.voiceid import load as load_voiceid, is_hannah_self
+from hannah.voice_enrollment import VoiceEnrollmentManager
 from hannah.tool_agent import ToolAgent
 from hannah.memory import LongTermMemory
 from hannah.room_manager import RoomManager
@@ -218,6 +219,9 @@ def main():
     # kennt, statt nur über die NLU-Wortliste erreichbar zu sein (#138 Nachfassrunde).
     automation_words = settings_manager.get_settings_dict("automations")
     nlu_cfg["automation_words"] = automation_words
+    # Fragen-Pool/Ziel-Sprechzeit/Max-Fragenanzahl für den Voice-Enrollment-Dialog (hannah#8)
+    # — dank seed_defaults() nie leer, siehe hannah.settings_manager.
+    voice_enrollment_cfg = settings_manager.get_settings_dict("voice_enrollment")
     nlu = NLU(nlu_cfg, iobroker.rooms, iobroker.devices,
               satellites={s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()})
     tts = TTS(cfg.get("tts", {}))
@@ -1454,6 +1458,29 @@ def main():
             _pending_questions[room] = (callback, timer)
         timer.start()
 
+    # Voice-Enrollment-Dialog (hannah#8): eigener, Audio-basierter Turn-Taking-Mechanismus,
+    # bewusst getrennt von _pending_questions oben (Transkript-basiert, für Trigger-Engine-
+    # "ask"). _ask_enrollment_question dupliziert bewusst nur die zwei Zeilen aus _ask_fn statt
+    # diesen wiederzuverwenden — sonst bliebe pro Turn ein unnötiger 60s-Zombie-Eintrag in
+    # _pending_questions liegen, den niemand konsumiert.
+    def _ask_enrollment_question(device_id: str, question: str) -> None:
+        process_announcement(device_id, question)
+        mqtt_handler.publish_listen(device_id)
+
+    voice_enrollment = VoiceEnrollmentManager(
+        _user_manager, voiceid_client,
+        questions=voice_enrollment_cfg["questions"],
+        target_speech_s=voice_enrollment_cfg["target_speech_s"],
+        max_questions=voice_enrollment_cfg["max_questions"],
+        ask_fn=_ask_enrollment_question,
+        confirm_fn=lambda d, t: process_announcement(d, t),
+    )
+
+    def _on_start_voice_enrollment(requestor_id: int, user_id: int, device_id: str) -> tuple[bool, str]:
+        if _get_satellite_room(device_id) is None:
+            return False, f"Satellit '{device_id}' nicht verbunden."
+        return voice_enrollment.start(requestor_id, user_id, device_id)
+
     def _try_answer_pending(device: str, room: str, transcript: str) -> bool:
         """Prüft ob eine offene Frage für diesen Raum wartet und leitet die Antwort weiter.
         Gibt True zurück wenn die Äußerung als Antwort konsumiert wurde."""
@@ -1581,6 +1608,11 @@ def main():
         except Exception as e:
             log.error(f"[{device}] Satellit-Audio-Konvertierung fehlgeschlagen: {e}")
             return "", "Fehler bei der Audio-Verarbeitung.", "Unknown", b"", 0
+
+        # Offene Voice-Enrollment-Frage für dieses Gerät? Dann Rohaudio direkt an den
+        # Dialog liefern statt STT/NLU zu belasten — der Text wird dort nie gebraucht.
+        if voice_enrollment.try_consume(device, audio_array, 16000):
+            return "", "", "VoiceEnrollmentAnswer", b"", 0
 
         # Ad-hoc-Debug-Dump (Refs #226, 2026-08-19): Core bekam bei mehreren
         # Wakeword-Captures heute Nacht leere STT-Transkripte, obwohl die lokale
@@ -1927,6 +1959,7 @@ def main():
         get_all_cars=lambda: [(t.state, t.home_address) for t in car_manager],
         handle_satellite_audio=_handle_satellite_audio,
         enroll_voiceprint=voiceid_client.enroll,
+        start_voice_enrollment=_on_start_voice_enrollment,
         disable_udp=lambda: udp_server.stop(),
         enable_udp=lambda: udp_server.start(),
         on_proxy_discovery=_on_proxy_discovery,
@@ -2213,6 +2246,12 @@ def main():
         if is_hannah_self(speaker_user_id):
             log.info(f"[{device}] Audio als Hannahs eigene Stimme erkannt ({speaker_user_id}) — verworfen (#216).")
             return
+
+        # Offene Voice-Enrollment-Frage für dieses Gerät? Dann Rohaudio direkt an den
+        # Dialog liefern statt STT/NLU zu belasten — der Text wird dort nie gebraucht.
+        if voice_enrollment.try_consume(device, audio_array, audio_cfg.get("sample_rate", 16000)):
+            return
+
         pipeline(
             device,
             audio_array,
