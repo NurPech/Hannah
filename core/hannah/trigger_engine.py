@@ -387,7 +387,7 @@ class TriggerEngine:
         for trigger in triggers:
             for cond in self._as_or_list(trigger.get("when", {})):
                 phrase = cond.get("phrase")
-                if not phrase or phrase not in norm:
+                if not phrase or _normalize(phrase) not in norm:
                     continue
                 if not self._also_condition_matches(cond.get("also")):
                     continue

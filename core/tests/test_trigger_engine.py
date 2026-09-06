@@ -241,6 +241,15 @@ class TestPhraseTrigger:
 
         assert engine.match_phrase("wie ist das Wetter") is None
 
+    def test_matches_capitalized_phrase_against_lowercased_transcript(self, engine):
+        """Regression: die konfigurierte Phrase wurde nie durch _normalize() gejagt,
+        nur der erkannte Text — ein Trigger mit großgeschriebener Phrase (normal für
+        deutsche Substantive, z.B. 'Schlafzimmer aus') matchte deshalb nie, unabhängig
+        von Satzzeichen. STT liefert immer klein+Punkt normalisierten Text."""
+        _create(engine, "t1", {"phrase": "Schlafzimmer aus"}, say="Ok.")
+
+        assert engine.match_phrase("Schlafzimmer aus.") == "Ok."
+
     def test_or_list_fires_on_either_phrase(self, engine):
         ok = engine.create_trigger(
             "t1", [{"phrase": "nachtlicht"}, {"phrase": "nacht licht"}], None, [], [],

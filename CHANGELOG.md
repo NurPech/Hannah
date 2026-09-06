@@ -5,6 +5,11 @@
 -->
 
 
+## 0.77.1 (2026-09-06)
+### Hannah Core
+
+* Fixed: a phrase trigger (`when.phrase`) never fired if its configured phrase contained any uppercase letters — practically always the case for German nouns (e.g. "Schlafzimmer aus"). The recognized speech text was lowercased before matching, but the configured phrase wasn't, so the substring comparison silently failed and the command fell through to regular NLU handling instead (e.g. turning off an entire room instead of running the trigger's intended single-device action) (Refs #258)
+
 ## 0.77.0 (2026-09-06)
 ### Hannah Core
 
