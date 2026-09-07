@@ -691,15 +691,17 @@ class NLU:
 
     def _find_device(self, text: str, room_key: Optional[str]) -> tuple[Optional[str], Optional["Device"]]:
         """
-        Sucht Gerät zuerst im erkannten Raum, dann raumübergreifend.
-        Längster Treffer gewinnt um Teilstring-Konflikte zu vermeiden.
+        Sucht Gerät im erkannten Raum. War kein Raum genannt, wird raumübergreifend
+        gesucht; wurde ein Raum genannt, aber dort nichts gefunden, wird NICHT in
+        andere Räume ausgewichen. Längster Treffer gewinnt um Teilstring-Konflikte
+        zu vermeiden.
         """
         norm_text = _normalize(text)
         candidates: list[dict] = []
         if room_key and room_key in self._devices:
             candidates.append(self._devices[room_key])
-        for rk, devs in self._devices.items():
-            if rk != room_key:
+        elif room_key is None:
+            for rk, devs in self._devices.items():
                 candidates.append(devs)
 
         norm_room = _normalize(room_key) if room_key else ""

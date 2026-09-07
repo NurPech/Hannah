@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.78.1 (2026-09-07)
+### Hannah Core
+
+* Fixed: when a room was explicitly named but no matching device existed in it, NLU's device matching silently fell back to searching every other room and could act on/report a device from the wrong room instead of telling the user it doesn't know that device in the named room (Refs #263)
+* Fixed: the "N devices" number logged for a voice command's execution could be confused with the number of devices actually switched (the log counted candidates found, not successes) — reworded the log line so it can't be misread as the same figure as the response text (Refs #262)
+
 ## 0.78.0 (2026-09-06)
 ### Hannah Core
 

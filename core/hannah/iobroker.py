@@ -304,7 +304,7 @@ class IoBrokerClient:
             return 0
 
         log.info(
-            f"execute: {intent.name} → {len(targets)} Gerät(e), "
+            f"execute: {intent.name}, {len(targets)} Gerät(e) gefunden, "
             f"state='{state_key}', value={value!r}"
         )
 

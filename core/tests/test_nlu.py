@@ -2,6 +2,7 @@ import datetime
 
 import pytest
 
+from hannah.iobroker import Device
 from hannah.nlu import NLU, resolve_clarification_answer, resolve_yes_no
 
 
@@ -226,6 +227,42 @@ class TestCaptureIntents:
     def test_no_satellite_mentioned_does_not_trigger_capture(self, nlu_with_satellite):
         intent = nlu_with_satellite.parse("starte die aufnahme")
         assert intent.name != "StartCapture"
+
+
+def _make_device(key: str, room: str) -> Device:
+    return Device(id=f"{room}.{key}", name=key, key=key, room=room,
+                  room_display_name=room.title(), floor="EG", category="window")
+
+
+class TestFindDeviceRoomScoped:
+    """#263 — bei explizit genanntem Raum ohne passendes Gerät darf _find_device()
+    nicht in andere Räume ausweichen (Forenbericht manne01: "Fenster im WC" fand
+    stattdessen das Fenster im Kinderzimmer, weil WC kein Fenster-Gerät hat)."""
+
+    @pytest.fixture
+    def nlu_rooms(self):
+        rooms = {"wc": "WC", "kinderzimmer": "Kinderzimmer"}
+        devices = {
+            "wc": {"tuer": _make_device("tuer", "wc")},
+            "kinderzimmer": {"fenster": _make_device("fenster", "kinderzimmer")},
+        }
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    def test_no_cross_room_fallback_when_room_named(self, nlu_rooms):
+        key, dev = nlu_rooms._find_device("fenster im wc", "wc")
+        assert key is None
+        assert dev is None
+
+    def test_matches_within_named_room(self, nlu_rooms):
+        key, dev = nlu_rooms._find_device("tuer im wc", "wc")
+        assert key == "tuer"
+        assert dev.room == "wc"
+
+    def test_cross_room_search_when_no_room_named(self, nlu_rooms):
+        """Ohne erkannten Raum bleibt die raumübergreifende Suche erhalten."""
+        key, dev = nlu_rooms._find_device("fenster", None)
+        assert key == "fenster"
+        assert dev.room == "kinderzimmer"
 
     def test_satellite_name_without_context_word_does_not_trigger_capture(self, nlu_with_satellite):
         intent = nlu_with_satellite.parse("starte flur01")
