@@ -323,11 +323,17 @@ static void heartbeat_task(void *arg)
          * zusätzlich gezielt das MALLOC_CAP_INTERNAL-Freiheap (#184) — der
          * kombinierte Wert (frei=) ist seit #191 von PSRAM dominiert und
          * damit für die Kalibrierung des Heap-Watchdog-Schwellwerts unten
-         * nutzlos, da er selbst bei fast leerem internen DRAM kaum sinkt. */
-        ESP_LOGI(TAG, "Heap: frei=%lu min_je=%lu intern=%lu",
+         * nutzlos, da er selbst bei fast leerem internen DRAM kaum sinkt.
+         * outbox=... (#266): esp-mqtt hält für jede Subscription/Publish
+         * einen Eintrag in seiner internen, intern-DRAM-allokierten Outbox
+         * bis das Ack vom Broker zurückkommt — bei schnell aufeinander-
+         * folgenden Reconnects (MQTT_EVENT_CONNECTED resubscribt alle Topics)
+         * ist ein wachsender Outbox-Stand der Verdacht für das Leck. */
+        ESP_LOGI(TAG, "Heap: frei=%lu min_je=%lu intern=%lu outbox=%d",
                  (unsigned long)esp_get_free_heap_size(),
                  (unsigned long)esp_get_minimum_free_heap_size(),
-                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 s_mqtt_client ? esp_mqtt_client_get_outbox_size(s_mqtt_client) : -1);
 
         /* GOT_IP/MQTT_CONNECTED feuern nur einmal pro Verbindung, MQTT_DATA nur
          * bei eingehenden Befehlen — im ruhigen Idle-Betrieb kommt sonst über

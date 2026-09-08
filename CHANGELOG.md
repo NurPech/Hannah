@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.78.2 (2026-09-08)
+### Satellite Firmware
+
+* Chore: the periodic `Heap: frei=... min_je=... intern=...` diagnostic log line now also includes the MQTT client's outbox size (`outbox=...`) — helps narrow down a suspected internal-DRAM leak tied to repeated MQTT reconnects (Refs #266)
+
 ## 0.78.1 (2026-09-07)
 ### Hannah Core
 
