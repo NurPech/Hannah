@@ -558,3 +558,54 @@ class TestGetStateRaw:
         dev.current["on"] = True
         client._devices_by_id["virtualDevice.Licht.EG.Wohnzimmer.Decke"] = dev
         assert client.get_state_raw("virtualDevice.Licht.EG.Wohnzimmer.Decke.on") == "False"
+
+
+class TestExecuteCrossRoomDevice:
+    """#268 — "Computer an" ohne Raumangabe fand device_id bereits raumübergreifend
+    eindeutig auf, aber execute() brach trotzdem an der fehlenden Raumangabe ab."""
+
+    def _device(self, key: str, room: str, room_display: str) -> Device:
+        return Device(
+            id=f"javascript.0.virtualDevice.Stecker.OG.{room}.{key}",
+            name=key.title(), key=key, room=room, room_display_name=room_display,
+            floor="OG", category="socket", states={"on": f"{room}.{key}.on"},
+        )
+
+    @pytest.fixture
+    def client(self):
+        c = IoBrokerClient({"host": "localhost", "port": 8093})
+        c.set_setter(lambda state_id, payload: True)
+        return c
+
+    def test_unique_device_id_resolves_without_room(self, client):
+        """Der gemeldete Bug: NLU löst 'Computer' bereits eindeutig über device_id
+        auf (nur ein Raum hat dieses Gerät) — execute() darf das nicht an der
+        fehlenden Raumangabe scheitern lassen."""
+        dev = self._device("computer", "schlafzimmer", "Schlafzimmer")
+        client.devices["schlafzimmer"] = {"computer": dev}
+        client._devices_by_id[dev.id] = dev
+
+        intent = Intent(name="TurnOn", device="Computer", device_id=dev.id)
+        assert client.execute(intent) == 1
+
+    def test_device_key_fallback_after_room_clarification(self, client):
+        """Nach einer Raum-Rückfrage bei Mehrdeutigkeit ist device_id noch nicht
+        gesetzt, aber room_id + device_key sind bekannt — execute() muss das
+        Gerät dann im bestätigten Raum per Key nachschlagen."""
+        dev1 = self._device("nachtlicht", "schlafzimmer_1", "Schlafzimmer 1")
+        dev2 = self._device("nachtlicht", "schlafzimmer_2", "Schlafzimmer 2")
+        client.devices["schlafzimmer_1"] = {"nachtlicht": dev1}
+        client.devices["schlafzimmer_2"] = {"nachtlicht": dev2}
+        client._devices_by_id[dev1.id] = dev1
+        client._devices_by_id[dev2.id] = dev2
+
+        intent = Intent(
+            name="TurnOn", device_key="nachtlicht",
+            room="Schlafzimmer 2", room_id="schlafzimmer_2",
+        )
+        assert client.execute(intent) == 1
+        assert intent.device_id == dev2.id
+
+    def test_no_room_and_no_device_id_still_fails(self, client):
+        intent = Intent(name="TurnOn")
+        assert client.execute(intent) == 0

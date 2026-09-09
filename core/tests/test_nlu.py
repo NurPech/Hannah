@@ -249,20 +249,23 @@ class TestFindDeviceRoomScoped:
         return NLU(cfg={}, rooms=rooms, devices=devices)
 
     def test_no_cross_room_fallback_when_room_named(self, nlu_rooms):
-        key, dev = nlu_rooms._find_device("fenster im wc", "wc")
+        key, dev, candidates = nlu_rooms._find_device("fenster im wc", "wc")
         assert key is None
         assert dev is None
+        assert candidates == []
 
     def test_matches_within_named_room(self, nlu_rooms):
-        key, dev = nlu_rooms._find_device("tuer im wc", "wc")
+        key, dev, candidates = nlu_rooms._find_device("tuer im wc", "wc")
         assert key == "tuer"
         assert dev.room == "wc"
+        assert candidates == []
 
     def test_cross_room_search_when_no_room_named(self, nlu_rooms):
         """Ohne erkannten Raum bleibt die raumübergreifende Suche erhalten."""
-        key, dev = nlu_rooms._find_device("fenster", None)
+        key, dev, candidates = nlu_rooms._find_device("fenster", None)
         assert key == "fenster"
         assert dev.room == "kinderzimmer"
+        assert candidates == []
 
     def test_satellite_name_without_context_word_does_not_trigger_capture(self, nlu_with_satellite):
         intent = nlu_with_satellite.parse("starte flur01")
@@ -273,3 +276,39 @@ class TestFindDeviceRoomScoped:
         umgebogen werden, nur weil irgendein Satellit registriert ist."""
         intent = nlu_with_satellite.parse("stopp")
         assert intent.name == "StopIntent"
+
+
+class TestFindDeviceCrossRoomAmbiguity:
+    """#268 — gleicher Gerätename in mehreren Räumen ohne Raumangabe im Satz muss
+    als Mehrdeutigkeit erkannt werden statt per Dict-Reihenfolge zufällig ein
+    Gerät zu gewinnen."""
+
+    @pytest.fixture
+    def nlu_rooms(self):
+        rooms = {"schlafzimmer_1": "Schlafzimmer 1", "schlafzimmer_2": "Schlafzimmer 2",
+                  "kinderzimmer": "Kinderzimmer"}
+        devices = {
+            "schlafzimmer_1": {"nachtlicht": _make_device("nachtlicht", "schlafzimmer_1")},
+            "schlafzimmer_2": {"nachtlicht": _make_device("nachtlicht", "schlafzimmer_2")},
+            "kinderzimmer": {"fenster": _make_device("fenster", "kinderzimmer")},
+        }
+        return NLU(cfg={"turn_on_words": ["an"]}, rooms=rooms, devices=devices)
+
+    def test_ambiguous_device_returns_room_candidates(self, nlu_rooms):
+        key, dev, candidates = nlu_rooms._find_device("nachtlicht", None)
+        assert dev is None
+        assert key == "nachtlicht"
+        assert {c[0] for c in candidates} == {"schlafzimmer_1", "schlafzimmer_2"}
+
+    def test_unambiguous_cross_room_device_still_resolves(self, nlu_rooms):
+        key, dev, candidates = nlu_rooms._find_device("fenster", None)
+        assert key == "fenster"
+        assert dev.room == "kinderzimmer"
+        assert candidates == []
+
+    def test_ambiguous_device_intent_sets_candidates_not_device_id(self, nlu_rooms):
+        intent = nlu_rooms.parse("nachtlicht an")
+        assert intent.name == "TurnOn"
+        assert intent.device_id is None
+        assert intent.device_key == "nachtlicht"
+        assert len(intent.candidates) == 2

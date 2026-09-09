@@ -272,7 +272,7 @@ class IoBrokerClient:
             log.debug("execute: Intent 'Unknown', nichts zu tun.")
             return 0
 
-        if not intent.room:
+        if not intent.room and not intent.device_id:
             log.warning("execute: Kein Raum erkannt.")
             return 0
 
@@ -282,6 +282,15 @@ class IoBrokerClient:
             dev = self._devices_by_id.get(intent.device_id)
             if dev:
                 targets = [dev]
+        elif intent.device_key and intent.room_id and intent.room_id in self.devices:
+            # Gerät war raumübergreifend mehrdeutig (gleicher Gerätename in mehreren
+            # Räumen) und wurde erst per Raum-Rückfrage aufgelöst — device_id war zum
+            # Parse-Zeitpunkt noch nicht bekannt, jetzt im bestätigten Raum per Key
+            # nachschlagen (#268).
+            dev = self.devices[intent.room_id].get(intent.device_key)
+            if dev:
+                targets = [dev]
+                intent.device_id = dev.id
         else:
             all_devs = list(self.devices.get(intent.room_id or "", {}).values())
             if intent.category_filter:

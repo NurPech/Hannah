@@ -73,6 +73,9 @@ class Intent:
     room_id: Optional[str] = None      # Lookup-Key (normalisiert), z.B. "wohnzimmer"
     device: Optional[str] = None       # Originalname, z.B. "DeckeSeite"
     device_id: Optional[str] = None    # voller State-Prefix, z.B. "javascript.0...."
+    device_key: Optional[str] = None   # normalisierter Geräte-Key, z.B. "decke seite" — Fallback-
+                                        # Auflösung in execute() nach Raum-Rückfrage bei raum-
+                                        # übergreifender Geräte-Mehrdeutigkeit (#268)
     category_filter: Optional[str] = None  # "Licht" | "Stecker" | None (= alle)
     query_state: Optional[str] = None  # "on" | "level" | "color" | None (= alles)
     value: Optional[object] = None     # float (SetLevel) | str (SetColor)
@@ -298,9 +301,10 @@ class NLU:
         tokens = [t for t in normalized.split() if t not in _FILLER]
         joined = " ".join(tokens)
 
-        room_key, room_name, room_candidates = self._find_room(joined)
-        _, device                            = self._find_device(joined, room_key)
-        satellite_id, satellite_name         = self._find_satellite(joined)
+        room_key, room_name, room_candidates       = self._find_room(joined)
+        device_key, device, device_room_candidates = self._find_device(joined, room_key)
+        device_ambiguous                           = device is None and bool(device_room_candidates)
+        satellite_id, satellite_name               = self._find_satellite(joined)
         action              = self._find_action(tokens)
         level               = self._find_level(normalized)
         temperature         = self._find_temperature(normalized)
@@ -318,7 +322,7 @@ class NLU:
         alarm_weekday       = self._find_weekday(norm_tokens) if _alarm_context else None
         alarm_relative_date = self._find_relative_date(norm_tokens) if _alarm_context else None
 
-        no_device_context = device is None and room_key is None and category_filter is None
+        no_device_context = device is None and not device_ambiguous and room_key is None and category_filter is None
         # Mehrdeutige Farbwörter (z.B. "weiß" = Verb) nur werten wenn Gerätekontext vorhanden
         color               = self._find_color(joined, require_context=no_device_context)
 
@@ -600,15 +604,16 @@ class NLU:
             name=intent_name,
             room=room_name,
             room_id=room_key,
-            device=device.name if device else None,
+            device=device.name if device else (device_key if device_ambiguous else None),
             device_id=device.id if device else None,
+            device_key=device_key,
             category_filter=category_filter,
             query_state=query_state,
             value=value,
             unit=unit,
             label=intent_label,
             raw_text=raw,
-            candidates=room_candidates if _actionable else [],
+            candidates=(room_candidates or device_room_candidates) if _actionable else [],
             weekdays=intent_weekdays,
             resolved_date=intent_resolved_date,
             satellite_id=satellite_id if intent_name in ("StartCapture", "StopCapture") else None,
@@ -689,23 +694,26 @@ class NLU:
         candidates = tied if len(tied) > 1 else []
         return best[0], best[1], candidates
 
-    def _find_device(self, text: str, room_key: Optional[str]) -> tuple[Optional[str], Optional["Device"]]:
+    def _find_device(
+        self, text: str, room_key: Optional[str]
+    ) -> tuple[Optional[str], Optional["Device"], list[tuple[str, str]]]:
         """
         Sucht Gerät im erkannten Raum. War kein Raum genannt, wird raumübergreifend
         gesucht; wurde ein Raum genannt, aber dort nichts gefunden, wird NICHT in
         andere Räume ausgewichen. Längster Treffer gewinnt um Teilstring-Konflikte
         zu vermeiden.
+
+        Ohne genannten Raum werden Treffer aus ALLEN Räumen gesammelt statt beim
+        ersten abzubrechen — sonst entscheidet zufällig die Dict-Reihenfolge der
+        Räume, welches Gerät gewinnt, und eine echte Mehrdeutigkeit (gleicher
+        Gerätename in mehreren Räumen, z.B. zwei "Nachtlicht") fällt nie auf.
+        Bei >1 Raum-Treffer wird kein Gerät aufgelöst, sondern candidates mit den
+        betroffenen Räumen zurückgegeben — dieselbe Rückfrage-Mechanik wie bei
+        Raumnamen-Mehrdeutigkeit in _find_room() (#268).
         """
         norm_text = _normalize(text)
-        candidates: list[dict] = []
-        if room_key and room_key in self._devices:
-            candidates.append(self._devices[room_key])
-        elif room_key is None:
-            for rk, devs in self._devices.items():
-                candidates.append(devs)
 
-        norm_room = _normalize(room_key) if room_key else ""
-        for space in candidates:
+        def _best_match(space: dict, norm_room: str) -> tuple[Optional[str], Optional["Device"]]:
             best_key = best_dev = None
             best_len = 0
             for key, dev in space.items():
@@ -716,10 +724,28 @@ class NLU:
                     continue
                 if re.search(r'(?<!\w)' + re.escape(norm_key) + r'(?!\w)', norm_text) and len(norm_key) > best_len:
                     best_key, best_dev, best_len = key, dev, len(norm_key)
-            if best_dev:
-                return best_key, best_dev
+            return best_key, best_dev
 
-        return None, None
+        if room_key:
+            if room_key not in self._devices:
+                return None, None, []
+            key, dev = _best_match(self._devices[room_key], _normalize(room_key))
+            return key, dev, []
+
+        matches: list[tuple[str, str, "Device"]] = []  # (room_key, dev_key, dev)
+        for rk, devs in self._devices.items():
+            key, dev = _best_match(devs, "")
+            if dev:
+                matches.append((rk, key, dev))
+
+        if not matches:
+            return None, None, []
+        if len(matches) == 1:
+            _, key, dev = matches[0]
+            return key, dev, []
+
+        room_candidates = [(rk, self._rooms.get(rk, rk)) for rk, _, _ in matches]
+        return matches[0][1], None, room_candidates
 
     def _find_action(self, tokens: list[str]) -> Optional[str]:
         for t in tokens:

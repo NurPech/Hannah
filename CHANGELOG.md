@@ -3,6 +3,11 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+## 0.78.3 (2026-09-09)
+### Hannah Core
+
+* Fixed: a voice command naming a device but no room (e.g. "Computer an") failed with "Keine Geräte gefunden." even when that device name existed in exactly one room and NLU had already resolved it uniquely — `execute()` rejected the command before ever checking whether a device was already resolved (Refs #268)
+* Added: if the same device name exists in more than one room and no room was named, Hannah now asks which room is meant instead of silently controlling whichever room happened to be checked first (Refs #268)
 
 ## 0.78.2 (2026-09-08)
 ### Satellite Firmware
