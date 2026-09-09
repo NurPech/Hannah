@@ -3,6 +3,12 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+## 0.79.0 (2026-09-09)
+### Hannah Core
+
+* Added: "öffnen"/"schließen" (and "rauf"/"herunter"/"hochfahren"/"runterfahren") are now recognized for Rolladen/Markise devices (category `blind`) and mapped to `SetLevel` 100%/0%, analogous to the existing TurnOn/TurnOff synonyms — previously only explicit percentage commands worked (Refs #260). Assumes the device's raw percentage already follows the 0%=closed/100%=open convention; devices wired the opposite way are not yet handled (tracked separately)
+* Added: Rolladen/Markise actors that use the reverse raw-percentage convention (0%=open/100%=closed, e.g. some Homematic/KNX devices) are now handled correctly — "öffnen"/"schließen" convert to the actor's raw value, and status queries announce the canonical (not raw) percentage. Explicit percentage commands ("auf 70 Prozent") are never converted, only the semantic open/close boundary. Requires the device to report itself as inverted via the new adapter-side flag (Refs #270)
+
 ## 0.78.3 (2026-09-09)
 ### Hannah Core
 

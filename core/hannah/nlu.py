@@ -89,6 +89,9 @@ class Intent:
     satellite_id: Optional[str] = None       # StartCapture/StopCapture: Ziel-Satellit (nie ein Raum), z.B. "Flur01"
     capture_sample_type: Optional[str] = None  # StartCapture: "noise" | "hey_hannah"
     capture_mode: Optional[str] = None         # StartCapture: "manual" | "ptt" | "plink" (nur bei hey_hannah)
+    is_open_close: bool = False                # SetLevel kam aus "öffnen"/"schließen"-Vokabular (category
+                                                # 'blind'), nicht aus einem expliziten Prozentwert — nur diese
+                                                # Fälle werden bei invertierten Aktoren umgerechnet (#270)
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None and v != []}
@@ -110,6 +113,18 @@ class NLU:
         self._turn_on        = set(cfg.get("turn_on_words", []))
         self._turn_off       = set(cfg.get("turn_off_words", []))
         self._pct_units      = cfg.get("percentage_units", ["prozent", "%"])
+        # Öffnen/Schließen-Vokabular für Rolladen/Markisen (category 'blind') — mappt auf
+        # SetLevel 100/0, analog zu TurnOn/TurnOff-Synonymen, aber als eigene Liste statt in
+        # turn_on_words/turn_off_words, weil die Wörter nur im 'blind'-Kontext Sinn ergeben (#260).
+        # "hoch" bewusst ausgeschlossen — kollidiert mit fan_speed_words ("hoch" = Lüfter
+        # volle Stufe), das dort unconditional (kategoriefrei) geprüft wird und im
+        # Intent-Auswahlbaum vor SetLevel kommt.
+        self._blind_open_words: set[str] = set(cfg.get("blind_open_words", [
+            "oeffne", "oeffnen", "rauf", "hochfahren",
+        ]))
+        self._blind_close_words: set[str] = set(cfg.get("blind_close_words", [
+            "schliesse", "schliessen", "runter", "herunter", "runterfahren",
+        ]))
         self._query          = set(cfg.get("query_words", []))
         self._category_words: dict[str, str] = cfg.get("category_words", {
             "licht":    "light",
@@ -314,6 +329,12 @@ class NLU:
         norm_tokens         = {_normalize(t) for t in tokens}
         climate_mode        = self._find_climate_mode(norm_tokens)
         fan_speed           = self._find_fan_speed(norm_tokens)
+        # Rolladen/Markise: 'öffnen'/'schließen' nur werten wenn das Zielgerät (per Name oder
+        # per Kategorie-Sammelbefehl) tatsächlich category 'blind' ist — sonst würde z.B.
+        # "öffne die Tür" (Türen sind reine Sensoren, kein steuerbarer State) fälschlich
+        # einen SetLevel-Intent erzeugen (#260).
+        is_blind            = (device is not None and device.category == "blind") or category_filter == "blind"
+        open_close          = self._find_open_close(norm_tokens) if is_blind else None
         _timer_trigger = bool({"timer"} & norm_tokens) or any(t.startswith("erinner") for t in norm_tokens)
         timer_seconds       = self._find_timer_seconds(raw) if _timer_trigger else None
         timer_label         = self._find_timer_label(raw) if timer_seconds is not None else None
@@ -520,6 +541,7 @@ class NLU:
         intent_resolved_date: Optional[datetime.date] = None
         intent_capture_sample_type: Optional[str] = None
         intent_capture_mode: Optional[str] = None
+        _is_open_close = False
 
         if is_car:
             car_scope = self._find_car_scope(norm_tokens)
@@ -589,6 +611,9 @@ class NLU:
             intent_name, value, unit = "SetTemperature", temperature, "°C"
         elif level is not None:
             intent_name, value, unit = "SetLevel", level, "%"
+        elif open_close is not None and not is_query:
+            intent_name, value, unit = "SetLevel", open_close, "%"
+            _is_open_close = True
         elif color is not None:
             intent_name, value, unit = "SetColor", color, "color"
         elif action == "on" and _has_action_context:
@@ -619,6 +644,7 @@ class NLU:
             satellite_id=satellite_id if intent_name in ("StartCapture", "StopCapture") else None,
             capture_sample_type=intent_capture_sample_type,
             capture_mode=intent_capture_mode,
+            is_open_close=_is_open_close,
         )
         log.debug(f"NLU: {intent}")
         return intent
@@ -810,6 +836,15 @@ class NLU:
             return None
         label = re.sub(r'^(?:den|die|das|dem|der|einen|einem|ein)\s+', '', lm.group(1).strip())
         return label.strip() if label.strip() else None
+
+    def _find_open_close(self, norm_tokens: set[str]) -> Optional[int]:
+        """Erkennt Öffnen/Schließen-Vokabular, gibt die passende SetLevel-Prozentzahl zurück.
+        Aufrufer prüft bereits vorab, dass es um ein 'blind'-Gerät geht (#260)."""
+        if norm_tokens & self._blind_open_words:
+            return 100
+        if norm_tokens & self._blind_close_words:
+            return 0
+        return None
 
     def _find_climate_mode(self, norm_tokens: set[str]) -> Optional[str]:
         """Erkennt Klimaanlagen-Betriebsmodus aus normalisierten Tokens."""

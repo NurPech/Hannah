@@ -229,9 +229,9 @@ class TestCaptureIntents:
         assert intent.name != "StartCapture"
 
 
-def _make_device(key: str, room: str) -> Device:
+def _make_device(key: str, room: str, category: str = "window") -> Device:
     return Device(id=f"{room}.{key}", name=key, key=key, room=room,
-                  room_display_name=room.title(), floor="EG", category="window")
+                  room_display_name=room.title(), floor="EG", category=category)
 
 
 class TestFindDeviceRoomScoped:
@@ -312,3 +312,74 @@ class TestFindDeviceCrossRoomAmbiguity:
         assert intent.device_id is None
         assert intent.device_key == "nachtlicht"
         assert len(intent.candidates) == 2
+
+
+class TestBlindOpenClose:
+    """#260 — 'öffnen'/'schließen'-Vokabular soll für Rolladen/Markisen (category
+    'blind') auf SetLevel 100/0 gemappt werden, analog zu den TurnOn/TurnOff-
+    Synonymen. Muss auf 'blind'-Geräte beschränkt bleiben, sonst würde z.B.
+    "öffne die Tür" (reiner Sensor, kein steuerbarer State) fälschlich einen
+    SetLevel-Intent erzeugen."""
+
+    @pytest.fixture
+    def nlu_rooms(self):
+        rooms = {"kueche": "Küche"}
+        devices = {
+            "kueche": {
+                "rolladenlinks": _make_device("rolladenlinks", "kueche", category="blind"),
+                "tuer": _make_device("tuer", "kueche", category="door"),
+            },
+        }
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    def test_open_word_maps_to_setlevel_100(self, nlu_rooms):
+        intent = nlu_rooms.parse("oeffne den rolladenlinks in der kueche")
+        assert intent.name == "SetLevel"
+        assert intent.value == 100
+
+    def test_close_word_maps_to_setlevel_0(self, nlu_rooms):
+        intent = nlu_rooms.parse("schliesse den rolladenlinks in der kueche")
+        assert intent.name == "SetLevel"
+        assert intent.value == 0
+
+    def test_rauf_runter_synonyms_work_too(self, nlu_rooms):
+        """'hoch' ist bewusst NICHT als Synonym enthalten — kollidiert mit
+        fan_speed_words ('hoch' = Lüfter volle Stufe, siehe TestFanSpeed-Bereich)."""
+        assert nlu_rooms.parse("rolladenlinks rauf").value == 100
+        assert nlu_rooms.parse("rolladenlinks runter").value == 0
+
+    def test_hoch_still_wins_as_fan_speed_not_open(self, nlu_rooms):
+        """Documents the accepted trade-off: 'hoch' stays claimed by fan_speed_words
+        even for a 'blind' device, since fan-speed detection is category-unaware
+        and runs earlier in the intent chain — use 'rauf'/'hochfahren' to open."""
+        intent = nlu_rooms.parse("rolladenlinks hoch")
+        assert intent.name == "SetFanSpeed"
+
+    def test_category_bulk_command_also_works(self, nlu_rooms):
+        """Ohne konkreten Gerätenamen, nur über den Kategorie-Sammelbefehl."""
+        intent = nlu_rooms.parse("schliesse alle rollladen")
+        assert intent.name == "SetLevel"
+        assert intent.value == 0
+        assert intent.category_filter == "blind"
+
+    def test_open_word_on_non_blind_device_is_not_setlevel(self, nlu_rooms):
+        """Regression guard: 'öffne die Tür' darf nicht auf SetLevel abbiegen —
+        Türen sind reine Sensoren ohne steuerbaren State."""
+        intent = nlu_rooms.parse("oeffne die tuer in der kueche")
+        assert intent.name != "SetLevel"
+
+    def test_query_takes_priority_over_open_close(self, nlu_rooms):
+        intent = nlu_rooms.parse("ist der rolladenlinks in der kueche offen?")
+        assert intent.name == "Query"
+
+    def test_open_word_sets_is_open_close_flag(self, nlu_rooms):
+        """#270: Core braucht dieses Flag, um nur die semantischen open/close-
+        Grenzwerte zu invertieren, nie einen explizit genannten Prozentwert."""
+        intent = nlu_rooms.parse("oeffne den rolladenlinks in der kueche")
+        assert intent.is_open_close is True
+
+    def test_explicit_percent_does_not_set_is_open_close_flag(self, nlu_rooms):
+        intent = nlu_rooms.parse("rolladenlinks in der kueche auf 100 prozent")
+        assert intent.name == "SetLevel"
+        assert intent.value == 100
+        assert intent.is_open_close is False

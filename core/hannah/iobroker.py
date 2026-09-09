@@ -87,6 +87,7 @@ class Device:
     state_types: dict = field(default_factory=dict)    # canon-key → StateType (proto-Enum-Int, siehe hannah_proto.shared_pb2)
     enum_values: dict = field(default_factory=dict)    # canon-key → {rohwert: label}, nur bei ENUM/COLOR
     state_writable: dict = field(default_factory=dict) # canon-key → bool, aus ioBroker common.write
+    inverted: bool = False  # category 'blind': Aktor nutzt 0%=auf/100%=zu statt Hannahs Konvention (#270)
 
 
 class IoBrokerClient:
@@ -203,6 +204,8 @@ class IoBrokerClient:
                 # überschreiben — erster nicht-leerer Wert gewinnt (#133).
                 if not dev.category and device.device_type:
                     dev.category = device.device_type
+                if device.inverted:
+                    dev.inverted = True
                 # canonical_key vom Adapter übernehmen wenn vorhanden (#257) — vom Adapter
                 # aus common.role aufgelöst, zuverlässiger als die alte suffix-basierte
                 # state_names-Übersetzung. Fallback für Adapter <3.8.0: state_names-Lookup
@@ -324,14 +327,21 @@ class IoBrokerClient:
             if not state_id:
                 log.debug(f"  {dev.name}: State '{state_key}' nicht vorhanden, übersprungen.")
                 continue
-            if self.set_state(state_id, value):
+            # Invertierte Rolladen/Markisen (#270): nur die semantischen "öffnen"/
+            # "schließen"-Grenzwerte werden pro Gerät umgerechnet, nie ein explizit
+            # genannter Prozentwert (Design-Entscheidung 1) — sonst würde eine ioBroker-
+            # Visualisierung einen anderen Wert zeigen als der User genannt hat.
+            dev_value = value
+            if state_key == "level" and intent.is_open_close and dev.inverted:
+                dev_value = 100 - dev_value
+            if self.set_state(state_id, dev_value):
                 count += 1
                 # Bestätigung registrieren wenn Feedback gewünscht
                 if satellite_device and self._feedback_cb:
                     label = f"{dev.name} im {dev.room_display_name}"
                     with self._pending_lock:
                         self._pending[state_id] = {
-                            "expected":  value,
+                            "expected":  dev_value,
                             "device":    satellite_device,
                             "deadline":  deadline,
                             "label":     label,
@@ -554,6 +564,10 @@ class IoBrokerClient:
                 val = dev.current.get(state_key)
                 if val is None:
                     continue
+                # Invertierte Rolladen/Markisen (#270): Ansage nennt den kanonischen
+                # Wert (0%=zu/100%=auf), nicht den rohen Aktorwert (Design-Entscheidung 3).
+                if category == "blind" and state_key == "level" and dev.inverted:
+                    val = 100 - val
                 if fmt == "bool_offen":
                     parts.append("offen" if val else "geschlossen")
                 elif fmt == "bool_an":

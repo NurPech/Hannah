@@ -328,6 +328,36 @@ class TestHandleDeviceSnapshotWritable:
         assert device["state_writable"] == {"on": True, "power": False}
 
 
+class TestHandleDeviceSnapshotInverted:
+    """#270: AgentDevice.inverted landet auf dem Device, damit execute()/
+    _describe_category invertierte Rolladen/Markisen erkennen können."""
+
+    def _device_msg(self, inverted: bool) -> AgentDevice:
+        return AgentDevice(
+            state_id="javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks.level",
+            room="kueche",
+            device="Rolladenlinks",
+            device_type="blind",
+            value=AgentStateValue(value="70", ack=True),
+            room_names={"de": "Küche"},
+            inverted=inverted,
+        )
+
+    def test_inverted_flag_is_stored_on_device(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([self._device_msg(True)])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks"]
+        assert dev.inverted is True
+
+    def test_default_is_not_inverted(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([self._device_msg(False)])
+
+        dev = client._devices_by_id["javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks"]
+        assert dev.inverted is False
+
+
 class TestHandleStateUpdate:
     """Regression: live updates go through state_names reverse-lookup, the initial
     gRPC snapshot does not — a suffix missing from state_names freezes that field
@@ -609,3 +639,106 @@ class TestExecuteCrossRoomDevice:
     def test_no_room_and_no_device_id_still_fails(self, client):
         intent = Intent(name="TurnOn")
         assert client.execute(intent) == 0
+
+
+class TestBlindInversionExecute:
+    """#270: invertierte Rolladen/Markisen (0%=auf/100%=zu statt Hannahs
+    0%=zu/100%=auf) — nur die semantischen "öffnen"/"schließen"-Grenzwerte
+    (intent.is_open_close) werden pro Gerät umgerechnet, nie ein explizit
+    genannter Prozentwert."""
+
+    def _device(self, key: str, inverted: bool) -> Device:
+        return Device(
+            id=f"javascript.0.virtualDevice.Rollladen.EG.Kueche.{key}",
+            name=key.title(), key=key, room="kueche", room_display_name="Küche",
+            floor="EG", category="blind", states={"level": f"kueche.{key}.level"},
+            inverted=inverted,
+        )
+
+    @pytest.fixture
+    def client(self):
+        c = IoBrokerClient({"host": "localhost", "port": 8093})
+        c._sent = []
+        c.set_setter(lambda state_id, payload: (c._sent.append((state_id, payload)), True)[1])
+        return c
+
+    def test_open_word_on_inverted_device_sends_raw_zero(self, client):
+        dev = self._device("rolladenlinks", inverted=True)
+        client.devices["kueche"] = {"rolladenlinks": dev}
+        client._devices_by_id[dev.id] = dev
+
+        intent = Intent(name="SetLevel", device_id=dev.id, value=100, is_open_close=True)
+        assert client.execute(intent) == 1
+        assert client._sent == [(dev.states["level"], "0")]
+
+    def test_close_word_on_inverted_device_sends_raw_hundred(self, client):
+        dev = self._device("rolladenlinks", inverted=True)
+        client.devices["kueche"] = {"rolladenlinks": dev}
+        client._devices_by_id[dev.id] = dev
+
+        intent = Intent(name="SetLevel", device_id=dev.id, value=0, is_open_close=True)
+        assert client.execute(intent) == 1
+        assert client._sent == [(dev.states["level"], "100")]
+
+    def test_open_word_on_non_inverted_device_is_unaffected(self, client):
+        dev = self._device("rolladenlinks", inverted=False)
+        client.devices["kueche"] = {"rolladenlinks": dev}
+        client._devices_by_id[dev.id] = dev
+
+        intent = Intent(name="SetLevel", device_id=dev.id, value=100, is_open_close=True)
+        assert client.execute(intent) == 1
+        assert client._sent == [(dev.states["level"], "100")]
+
+    def test_explicit_percent_on_inverted_device_is_not_converted(self, client):
+        """Design-Entscheidung 1: 'auf 70 Prozent' zeigt in ioBroker exakt 70%,
+        unabhängig vom Inversions-Flag — nur öffnen/schließen wird umgerechnet."""
+        dev = self._device("rolladenlinks", inverted=True)
+        client.devices["kueche"] = {"rolladenlinks": dev}
+        client._devices_by_id[dev.id] = dev
+
+        intent = Intent(name="SetLevel", device_id=dev.id, value=70, is_open_close=False)
+        assert client.execute(intent) == 1
+        assert client._sent == [(dev.states["level"], "70")]
+
+    def test_category_bulk_command_converts_only_inverted_targets(self, client):
+        """'schließe alle Rollläden' trifft ggf. gemischte Aktoren im selben
+        Raum — die Umrechnung muss pro Gerät passieren, nicht global."""
+        inv = self._device("rolladenlinks", inverted=True)
+        normal = self._device("rolladenrechts", inverted=False)
+        client.devices["kueche"] = {"rolladenlinks": inv, "rolladenrechts": normal}
+        client._devices_by_id[inv.id] = inv
+        client._devices_by_id[normal.id] = normal
+
+        intent = Intent(name="SetLevel", room="Küche", room_id="kueche",
+                         category_filter="blind", value=0, is_open_close=True)
+        assert client.execute(intent) == 2
+        assert (inv.states["level"], "100") in client._sent
+        assert (normal.states["level"], "0") in client._sent
+
+
+class TestBlindInversionDescribe:
+    """#270: Ansage nennt den kanonischen Zustand (0%=zu/100%=auf), nicht den
+    rohen Aktorwert."""
+
+    @pytest.fixture
+    def client(self):
+        return IoBrokerClient({"host": "localhost", "port": 8093})
+
+    def _device(self, inverted: bool, level: float) -> Device:
+        return Device(
+            id="javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks",
+            name="Rolladenlinks", key="rolladenlinks", room="kueche",
+            room_display_name="Küche", floor="EG", category="blind",
+            current={"level": level}, inverted=inverted,
+        )
+
+    def test_inverted_device_reports_canonical_value(self, client):
+        dev = self._device(inverted=True, level=70.0)
+        result = client._describe_category("blind", [dev], "Küche")
+        assert "30" in result
+        assert "70" not in result
+
+    def test_non_inverted_device_reports_raw_value(self, client):
+        dev = self._device(inverted=False, level=30.0)
+        result = client._describe_category("blind", [dev], "Küche")
+        assert "30" in result

@@ -356,9 +356,10 @@ Gilt für das Hannah-Mono-Repo **und** das `iobroker.hannah`-Submodule (eigener 
 4. **Commits nur auf explizite Anfrage**, nie unaufgefordert.
 5. **Pushen, wenn:** die Arbeit abgeschlossen ist, ODER eine Pause eingelegt wird, ODER Arbeit dezentral gesichert werden soll (auch zwischendurch, auf Zuruf) — Standard-Erwartung, kein Einzelfall.
 6. **Landung auf master ausschließlich über Merge Request (Hannah-Repo) bzw. Pull Request (`iobroker.hannah`-Submodule).** Nie direkt mergen.
-7. **Für jede funktionale Änderung muss ein Work Item existieren.** Anlegen ist Aufgabe von Claude, proaktiv, bevor mit der Umsetzung begonnen wird — nicht erst hinterher. Tracker richtet sich danach, was geändert wird:
-   - Änderungen am Mono-Repo (Core, Proto, Firmware, ...) — auch wenn sie nebenbei den Adapter mit anfassen: **GitLab Issue, project 319.**
+7. **Für jede funktionale Änderung muss ein Work Item existieren.** Anlegen ist Aufgabe von Claude, proaktiv, bevor mit der Umsetzung begonnen wird — nicht erst hinterher. Tracker richtet sich danach, was geändert wird — und danach, in welchem Repo die Dateien liegen, nicht danach, welches übergeordnete Vorhaben der Anlass ist:
+   - Änderungen am Mono-Repo (Core, Firmware, ...) — auch wenn sie nebenbei den Adapter mit anfassen: **GitLab Issue, project 319.**
    - Reine `iobroker.hannah`-Adapter-Änderungen (nichts im Mono-Repo angefasst): **GitHub Issue im Adapter-Repo** (`NurPech/ioBroker.hannah`), nicht GitLab — sonst im Adapter-Repo nicht nachvollziehbar.
+   - Änderungen an `hannah-proto` (eigenständiges Repo auf gitlab.com, `gessinger/hannah-proto` — **nicht** Teil des Mono-Repos, seit dem Umzug ~2026-09-03 auch nicht mehr `dev.kernstock.net`): **eigenes Issue dort**, nicht in project 319 — selbst wenn der Anlass ein Core- oder Adapter-Feature ist, das den Proto-Wechsel nur nebenbei braucht.
 8. **Commit Messages bei funktionalen Änderungen referenzieren das Work Item** mit `Refs #ID` (im jeweils zuständigen Tracker aus Punkt 7).
 9. **MR/PR-Beschreibungen schließen das Work Item** mit `Closes #ID`.
 10. **Adapter-Changelog (`README.md` in `iobroker.hannah`) enthält keine Issue-/Ticket-Referenzen**, egal welcher Tracker — das sind öffentliche, nutzerseitige Release Notes (npm/ioBroker-Nutzer ohne Zugriff auf interne Tracker), keine internen Entwickler-Notizen.
