@@ -49,6 +49,26 @@ DEFAULT_NLU_SETTINGS: dict = {
     "query_words": ["ist", "sind", "wie", "was", "welche", "wieviel", "status"],
     "temperature_units": ["grad", "°c", "°", "celsius"],
     "percentage_units": ["prozent", "%"],
+    # Kategorie-spezifisches Vokabular für die Dispatch-Tabelle in NLU._category_finders
+    # (#272) — vorher teils/ganz hartkodierte Literale in nlu.py._find_climate_mode/
+    # _find_fan_speed. "hoch"/"runter" sind bewusst gleichzeitig hier (Rolladen: öffnen/
+    # schließen) UND in fan_speed_words (Lüfterstufe voll/niedrig) vertreten — die
+    # Kategorie-Dispatch-Tabelle entscheidet anhand der Zielkategorie, welche Bedeutung gilt.
+    "blind_open_words": ["oeffne", "oeffnen", "rauf", "hoch", "hochfahren"],
+    "blind_close_words": ["schliesse", "schliessen", "runter", "herunter", "runterfahren"],
+    "climate_mode_words": {
+        "cool":     ["kuehlen", "kuehl", "kuehlung", "kuehlmodus"],
+        "heat":     ["heizen", "heizbetrieb", "aufwaermen"],
+        "dry":      ["trocknen", "trocken", "entfeuchten", "dry"],
+        "fan_only": ["lueften", "lueftung", "ventilator", "fan"],
+        "auto":     ["auto"],
+    },
+    "fan_speed_words": {
+        "low":    ["leise", "langsam", "niedrig", "schwach"],
+        "medium": ["mittel", "mittelschnell"],
+        "high":   ["schnell", "stark", "hoch", "voll", "maximum", "maximal"],
+        "auto":   ["auto"],
+    },
 }
 
 # Wortlisten pro Automation-Key — entkoppelt die gesprochene Phrase vom internen Key

@@ -2,7 +2,7 @@ import datetime
 import re
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from .iobroker import Device
@@ -40,6 +40,14 @@ def _normalize(s: str) -> str:
 _FILLER = {
     "bitte", "mal", "doch", "denn", "einfach", "kannst", "du", "könntest",
     "mach", "die", "das", "den", "der", "hey", "hannah", "und",
+}
+
+# Anzeigenamen für die Kategorie-Rückfrage (#272), z.B. "Meinst du den Rolladen oder die
+# Klimaanlage?" — nur für die Kategorien nötig, die in _category_finders eine eigene
+# Wortliste haben.
+_CATEGORY_CLARIFICATION_LABELS: dict[str, str] = {
+    "blind":   "Rolladen",
+    "climate": "Klimaanlage",
 }
 
 # Farbnamen die gleichzeitig gebräuchliche deutsche Wörter/Verben sind.
@@ -84,6 +92,9 @@ class Intent:
     raw_text: str = ""
     confidence: float = 1.0
     candidates: list = field(default_factory=list)  # [(room_id, room_name), ...] bei Mehrdeutigkeit
+    category_candidates: list = field(default_factory=list)  # [(category, label, intent_name,
+        # value, unit, is_open_close), ...] bei Kategorie-Mehrdeutigkeit (#272), z.B. "Küche
+        # hoch" wenn die Küche sowohl Rolladen als auch Klimaanlage hat
     weekdays: list = field(default_factory=list)     # [0-6, ...] SetAlarm: erkannter Wochentag (max. 1)
     resolved_date: Optional[object] = None           # datetime.date; DeleteAlarm: konkretes Zieldatum
     satellite_id: Optional[str] = None       # StartCapture/StopCapture: Ziel-Satellit (nie ein Raum), z.B. "Flur01"
@@ -116,15 +127,44 @@ class NLU:
         # Öffnen/Schließen-Vokabular für Rolladen/Markisen (category 'blind') — mappt auf
         # SetLevel 100/0, analog zu TurnOn/TurnOff-Synonymen, aber als eigene Liste statt in
         # turn_on_words/turn_off_words, weil die Wörter nur im 'blind'-Kontext Sinn ergeben (#260).
-        # "hoch" bewusst ausgeschlossen — kollidiert mit fan_speed_words ("hoch" = Lüfter
-        # volle Stufe), das dort unconditional (kategoriefrei) geprüft wird und im
-        # Intent-Auswahlbaum vor SetLevel kommt.
+        # "hoch"/"runter" kollidieren wortgleich mit fan_speed_words ("hoch" = Lüfter volle
+        # Stufe) — seit #272 kein Problem mehr, weil die Kategorie-Dispatch-Tabelle unten nur
+        # die zur Zielkategorie passende Wortliste auswertet statt einer festen Reihenfolge.
         self._blind_open_words: set[str] = set(cfg.get("blind_open_words", [
-            "oeffne", "oeffnen", "rauf", "hochfahren",
+            "oeffne", "oeffnen", "rauf", "hoch", "hochfahren",
         ]))
         self._blind_close_words: set[str] = set(cfg.get("blind_close_words", [
             "schliesse", "schliessen", "runter", "herunter", "runterfahren",
         ]))
+        # Klimaanlagen-Betriebsmodus und Lüftergeschwindigkeit — je Kategorie-Wert eine
+        # Wortliste statt einzelner Sets, damit sie wie die übrigen NLU-Wortlisten über die
+        # Settings-DB editierbar sind (#272; vorher hartkodierte Literale in den Findern).
+        self._climate_mode_words: dict[str, set[str]] = {
+            mode: set(words) for mode, words in cfg.get("climate_mode_words", {
+                "cool":     ["kuehlen", "kuehl", "kuehlung", "kuehlmodus"],
+                "heat":     ["heizen", "heizbetrieb", "aufwaermen"],
+                "dry":      ["trocknen", "trocken", "entfeuchten", "dry"],
+                "fan_only": ["lueften", "lueftung", "ventilator", "fan"],
+                "auto":     ["auto"],
+            }).items()
+        }
+        self._fan_speed_words: dict[str, set[str]] = {
+            speed: set(words) for speed, words in cfg.get("fan_speed_words", {
+                "low":    ["leise", "langsam", "niedrig", "schwach"],
+                "medium": ["mittel", "mittelschnell"],
+                "high":   ["schnell", "stark", "hoch", "voll", "maximum", "maximal"],
+                "auto":   ["auto"],
+            }).items()
+        }
+        # Kategorie-bewusste Wortauflösung (#272): jede Kategorie deklariert ihre eigenen
+        # Finder. NLU.parse() wertet nur die Finder der Kategorie(n) aus, die im Zielbereich
+        # tatsächlich vorkommen (siehe _dispatch_category_words) statt einer festen
+        # Reihenfolge — dadurch dürfen sich Wörter wie "hoch" je Kategorie unterschiedlich
+        # bedeuten (Rolladen: öffnen; Klima: Lüfterstufe voll).
+        self._category_finders: dict[str, list[tuple[str, Callable[[set[str]], Optional[object]]]]] = {
+            "blind":   [("open_close", self._find_open_close)],
+            "climate": [("climate_mode", self._find_climate_mode), ("fan_speed", self._find_fan_speed)],
+        }
         self._query          = set(cfg.get("query_words", []))
         self._category_words: dict[str, str] = cfg.get("category_words", {
             "licht":    "light",
@@ -327,14 +367,15 @@ class NLU:
         category_filter     = self._find_category(tokens)
         query_state         = self._find_query_state(joined) if is_query else None
         norm_tokens         = {_normalize(t) for t in tokens}
-        climate_mode        = self._find_climate_mode(norm_tokens)
-        fan_speed           = self._find_fan_speed(norm_tokens)
-        # Rolladen/Markise: 'öffnen'/'schließen' nur werten wenn das Zielgerät (per Name oder
-        # per Kategorie-Sammelbefehl) tatsächlich category 'blind' ist — sonst würde z.B.
-        # "öffne die Tür" (Türen sind reine Sensoren, kein steuerbarer State) fälschlich
-        # einen SetLevel-Intent erzeugen (#260).
-        is_blind            = (device is not None and device.category == "blind") or category_filter == "blind"
-        open_close          = self._find_open_close(norm_tokens) if is_blind else None
+        # Kategorie-bewusste Wortauflösung (#272, Nachfolger des #260-is_blind-Gatings):
+        # nur die zur Zielkategorie passende Wortliste wird ausgewertet — verhindert z.B.
+        # dass "öffne die Tür" (Türen sind reine Sensoren) fälschlich einen SetLevel-Intent
+        # erzeugt, UND erlaubt Wörtern wie "hoch" je Kategorie unterschiedliche Bedeutung.
+        climate_mode, fan_speed, open_close, resolved_category, category_candidates = (
+            self._dispatch_category_words(norm_tokens, device, category_filter, room_key)
+        )
+        if resolved_category is not None and category_filter is None:
+            category_filter = resolved_category
         _timer_trigger = bool({"timer"} & norm_tokens) or any(t.startswith("erinner") for t in norm_tokens)
         timer_seconds       = self._find_timer_seconds(raw) if _timer_trigger else None
         timer_label         = self._find_timer_label(raw) if timer_seconds is not None else None
@@ -530,6 +571,7 @@ class NLU:
             and color is None
             and climate_mode is None
             and fan_speed is None
+            and not category_candidates
             and timer_seconds is None
             and alarm_time is None
             and not (is_query and not no_device_context and not _has_smalltalk_words)
@@ -639,6 +681,7 @@ class NLU:
             label=intent_label,
             raw_text=raw,
             candidates=(room_candidates or device_room_candidates) if _actionable else [],
+            category_candidates=category_candidates,
             weekdays=intent_weekdays,
             resolved_date=intent_resolved_date,
             satellite_id=satellite_id if intent_name in ("StartCapture", "StopCapture") else None,
@@ -839,7 +882,7 @@ class NLU:
 
     def _find_open_close(self, norm_tokens: set[str]) -> Optional[int]:
         """Erkennt Öffnen/Schließen-Vokabular, gibt die passende SetLevel-Prozentzahl zurück.
-        Aufrufer prüft bereits vorab, dass es um ein 'blind'-Gerät geht (#260)."""
+        Aufrufer (_dispatch_category_words) prüft bereits, dass es um ein 'blind'-Gerät geht."""
         if norm_tokens & self._blind_open_words:
             return 100
         if norm_tokens & self._blind_close_words:
@@ -848,17 +891,73 @@ class NLU:
 
     def _find_climate_mode(self, norm_tokens: set[str]) -> Optional[str]:
         """Erkennt Klimaanlagen-Betriebsmodus aus normalisierten Tokens."""
-        if norm_tokens & {"kuehlen", "kuehl", "kuehlung", "kuehlmodus"}:
-            return "cool"
-        if norm_tokens & {"heizen", "heizbetrieb", "aufwaermen"}:
-            return "heat"
-        if norm_tokens & {"trocknen", "trocken", "entfeuchten", "dry"}:
-            return "dry"
-        if norm_tokens & {"lueften", "lueftung", "ventilator", "fan"}:
-            return "fan_only"
-        if "auto" in norm_tokens:
-            return "auto"
+        for mode, words in self._climate_mode_words.items():
+            if norm_tokens & words:
+                return mode
         return None
+
+    def _category_result_intent(self, result_kind: str, value) -> tuple[str, object, Optional[str], bool]:
+        """Übersetzt einen Finder-Treffer in (intent_name, value, unit, is_open_close)."""
+        if result_kind == "climate_mode":
+            return "SetMode", value, None, False
+        if result_kind == "fan_speed":
+            return "SetFanSpeed", value, None, False
+        return "SetLevel", value, "%", True  # open_close
+
+    def _categories_in_scope(self, room_key: Optional[str]) -> set[str]:
+        """Welche Geräte-Kategorien im Zielbereich vorkommen — im genannten Raum, sonst
+        global über alle Räume (#272)."""
+        if room_key is not None:
+            return {d.category for d in self._devices.get(room_key, {}).values()}
+        return {d.category for devs in self._devices.values() for d in devs.values()}
+
+    def _dispatch_category_words(
+        self, norm_tokens: set[str], device: Optional["Device"],
+        category_filter: Optional[str], room_key: Optional[str],
+    ) -> tuple[Optional[str], Optional[str], Optional[int], Optional[str], list]:
+        """Kategorie-bewusste Wortauflösung (#272): Wörter wie "hoch" bedeuten je nach
+        Zielkategorie etwas anderes (Rolladen: öffnen; Klima: Lüfterstufe voll). Nur die
+        Finder der Kategorie(n), die tatsächlich im Zielbereich vorkommen, entscheiden.
+
+        Gibt (climate_mode, fan_speed, open_close, resolved_category, category_candidates)
+        zurück — von den ersten drei ist höchstens eines gesetzt. resolved_category wird vom
+        Aufrufer als category_filter übernommen, damit execute() bei Raum-/Globalbefehlen nur
+        Geräte der richtigen Kategorie trifft. category_candidates ist nur bei echter
+        Restambiguität befüllt (Gerät bereits bekannt oder category_filter im Satz genannt
+        legt die Kategorie eindeutig fest und schließt Ambiguität aus) — dann sind die
+        ersten drei Rückgabewerte None, und der Aufrufer muss beim Nutzer nachfragen.
+        """
+        matched: dict[str, tuple[str, object]] = {}
+        for category, finders in self._category_finders.items():
+            for result_kind, finder in finders:
+                value = finder(norm_tokens)
+                if value is not None:
+                    matched[category] = (result_kind, value)
+                    break
+
+        if not matched:
+            return None, None, None, None, []
+
+        target_category = device.category if device is not None else category_filter
+        if target_category is None:
+            scope = self._categories_in_scope(room_key) & matched.keys()
+            candidates = scope or set(matched.keys())
+            if len(candidates) > 1:
+                options = [
+                    (cat, _CATEGORY_CLARIFICATION_LABELS.get(cat, cat),
+                     *self._category_result_intent(*matched[cat]))
+                    for cat in candidates
+                ]
+                return None, None, None, None, options
+            target_category = next(iter(candidates))
+        elif target_category not in matched:
+            return None, None, None, None, []
+
+        result_kind, value = matched[target_category]
+        climate_mode = value if result_kind == "climate_mode" else None
+        fan_speed    = value if result_kind == "fan_speed" else None
+        open_close   = value if result_kind == "open_close" else None
+        return climate_mode, fan_speed, open_close, target_category, []
 
     def _find_alarm_time(self, text: str) -> Optional[str]:
         """Erkennt Uhrzeitangaben und gibt 'HH:MM' zurück.
@@ -952,14 +1051,9 @@ class NLU:
 
     def _find_fan_speed(self, norm_tokens: set[str]) -> Optional[str]:
         """Erkennt Lüftergeschwindigkeit aus normalisierten Tokens."""
-        if norm_tokens & {"leise", "langsam", "niedrig", "schwach"}:
-            return "low"
-        if norm_tokens & {"mittel", "mittelschnell"}:
-            return "medium"
-        if norm_tokens & {"schnell", "stark", "hoch", "voll", "maximum", "maximal"}:
-            return "high"
-        if "auto" in norm_tokens:
-            return "auto"
+        for speed, words in self._fan_speed_words.items():
+            if norm_tokens & words:
+                return speed
         return None
 
     def _find_color(self, text: str, require_context: bool = False) -> Optional[str]:
@@ -1056,6 +1150,16 @@ def build_clarification_question(candidates: list[tuple[str, str]]) -> str:
         return f"Welchen Raum meinst du — {names[0]} oder {names[1]}?"
     options = ", ".join(names[:-1]) + " oder " + names[-1]
     return f"Welchen Raum meinst du? {options}?"
+
+
+def build_category_clarification_question(candidates: list[tuple]) -> str:
+    """Analog zu build_clarification_question, aber für Kategorie-Mehrdeutigkeit (#272) —
+    candidates sind Intent.category_candidates-Tupel, nur (category, label) wird gebraucht."""
+    names = [label for _, label, *_ in candidates]
+    if len(names) == 2:
+        return f"Meinst du {names[0]} oder {names[1]}?"
+    options = ", ".join(names[:-1]) + " oder " + names[-1]
+    return f"Was genau meinst du? {options}?"
 
 
 def resolve_clarification_answer(

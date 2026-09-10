@@ -12,6 +12,10 @@ github.com/NurPech/hannah-proto-go/v3 v3.7.2 h1:pYt1lLj8sEQol/Q/3gakYYaOUgn3+QsQ
 github.com/NurPech/hannah-proto-go/v3 v3.7.2/go.mod h1:oRt8rFay886u67aZ6xaAPH9X1aYaScIsk+bTiDnHf2w=
 github.com/NurPech/hannah-proto-go/v3 v3.8.0 h1:ftx0yNq9TgmpM303FaxftCFCcO49/w0Hcr0nQ5pECyQ=
 github.com/NurPech/hannah-proto-go/v3 v3.8.0/go.mod h1:W6eoGmymAR1ce9syr4JGgGwr+w7+YqswPevAuK+JywU=
+github.com/NurPech/hannah-proto-go/v3 v3.9.0 h1:1Te6fEnyPjfgt9BgO9O3KZd4hK8EA7lQxD9tSHWU0n4=
+github.com/NurPech/hannah-proto-go/v3 v3.9.0/go.mod h1:W6eoGmymAR1ce9syr4JGgGwr+w7+YqswPevAuK+JywU=
+github.com/NurPech/hannah-proto-go/v3 v3.10.0 h1:iIfzb7+aNQcioWZ2TYJX/eRbhqFs64rFQ+hbn4gwUBI=
+github.com/NurPech/hannah-proto-go/v3 v3.10.0/go.mod h1:W6eoGmymAR1ce9syr4JGgGwr+w7+YqswPevAuK+JywU=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=

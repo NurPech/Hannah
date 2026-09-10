@@ -3,7 +3,7 @@ import datetime
 import pytest
 
 from hannah.iobroker import Device
-from hannah.nlu import NLU, resolve_clarification_answer, resolve_yes_no
+from hannah.nlu import NLU, build_category_clarification_question, resolve_clarification_answer, resolve_yes_no
 
 
 @pytest.fixture
@@ -343,17 +343,17 @@ class TestBlindOpenClose:
         assert intent.value == 0
 
     def test_rauf_runter_synonyms_work_too(self, nlu_rooms):
-        """'hoch' ist bewusst NICHT als Synonym enthalten — kollidiert mit
-        fan_speed_words ('hoch' = Lüfter volle Stufe, siehe TestFanSpeed-Bereich)."""
         assert nlu_rooms.parse("rolladenlinks rauf").value == 100
         assert nlu_rooms.parse("rolladenlinks runter").value == 0
 
-    def test_hoch_still_wins_as_fan_speed_not_open(self, nlu_rooms):
-        """Documents the accepted trade-off: 'hoch' stays claimed by fan_speed_words
-        even for a 'blind' device, since fan-speed detection is category-unaware
-        and runs earlier in the intent chain — use 'rauf'/'hochfahren' to open."""
+    def test_hoch_resolves_via_device_category(self, nlu_rooms):
+        """#272: 'hoch' ist jetzt zugleich Rolladen-öffnen- und Lüfterstufe-Wort (kehrt
+        den #260-Workaround um) — bei explizit genanntem Rolladen-Gerät legt dessen
+        Kategorie die Bedeutung eindeutig fest, keine Rückfrage nötig."""
         intent = nlu_rooms.parse("rolladenlinks hoch")
-        assert intent.name == "SetFanSpeed"
+        assert intent.name == "SetLevel"
+        assert intent.value == 100
+        assert intent.category_candidates == []
 
     def test_category_bulk_command_also_works(self, nlu_rooms):
         """Ohne konkreten Gerätenamen, nur über den Kategorie-Sammelbefehl."""
@@ -383,3 +383,91 @@ class TestBlindOpenClose:
         assert intent.name == "SetLevel"
         assert intent.value == 100
         assert intent.is_open_close is False
+
+
+class TestCategoryAwareDispatch:
+    """#272 — Wörter wie 'hoch'/'runter' sind je Kategorie unterschiedlich belegt
+    (Rolladen: öffnen/schließen; Klima: Lüfterstufe). Die Dispatch-Tabelle wertet nur
+    die zur Zielkategorie passende Wortliste aus, anhand von Gerät/category_filter
+    oder — ohne beides — anhand der im Zielbereich tatsächlich vorkommenden
+    Kategorien; bei echter Restambiguität (mehrere Kategorien im Zielbereich, kein
+    Gerätename/Kategoriewort) wird stattdessen eine Rückfrage nötig."""
+
+    @pytest.fixture
+    def nlu_blind_only(self):
+        rooms = {"kueche": "Küche"}
+        devices = {"kueche": {"rolladenlinks": _make_device("rolladenlinks", "kueche", category="blind")}}
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    @pytest.fixture
+    def nlu_climate_only(self):
+        rooms = {"buero": "Büro"}
+        devices = {"buero": {"klimaanlage": _make_device("klimaanlage", "buero", category="climate")}}
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    @pytest.fixture
+    def nlu_mixed(self):
+        """Küche hat sowohl Rolladen als auch Klimaanlage — der Beispielfall aus #272."""
+        rooms = {"kueche": "Küche"}
+        devices = {
+            "kueche": {
+                "rolladenlinks": _make_device("rolladenlinks", "kueche", category="blind"),
+                "klimaanlage": _make_device("klimaanlage", "kueche", category="climate"),
+            },
+        }
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    def test_scope_inference_resolves_unambiguously_for_blind_only_room(self, nlu_blind_only):
+        """Kein Gerätename, kein Kategoriewort — aber die Küche hat nur Rolladen,
+        also eindeutig auflösbar ohne Rückfrage."""
+        intent = nlu_blind_only.parse("mach die kueche hoch")
+        assert intent.name == "SetLevel"
+        assert intent.value == 100
+        assert intent.category_filter == "blind"
+        assert intent.category_candidates == []
+
+    def test_scope_inference_resolves_unambiguously_for_climate_only_room(self, nlu_climate_only):
+        intent = nlu_climate_only.parse("mach das buero hoch")
+        assert intent.name == "SetFanSpeed"
+        assert intent.value == "high"
+        assert intent.category_filter == "climate"
+        assert intent.category_candidates == []
+
+    def test_ambiguous_room_asks_for_clarification(self, nlu_mixed):
+        """Küche mit Rolladen UND Klimaanlage, 'hoch' ohne Gerätename/Kategoriewort
+        — echte Restambiguität aus der #272-Beschreibung."""
+        intent = nlu_mixed.parse("mach die kueche hoch")
+        assert intent.name != "SetLevel"
+        assert intent.name != "SetFanSpeed"
+        assert len(intent.category_candidates) == 2
+        categories = {c[0] for c in intent.category_candidates}
+        assert categories == {"blind", "climate"}
+
+    def test_explicit_device_bypasses_ambiguity(self, nlu_mixed):
+        """Gerätename legt die Kategorie fest, auch wenn der Raum sonst mehrdeutig wäre."""
+        intent = nlu_mixed.parse("rolladenlinks hoch")
+        assert intent.name == "SetLevel"
+        assert intent.value == 100
+        assert intent.category_candidates == []
+
+    def test_explicit_category_word_bypasses_ambiguity(self, nlu_mixed):
+        """'Klimaanlage' als Kategorie-Sammelbegriff legt die Kategorie fest."""
+        intent = nlu_mixed.parse("klimaanlage in der kueche hoch")
+        assert intent.name == "SetFanSpeed"
+        assert intent.value == "high"
+        assert intent.category_candidates == []
+
+    def test_climate_mode_words_still_dict_driven(self, nlu_climate_only):
+        intent = nlu_climate_only.parse("kuehlen im buero")
+        assert intent.name == "SetMode"
+        assert intent.value == "cool"
+
+    def test_category_clarification_question_and_resolution(self, nlu_mixed):
+        intent = nlu_mixed.parse("mach die kueche hoch")
+        question = build_category_clarification_question(intent.category_candidates)
+        assert "Rolladen" in question
+        assert "Klimaanlage" in question
+
+        room_candidates = [(cat, label) for cat, label, *_ in intent.category_candidates]
+        resolved = resolve_clarification_answer("die Klimaanlage", room_candidates)
+        assert resolved == ("climate", "Klimaanlage")

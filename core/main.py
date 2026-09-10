@@ -35,7 +35,7 @@ from hannah.ble_tags import BleTagManager
 from hannah.grpc_server import GrpcServer, HannahServicer, make_car_parked_event, make_firmware_event, make_resident_event, make_system_notification_event, pb
 from hannah.iobroker import IoBrokerClient
 from hannah.mqtt_handler import MQTTHandler
-from hannah.nlu import NLU, Intent, build_clarification_question, resolve_clarification_answer, resolve_yes_no
+from hannah.nlu import NLU, Intent, build_category_clarification_question, build_clarification_question, resolve_clarification_answer, resolve_yes_no
 from hannah.residents_manager import ResidentsClient
 from hannah.stt import STT
 from hannah.tts import TTS
@@ -578,12 +578,29 @@ def main():
             if resolved:
                 conv_ctx.clear_clarification(device)
                 orig: Intent = clarification["intent"]
-                orig.room    = resolved[1]
-                orig.room_id = resolved[0]
-                count = iobroker.execute(orig, satellite_device=device)
-                conv_ctx.update_from_intent(device, orig)
-                if count == 0:
-                    _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
+                if kind == "category":
+                    # Kategorie-Rückfrage (#272): welche Bedeutung/welches Gerät war gemeint
+                    # (z.B. "Rolladen" vs. "Klimaanlage" bei "Küche hoch") — payload trägt den
+                    # fertigen Intent pro Kategorie, Raum/Gerät des ursprünglichen Intents bleiben.
+                    name, value, unit, is_open_close = clarification["payload"]["options"][resolved[0]]
+                    orig.name, orig.value, orig.unit = name, value, unit
+                    orig.category_filter = resolved[0]
+                    orig.is_open_close = is_open_close
+                else:
+                    orig.room    = resolved[1]
+                    orig.room_id = resolved[0]
+                if orig.name == "Query":
+                    # Rückfrage kam von einer Statusabfrage, nicht einem Steuerbefehl —
+                    # muss nach der Raum-Auflösung weiter answer_query() durchlaufen statt
+                    # execute() (#264, sonst "Keine Geräte gefunden." statt einer Antwort).
+                    answer = iobroker.answer_query(orig) or "Keine Antwort verfügbar."
+                    conv_ctx.update_from_intent(device, orig)
+                    _feedback(device, True, answer)
+                else:
+                    count = iobroker.execute(orig, satellite_device=device)
+                    conv_ctx.update_from_intent(device, orig)
+                    if count == 0:
+                        _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
                 intent = orig
                 _log_pipeline_activity()
                 return
@@ -611,6 +628,17 @@ def main():
             f"[{device}] Intent: {intent.name} | "
             f"Raum: {intent.room} | Gerät: {intent.device} | Wert: {intent.value}"
         )
+
+        # Mehrdeutige Kategorie (z.B. "Küche hoch" mit Rolladen UND Klimaanlage) → Rückfrage (#272)
+        if intent.category_candidates:
+            question = build_category_clarification_question(intent.category_candidates)
+            category_candidates = [(cat, label) for cat, label, *_ in intent.category_candidates]
+            options = {cat: (name, value, unit, is_open_close)
+                       for cat, _, name, value, unit, is_open_close in intent.category_candidates}
+            conv_ctx.set_clarification(device, intent, category_candidates, kind="category", payload={"options": options})
+            _feedback(device, True, question)
+            _log_pipeline_activity()
+            return
 
         # Mehrdeutiger Raum → Rückfrage stellen
         if intent.candidates:
@@ -895,8 +923,22 @@ def main():
             if resolved:
                 conv_ctx.clear_clarification(_source)
                 orig: Intent = clarification["intent"]
-                orig.room    = resolved[1]
-                orig.room_id = resolved[0]
+                if kind == "category":
+                    # Kategorie-Rückfrage (#272), siehe pipeline() für Details.
+                    name, value, unit, is_open_close = clarification["payload"]["options"][resolved[0]]
+                    orig.name, orig.value, orig.unit = name, value, unit
+                    orig.category_filter = resolved[0]
+                    orig.is_open_close = is_open_close
+                else:
+                    orig.room    = resolved[1]
+                    orig.room_id = resolved[0]
+                if orig.name == "Query":
+                    # Rückfrage kam von einer Statusabfrage, nicht einem Steuerbefehl —
+                    # muss nach der Raum-Auflösung weiter answer_query() durchlaufen statt
+                    # execute() (#264, sonst "Keine Geräte gefunden." statt einer Antwort).
+                    answer = iobroker.answer_query(orig) or "Keine Antwort verfügbar."
+                    conv_ctx.update_from_intent(_source, orig)
+                    return _logged(answer, "Query", orig)
                 count = iobroker.execute(orig)
                 conv_ctx.update_from_intent(_source, orig)
                 return _logged(("OK." if count > 0 else "Keine Geräte gefunden."), "Routine", orig)
@@ -921,6 +963,14 @@ def main():
             f"[textcmd] Text: '{text}' → Intent: {intent.name} | "
             f"Raum: {intent.room} | Gerät: {intent.device} | Wert: {intent.value} | SpeakerUser: {speaker_user_id}"
         )
+
+        if intent.category_candidates:
+            question = build_category_clarification_question(intent.category_candidates)
+            category_candidates = [(cat, label) for cat, label, *_ in intent.category_candidates]
+            options = {cat: (name, value, unit, is_open_close)
+                       for cat, _, name, value, unit, is_open_close in intent.category_candidates}
+            conv_ctx.set_clarification(_source, intent, category_candidates, kind="category", payload={"options": options})
+            return _logged(question, "Clarification", intent)
 
         if intent.candidates:
             question = build_clarification_question(intent.candidates)

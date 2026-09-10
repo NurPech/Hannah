@@ -3,6 +3,16 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+## 0.79.1 (2026-09-10)
+### Hannah Core
+
+* Fixed: a status query (e.g. "ist die Tür im Bad offen?") that needed a room clarification first ("Welchen Raum meinst du?") answered "Keine Geräte gefunden." instead of the actual status, once the room was named — the resolved intent was always routed to the device-control path (`execute()`), never to the query-answering path (`answer_query()`), regardless of whether it originally was a query. Affects any query category that can trigger a room clarification, not just doors (Refs #264)
+* Added: voice-command words that mean different things depending on the target device (e.g. "hoch"/"runter" — open/close for Rolladen/Markise, fan speed for climate devices) are now resolved per-category instead of one fixed meaning always winning regardless of context — "Rolladen hoch" now opens the Rolladen again, previously blocked by a workaround for exactly this collision (Refs #260). When a command genuinely could mean either (no device or category named, and the room has both kinds of device), Hannah now asks which one is meant instead of guessing or applying to both (Refs #272)
+
+### Hannah Proxy
+
+* Changed: updated dependencies
+
 ## 0.79.0 (2026-09-09)
 ### Hannah Core
 
