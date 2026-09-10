@@ -27,11 +27,18 @@ DEFAULT_IOBROKER_STATE_NAMES: dict = {
 _UMLAUT_MAP = {"ae": "ä", "oe": "ö", "ue": "ü", "Ae": "Ä", "Oe": "Ö", "Ue": "Ü"}
 
 _CATEGORY_LABELS: dict[str, str] = {
-    "light":   "Lichter",
-    "socket":  "Steckdosen",
-    "climate": "Klimageräte",
-    "blind":   "Rollläden",
-    "sensor":  "Sensoren",
+    "light":               "Lichter",
+    "socket":              "Steckdosen",
+    "climate":             "Klimageräte",
+    "blind":               "Rollläden",
+    "sensor":              "Sensoren",
+    "window":              "Fenster",
+    "door":                "Türen",
+    "thermostat":          "Heizungen",
+    "temperature_sensor":  "Temperatursensoren",
+    "humidity_sensor":     "Feuchtigkeitssensoren",
+    "illuminance_sensor":  "Helligkeitssensoren",
+    "air_quality_sensor":  "Luftqualitätssensoren",
 }
 
 def _category_label(cat: Optional[str]) -> str:
@@ -250,7 +257,13 @@ class IoBrokerClient:
 
             if room_key not in self.devices:
                 self.devices[room_key] = {}
-            self.devices[room_key][device.key] = device
+            # Nach device.id (eindeutig) statt device.key (abgeleiteter Anzeigename)
+            # geschlüsselt (#275) — zwei Geräte im selben Raum können denselben Anzeigenamen
+            # haben (z.B. Fenster und Licht, beide von iobroker.hannah auf "Bad" aufgelöst,
+            # wenn beide ohne expliziten common.name auf den letzten ID-Pfadteil
+            # zurückfallen) und würden sich sonst stillschweigend gegenseitig überschreiben.
+            # device.key bleibt der NLU-Suchbegriff, nur nicht mehr der Dict-Key hier.
+            self.devices[room_key][device.id] = device
 
             total_states += len(device.states)
             filled_states += len(device.current)
@@ -289,8 +302,9 @@ class IoBrokerClient:
             # Gerät war raumübergreifend mehrdeutig (gleicher Gerätename in mehreren
             # Räumen) und wurde erst per Raum-Rückfrage aufgelöst — device_id war zum
             # Parse-Zeitpunkt noch nicht bekannt, jetzt im bestätigten Raum per Key
-            # nachschlagen (#268).
-            dev = self.devices[intent.room_id].get(intent.device_key)
+            # nachschlagen (#268). Scan statt Dict-Lookup, weil self.devices[room] seit
+            # #275 nach device_id geschlüsselt ist, nicht mehr nach dem NLU-Suchbegriff.
+            dev = next((d for d in self.devices[intent.room_id].values() if d.key == intent.device_key), None)
             if dev:
                 targets = [dev]
                 intent.device_id = dev.id
@@ -378,10 +392,18 @@ class IoBrokerClient:
             targets = [self._devices_by_id[intent.device_id]]
             room_label = intent.room
         elif intent.room:
-            targets = list(self.devices.get(intent.room_id or "", {}).values())
+            room_devices = list(self.devices.get(intent.room_id or "", {}).values())
+            targets = room_devices
             if intent.category_filter:
                 targets = [d for d in targets if d.category == intent.category_filter]
             room_label = intent.room
+            if not room_devices:
+                return f"Ich kenne keine Geräte im {intent.room}."
+            if not targets:
+                # Raum ist bekannt und hat Geräte — nur keins der gefragten Kategorie (#276).
+                # Andere Meldung als der "Raum komplett unbekannt"-Fall oben, sonst klingt es
+                # so als würde Hannah den Raum gar nicht kennen.
+                return f"Ich kenne keine {_category_label(intent.category_filter)} im {intent.room}."
         else:
             # Globale Abfrage: alle Räume
             all_devs = [d for devs in self.devices.values() for d in devs.values()]

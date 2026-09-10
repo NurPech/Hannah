@@ -3,6 +3,13 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+## 0.79.2 (2026-09-10)
+### Hannah Core
+
+* Fixed: a status query filtered by device category (e.g. "ist die Tür im Flur Keller offen?") answered "Ich kenne keine Geräte im Flur Keller." even when the room has other devices, just none of the asked-for category — sounded like Hannah didn't know the room at all. Now says "Ich kenne keine Türen im Flur Keller." instead, reserving the generic message for rooms that are actually completely empty (Refs #276)
+* Fixed: after answering a room clarification ("Welchen Raum meinst du?"), a device named in the original question (e.g. "ist die Tür im Bad offen?") could get lost — the device search only ran once, against the room NLU had tentatively guessed before the clarification, and was never repeated once the actual room was confirmed. Now retries the device search in the confirmed room, so an explicitly named device is used instead of falling back to a category guess or listing everything in the room (Refs #274)
+* Fixed: two different devices in the same room that (for lack of an explicit name) both resolve to the same display name — e.g. a window and a light both falling back to their room's own name ("Bad") — silently overwrote each other in Hannah's internal device list, so one of them became invisible to every voice command and status query for that room. Devices are now tracked by their unique ID internally instead of by display name, so a name collision no longer drops a device (Refs #275)
+
 ## 0.79.1 (2026-09-10)
 ### Hannah Core
 

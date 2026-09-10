@@ -692,6 +692,26 @@ class NLU:
         log.debug(f"NLU: {intent}")
         return intent
 
+    def resolve_device_in_room(
+        self, raw_text: str, room_key: str
+    ) -> tuple[Optional[str], Optional["Device"]]:
+        """Sucht ein Gerät im jetzt bekannten Raum erneut, nachdem eine Raum-Rückfrage
+        aufgelöst wurde (#274). Beim ersten parse()-Durchlauf war der Raum noch
+        mehrdeutig — _find_room() liefert dabei trotzdem einen per Tie-Break "geratenen"
+        room_key zurück (für Logging/Fallback), mit dem _find_device() dann nur in diesem
+        einen, möglicherweise falschen Raum gesucht hat. Reproduziert dieselbe
+        Text-Vorverarbeitung wie parse(), diesmal mit dem bestätigten Raum.
+
+        Gibt (device_key, device) zurück — (None, None) wenn im bestätigten Raum kein
+        zum Text passendes Gerät existiert (z.B. weil gar keins genannt wurde).
+        """
+        text = self._split_compounds(raw_text)
+        normalized = _STRIP_CHARS.sub(" ", text.lower())
+        tokens = [t for t in normalized.split() if t not in _FILLER]
+        joined = " ".join(tokens)
+        device_key, device, _ = self._find_device(joined, room_key)
+        return device_key, device
+
     # ------------------------------------------------------------------
 
     def _find_satellite(self, text: str) -> tuple[Optional[str], Optional[str]]:
@@ -783,16 +803,20 @@ class NLU:
         norm_text = _normalize(text)
 
         def _best_match(space: dict, norm_room: str) -> tuple[Optional[str], Optional["Device"]]:
+            # Matcht gegen dev.key (der NLU-Suchbegriff), nicht gegen den Dict-Key von
+            # `space` — der ist seit #275 der eindeutige device_id, damit zwei Geräte im
+            # selben Raum mit zufällig gleichem Anzeigenamen (z.B. beide "Bad") sich nicht
+            # gegenseitig überschreiben. dev.key bleibt der gesprochene Suchbegriff.
             best_key = best_dev = None
             best_len = 0
-            for key, dev in space.items():
-                norm_key = _normalize(key)
+            for dev in space.values():
+                norm_key = _normalize(dev.key)
                 # Gerät überspringen wenn sein Key vollständig im Raum-Key enthalten ist
                 # ("schlafzimmer" als Gerät soll nicht matchen wenn Raum "leonie schlafzimmer" ist)
                 if norm_room and norm_key in norm_room:
                     continue
                 if re.search(r'(?<!\w)' + re.escape(norm_key) + r'(?!\w)', norm_text) and len(norm_key) > best_len:
-                    best_key, best_dev, best_len = key, dev, len(norm_key)
+                    best_key, best_dev, best_len = dev.key, dev, len(norm_key)
             return best_key, best_dev
 
         if room_key:

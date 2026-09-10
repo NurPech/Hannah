@@ -190,6 +190,88 @@ class TestSocketPowerQuery:
         assert "42.0 W" in result or "42 W" in result
 
 
+class TestAnswerQueryEmptyMessages:
+    """#276 — 'Ich kenne keine Geräte im X.' wurde bisher auch dann gezeigt, wenn der
+    Raum Geräte hat, nur keins zur gefragten Kategorie passt (z.B. 'ist die Tür im
+    Flur Keller offen?' in einem Raum ohne Tür-Gerät, aber mit Licht/Sensor) — klang
+    so, als kenne Hannah den Raum gar nicht. Muss zwischen 'Raum wirklich leer' und
+    'Raum bekannt, nur Kategorie ohne Treffer' unterscheiden."""
+
+    @pytest.fixture
+    def client(self):
+        c = IoBrokerClient({"host": "localhost", "port": 8093})
+        c.rooms = {"flur_keller": "Flur Keller"}
+        c.devices = {
+            "flur_keller": {
+                "flur": Device(
+                    id="javascript.0.virtualDevice.Licht.UG.Flur", name="Flur", key="flur",
+                    room="flur_keller", room_display_name="Flur Keller", floor="UG",
+                    category="light", current={"on": False},
+                ),
+            },
+        }
+        return c
+
+    def test_room_with_devices_but_no_category_match(self, client):
+        intent = Intent(name="Query", room="Flur Keller", room_id="flur_keller", category_filter="door")
+        result = client.answer_query(intent)
+        assert result == "Ich kenne keine Türen im Flur Keller."
+
+    def test_room_truly_unknown_still_uses_generic_message(self, client):
+        intent = Intent(name="Query", room="Nirgendwo", room_id="nirgendwo", category_filter="door")
+        result = client.answer_query(intent)
+        assert result == "Ich kenne keine Geräte im Nirgendwo."
+
+    def test_room_with_matching_category_unaffected(self, client):
+        """Regression-Guard: die neue Unterscheidung darf den Erfolgsfall nicht anfassen."""
+        intent = Intent(name="Query", room="Flur Keller", room_id="flur_keller", category_filter="light")
+        result = client.answer_query(intent)
+        assert result is not None
+        assert "kenne keine" not in result
+
+
+class TestHandleDeviceSnapshotNameCollision:
+    """#275 — zwei verschiedene Geräte im selben Raum, die (mangels expliziten Namens)
+    auf denselben abgeleiteten Anzeigenamen fallen, dürfen sich in Hannahs internem
+    Geräte-Dict nicht gegenseitig überschreiben. Fund: Fenster.OG.Bad + Licht.OG.Bad
+    lieferten beide 'Bad' als device.device (iobroker.hannah fällt ohne common.name auf
+    den letzten ID-Pfadteil zurück), was vorher zum stillen Verschwinden eines der
+    beiden Geräte in self.devices[room_key] führte."""
+
+    def _device_msg(self, category_path: str, device_type: str, state: str = "open") -> AgentDevice:
+        return AgentDevice(
+            state_id=f"javascript.0.virtualDevice.{category_path}.OG.Bad.{state}",
+            room="bad_oben",
+            device="Bad",
+            device_type=device_type,
+            value=AgentStateValue(value="false", ack=True),
+            room_names={"de": "Bad oben"},
+        )
+
+    def test_both_devices_survive_in_the_room(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("Fenster", "window"),
+            self._device_msg("Licht", "light", state="on"),
+        ])
+
+        room_devices = list(client.devices["bad_oben"].values())
+        assert len(room_devices) == 2
+        assert {d.category for d in room_devices} == {"window", "light"}
+
+    def test_both_devices_individually_reachable_by_id(self):
+        client = IoBrokerClient({"host": "localhost", "port": 8093})
+        client.handle_device_snapshot([
+            self._device_msg("Fenster", "window"),
+            self._device_msg("Licht", "light", state="on"),
+        ])
+
+        window = client._devices_by_id["javascript.0.virtualDevice.Fenster.OG.Bad"]
+        light = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Bad"]
+        assert window.category == "window"
+        assert light.category == "light"
+
+
 class TestHandleDeviceSnapshotCategoryMerge:
     """#133 — ein Geschwister-State ohne erkennbare Kategorie (z.B. ein power-Meter-State
     ohne passende Role/Funktion, resolveType() liefert '') darf die Kategorie eines

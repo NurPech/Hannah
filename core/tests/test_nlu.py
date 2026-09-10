@@ -278,6 +278,41 @@ class TestFindDeviceRoomScoped:
         assert intent.name == "StopIntent"
 
 
+class TestResolveDeviceInRoom:
+    """#274 — nach einer Raum-Rückfrage muss die Geräte-Suche im jetzt bekannten Raum
+    wiederholt werden können. Beim ersten parse()-Durchlauf lief sie nur im per
+    Tie-Break geratenen (ggf. falschen) Raum und fand dort ggf. nichts."""
+
+    @pytest.fixture
+    def nlu_rooms(self):
+        rooms = {"bad_oben": "Bad oben", "og_zimmer_sued": "OG Zimmer Süd"}
+        devices = {
+            "bad_oben": {"tuer": _make_device("tuer", "bad_oben", category="door")},
+            "og_zimmer_sued": {"licht": _make_device("licht", "og_zimmer_sued", category="light")},
+        }
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    def test_finds_device_in_confirmed_room(self, nlu_rooms):
+        """Reproduziert #274: erster parse()-Durchlauf riet 'OG Zimmer Süd' (keine Tür
+        dort), Nutzer bestätigt danach 'Bad oben' — Suche muss dort erneut laufen."""
+        device_key, dev = nlu_rooms.resolve_device_in_room("Ist die Tür vom Bad OG offen?", "bad_oben")
+        assert device_key == "tuer"
+        assert dev.room == "bad_oben"
+
+    def test_no_device_mentioned_returns_none(self, nlu_rooms):
+        """Kein Gerätename im Text → weiterhin (None, None), kein falsches Match."""
+        device_key, dev = nlu_rooms.resolve_device_in_room("wie ist es im Bad oben", "bad_oben")
+        assert device_key is None
+        assert dev is None
+
+    def test_device_not_in_confirmed_room_returns_none(self, nlu_rooms):
+        """Gerätename passt zu keinem Gerät im bestätigten Raum → kein Cross-Room-Fallback,
+        analog zu _find_device()s bestehendem Verhalten bei explizit genanntem Raum (#263)."""
+        device_key, dev = nlu_rooms.resolve_device_in_room("Ist die Tür offen?", "og_zimmer_sued")
+        assert device_key is None
+        assert dev is None
+
+
 class TestFindDeviceCrossRoomAmbiguity:
     """#268 — gleicher Gerätename in mehreren Räumen ohne Raumangabe im Satz muss
     als Mehrdeutigkeit erkannt werden statt per Dict-Reihenfolge zufällig ein

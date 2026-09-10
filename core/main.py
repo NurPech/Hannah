@@ -589,6 +589,16 @@ def main():
                 else:
                     orig.room    = resolved[1]
                     orig.room_id = resolved[0]
+                    if orig.device_id is None:
+                        # Geräte-Suche im jetzt bekannten Raum wiederholen (#274) — beim
+                        # ersten parse()-Durchlauf war der Raum noch mehrdeutig, die
+                        # Geräte-Suche lief deshalb nur im (evtl. falsch) geratenen Raum
+                        # und hatte dort ggf. nichts gefunden.
+                        device_key, dev = nlu.resolve_device_in_room(orig.raw_text, orig.room_id)
+                        if dev is not None:
+                            orig.device     = dev.name
+                            orig.device_id  = dev.id
+                            orig.device_key = device_key
                 if orig.name == "Query":
                     # Rückfrage kam von einer Statusabfrage, nicht einem Steuerbefehl —
                     # muss nach der Raum-Auflösung weiter answer_query() durchlaufen statt
@@ -932,6 +942,14 @@ def main():
                 else:
                     orig.room    = resolved[1]
                     orig.room_id = resolved[0]
+                    if orig.device_id is None:
+                        # Geräte-Suche im jetzt bekannten Raum wiederholen (#274), siehe
+                        # pipeline() für Details.
+                        device_key, dev = nlu.resolve_device_in_room(orig.raw_text, orig.room_id)
+                        if dev is not None:
+                            orig.device     = dev.name
+                            orig.device_id  = dev.id
+                            orig.device_key = device_key
                 if orig.name == "Query":
                     # Rückfrage kam von einer Statusabfrage, nicht einem Steuerbefehl —
                     # muss nach der Raum-Auflösung weiter answer_query() durchlaufen statt
