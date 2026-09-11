@@ -4,6 +4,17 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.79.6 (2026-09-11)
+### Satellite Firmware
+
+* Added: crashes (e.g. a Panic restart) now write registers and a backtrace to a dedicated flash partition, downloadable via GET /debug/coredump and decodable offline with espcoredump.py — until now a Panic restart left no diagnostic trail at all (Refs #280)
+
+### Hannah Core
+
+* Added: Core now logs when a satellite reports a crash dump available for pickup, deduplicated against retained-MQTT replay the same way the #278/#279 restart-report logging is (Refs #280)
+* Fixed: a satellite firmware update could get pushed out immediately after Core restarts even while someone is home, instead of waiting for the next actual departure — a linked residents account with a corrupted (double-JSON-encoded) payload silently dropped that person out of presence tracking entirely, regardless of their real presence. The affected account now self-heals on read (Refs #281)
+
 ## 0.79.5 (2026-09-11)
 ### Hannah Core
 

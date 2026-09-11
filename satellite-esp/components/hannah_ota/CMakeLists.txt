@@ -16,4 +16,5 @@ idf_component_register(
         nvs_flash
         mbedtls
         spiffs
+        espcoredump
 )

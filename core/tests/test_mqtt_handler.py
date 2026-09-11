@@ -97,3 +97,54 @@ class TestFirmwareReport:
         ))
 
         assert results == []
+
+
+class TestCoredumpPendingReport:
+    """#280 — Satellit meldet per retained hannah/satellite/{device}/coredump_pending,
+    ob nach einem Crash ein per GET /debug/coredump abrufbarer Dump vorliegt."""
+
+    def test_dispatches_pending_true(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_coredump_pending_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, _msg(
+            "hannah/satellite/wz-sat/coredump_pending", {"pending": True},
+        ))
+
+        assert results == [("wz-sat", True)]
+
+    def test_dispatches_pending_false(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_coredump_pending_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, _msg(
+            "hannah/satellite/wz-sat/coredump_pending", {"pending": False},
+        ))
+
+        assert results == [("wz-sat", False)]
+
+    def test_missing_pending_field_defaults_to_false(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_coredump_pending_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, _msg("hannah/satellite/wz-sat/coredump_pending", {}))
+
+        assert results == [("wz-sat", False)]
+
+    def test_malformed_payload_does_not_raise(self):
+        handler = MQTTHandler({}, {})
+        handler.set_coredump_pending_handler(lambda *a: None)
+
+        handler._on_message(None, None, SimpleNamespace(
+            topic="hannah/satellite/wz-sat/coredump_pending", payload=b"not json",
+        ))
+
+    def test_no_handler_registered_does_not_raise(self):
+        handler = MQTTHandler({}, {})
+
+        handler._on_message(None, None, _msg(
+            "hannah/satellite/wz-sat/coredump_pending", {"pending": True},
+        ))

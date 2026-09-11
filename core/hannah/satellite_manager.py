@@ -313,6 +313,23 @@ class SatelliteManager:
         sat.update(last_reported_restart_count=restart_count)
         return True
 
+    def record_coredump_pending(self, device_id: str, pending: bool) -> bool:
+        """Persistiert das vom Satelliten gemeldete Coredump-Pending-Flag (#280),
+        dedupliziert gegen Satellite.last_reported_coredump_pending nach demselben
+        Muster wie record_restart_report()/#279 — ohne diese Prüfung würde jeder
+        Core-(Re-)Connect eine Phantom-Meldung pro Satellit erzeugen.
+
+        Gibt zurück, ob dies ein tatsächlich neuer pending=true-Übergang ist —
+        nur dann soll der Aufrufer loggen. Rücksetzen auf false wird still
+        persistiert, ohne eigenes Log."""
+        db = self._db()
+        sat = Satellite.get(db, device_id=device_id)
+        if not sat:
+            sat = Satellite.create(db, device_id=device_id, last_seen=_now_sql())
+        was_pending = bool(sat.last_reported_coredump_pending)
+        sat.update(last_reported_coredump_pending=int(pending))
+        return pending and not was_pending
+
     def get_restart_reports(self, device_id: str) -> list[dict]:
         """Gibt die Neustart-Historie eines Satelliten zurück, neueste zuerst (#165)."""
         from hannah.models.satellite_restart import SatelliteRestart

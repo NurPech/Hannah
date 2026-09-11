@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS "satellites" (
 	"smalltalk_followup_listen"	INTEGER NOT NULL DEFAULT 0,
 	"last_restart_at"	TEXT,
 	"last_reported_restart_count"	INTEGER,
+	"last_reported_coredump_pending"	INTEGER,
 	PRIMARY KEY("device_id"),
 	FOREIGN KEY("room_id") REFERENCES "rooms"("room_id") ON DELETE SET NULL,
     FOREIGN KEY("owner_user_id") REFERENCES "users"("id") ON DELETE SET NULL
@@ -251,6 +252,10 @@ def init_db():
 
     if "last_reported_restart_count" not in _col_names(db, "satellites"):
         db.execute('ALTER TABLE "satellites" ADD COLUMN "last_reported_restart_count" INTEGER')
+        db.commit()
+
+    if "last_reported_coredump_pending" not in _col_names(db, "satellites"):
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "last_reported_coredump_pending" INTEGER')
         db.commit()
 
     if "smalltalk_followup_listen" not in _col_names(db, "satellites"):

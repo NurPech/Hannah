@@ -14,4 +14,6 @@ idf_component_register(
         freertos
         espressif__cjson
         lwip
+        espcoredump
+        spi_flash
 )

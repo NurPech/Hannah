@@ -381,6 +381,51 @@ class TestRestartReports:
         assert len(manager.get_restart_reports("new-esp")) == 1
 
 
+class TestCoredumpPending:
+    """#280 — Coredump-Pending-Flag pro Satellit, dedupliziert gegen den zuletzt
+    gemeldeten Wert (gleiches Retained-MQTT-Replay-Schutzmuster wie #278/#279)."""
+
+    def test_first_pending_report_is_new(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        is_new = manager.record_coredump_pending("wz-esp", True)
+
+        assert is_new is True
+        assert manager.get_satellite("wz-esp").last_reported_coredump_pending == 1
+
+    def test_repeated_pending_true_is_not_duplicated(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.record_coredump_pending("wz-esp", True)
+
+        is_new = manager.record_coredump_pending("wz-esp", True)
+
+        assert is_new is False
+
+    def test_clear_to_false_is_persisted_but_not_new(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.record_coredump_pending("wz-esp", True)
+
+        is_new = manager.record_coredump_pending("wz-esp", False)
+
+        assert is_new is False
+        assert manager.get_satellite("wz-esp").last_reported_coredump_pending == 0
+
+    def test_pending_after_clear_is_new_again(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.record_coredump_pending("wz-esp", True)
+        manager.record_coredump_pending("wz-esp", False)
+
+        is_new = manager.record_coredump_pending("wz-esp", True)
+
+        assert is_new is True
+
+    def test_unknown_device_gets_created(self, manager):
+        manager.record_coredump_pending("new-esp", True)
+
+        assert manager.get_satellite("new-esp") is not None
+        assert manager.get_satellite("new-esp").last_reported_coredump_pending == 1
+
+
 class TestPermissions:
     """#111 — DeleteSatellite/SetSatelliteOwner: nur Trustlevel 10. SetSatelliteRoom/
     SetSatelliteDisplayName: ab Trustlevel 5, aber nur für "eigene" Satelliten

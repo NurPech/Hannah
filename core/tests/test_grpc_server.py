@@ -1150,10 +1150,13 @@ def test_link_account_with_json_provider_payload_round_trips_as_dict(tmp_path):
 
     assert user_manager._resident_link(fresh) == ("leonie", "roomie")
 
-def test_resident_link_ignores_malformed_string_provider_payload(tmp_path):
-    """Defensive: a legacy/corrupted provider_payload (e.g. from the double-encoding bug
-    above, before it was fixed) decodes to a plain string instead of a dict.
-    _resident_link() must treat that as "no usable roomie_id", not crash (#206 follow-up)."""
+def test_resident_link_self_heals_malformed_string_provider_payload(tmp_path):
+    """A legacy/corrupted provider_payload (from the double-encoding bug above, before it
+    was fixed) decodes to a plain string instead of a dict. Root-caused for #281: a roomie
+    stuck in this state fell out of get_roomie_ids() entirely, so the OTA-presence-gate
+    reported "nobody home" regardless of any actual presence data. _resident_link() now
+    parses the string a second time and self-heals — never crashes even if that second
+    parse also fails (#206 follow-up, #281)."""
     user_manager, get_db = _make_user_manager_with_leonie(tmp_path)
     user = user_manager.get_user_by_username("leonie")
     # Simulate a pre-existing double-encoded row: the raw text stored via the old buggy
@@ -1161,7 +1164,7 @@ def test_resident_link_ignores_malformed_string_provider_payload(tmp_path):
     user.link_account("residents", "leonie", provider_payload='{"resident_type": "roomie", "roomie_id": "leonie"}')
 
     fresh = User.get(get_db(), id=user.id)
-    assert user_manager._resident_link(fresh) is None
+    assert user_manager._resident_link(fresh) == ("leonie", "roomie")
 
 def test_user_to_pb_with_linked_account(tmp_path):
     """Regression: _user_to_pb crashed with AttributeError on acc.service (the model

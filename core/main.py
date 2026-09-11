@@ -2154,6 +2154,10 @@ def main():
         grpc_servicer.publish_event(make_firmware_event(device, version))
         grpc_servicer.agent_firmware_event(device, version)
 
+    def _on_coredump_pending(device: str, pending: bool):
+        if satellite_manager.record_coredump_pending(device, pending):
+            log.warning(f"Coredump verfügbar: {device}, abrufbar via GET /debug/coredump auf dem Satelliten")
+
     _ota_pending: set[str] = set()
 
     def _release_ota_updates():
@@ -2211,6 +2215,7 @@ def main():
 
     mqtt_handler.set_ota_pending_handler(_on_ota_pending)
     mqtt_handler.set_firmware_handler(_on_firmware_version)
+    mqtt_handler.set_coredump_pending_handler(_on_coredump_pending)
     mqtt_handler.set_sensor_handler(_on_sensor)
     residents.on_arrival(_on_resident_arrival)
     residents.on_departure(_on_resident_departure)

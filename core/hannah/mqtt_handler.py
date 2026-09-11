@@ -35,6 +35,7 @@ class MQTTHandler:
 
         self._on_ota_pending: Optional[Callable[[str, str], None]] = None
         self._on_firmware:    Optional[Callable[[str, str, str, int], None]] = None
+        self._on_coredump_pending: Optional[Callable[[str, bool], None]] = None
         self._on_ble_report:  Optional[Callable[[str, str, int], None]] = None
         self._on_sensor:      Optional[Callable[[str, float, float, float, float, int, float, float], None]] = None
         self._on_play_asset_result: Optional[Callable[[str, str, bool], None]] = None
@@ -114,6 +115,9 @@ class MQTTHandler:
 
     def set_firmware_handler(self, callback: Callable[[str, str, str, int], None]):
         self._on_firmware = callback
+
+    def set_coredump_pending_handler(self, callback: Callable[[str, bool], None]):
+        self._on_coredump_pending = callback
 
     def set_sensor_handler(self, callback: Callable[[str, float, float, float, float], None]):
         self._on_sensor = callback
@@ -264,11 +268,12 @@ class MQTTHandler:
 
         client.subscribe("hannah/satellite/+/ota/pending", qos=1)
         client.subscribe("hannah/satellite/+/firmware", qos=1)
+        client.subscribe("hannah/satellite/+/coredump_pending", qos=1)
         client.subscribe("hannah/satellite/+/ble/report", qos=0)
         client.subscribe("hannah/satellite/+/sensors", qos=0)
         client.subscribe("hannah/satellite/+/play_asset/result", qos=1)
         client.subscribe("hannah/satellite/+/playback_done", qos=1)
-        log.info("OTA / firmware / BLE / sensors / play_asset-Ergebnis / playback_done abonniert")
+        log.info("OTA / firmware / Coredump / BLE / sensors / play_asset-Ergebnis / playback_done abonniert")
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
@@ -301,6 +306,16 @@ class MQTTHandler:
                     rssi = int(data.get("rssi", 0))
                     if mac:
                         self._on_ble_report(parts[2], mac, rssi)
+                except Exception:
+                    pass
+            return
+
+        if topic.startswith("hannah/satellite/") and topic.endswith("/coredump_pending"):
+            parts = topic.split("/")
+            if len(parts) == 4 and self._on_coredump_pending:
+                try:
+                    data = json.loads(msg.payload.decode())
+                    self._on_coredump_pending(parts[2], bool(data.get("pending", False)))
                 except Exception:
                     pass
             return

@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Callable, Optional
 from hannah.models.user import User
@@ -61,7 +62,16 @@ class UserManager:
         payload = la.provider_payload
         # Defensive: a malformed/legacy provider_payload (e.g. double-JSON-encoded by the
         # LinkAccount RPC bug fixed alongside this) decodes to a plain string instead of a
-        # dict — treat as "no usable roomie_id" instead of crashing the whole boot on it.
+        # dict. Root-caused for #281 (OTA-Presence-Gate immer False): eine so betroffene
+        # Zeile fällt hier sonst komplett aus get_roomie_ids() raus — presence_state ist
+        # dabei nie das Problem, der Roomie zählt schlicht nie als "echter Bewohner".
+        # Einmal zusätzlich parsen, bevor aufgegeben wird — repariert bereits bestehende
+        # doppelt-kodierte DB-Zeilen automatisch beim nächsten Zugriff.
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                payload = {}
         if not isinstance(payload, dict):
             payload = {}
         roomie_id = payload.get("roomie_id")

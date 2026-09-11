@@ -77,3 +77,43 @@ class TestDumpPresentUsers:
         user.presence = True
 
         user_manager.dump_present_users()
+
+
+class TestResidentLinkDoubleEncodedPayload:
+    """#281 root cause: eine per historischem (inzwischen gefixtem) LinkAccount-RPC-Bug
+    doppelt-JSON-kodierte provider_payload deckt __json_fields__'s Auto-Decode nur einmal
+    ab — der Roomie fiel dadurch komplett aus get_roomie_ids() raus (nicht presence_state
+    war je das Problem), unabhängig von jedem Live-Presence-Wert. _resident_link() muss
+    einen so betroffenen String noch einmal parsen statt den Roomie stillschweigend zu
+    verwerfen. Reproduziert über einen echten DB-Roundtrip: ein als String übergebener
+    provider_payload wird von __json_fields__ beim Schreiben noch einmal JSON-kodiert,
+    beim Lesen kommt exakt der reale, in der Produktions-DB gefundene Zustand zurück
+    (ein String statt einem Dict)."""
+
+    def test_double_encoded_payload_is_still_recognized_as_roomie(self, tmp_path):
+        user_manager = _make_user_manager(tmp_path)
+        user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
+        user.link_account("residents", "leonie_roomie", provider_payload='{"roomie_id": "leonie", "resident_type": "roomie"}')
+
+        assert user_manager.get_roomie_ids() == {"leonie"}
+
+    def test_double_encoded_payload_still_reaches_dump_present_users(self, tmp_path):
+        user_manager = _make_user_manager(tmp_path)
+        pusher = MagicMock()
+        user_manager.set_residents_pusher(pusher)
+        user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
+        user.link_account("residents", "leonie_roomie", provider_payload='{"roomie_id": "leonie", "resident_type": "roomie"}')
+        user.presence = True
+
+        user_manager.dump_present_users()
+
+        pusher.assert_called_once_with("leonie", True, "roomie")
+
+    def test_genuinely_unparseable_payload_still_excludes_roomie(self, tmp_path):
+        """Kein blindes Verschlucken jedes Fehlers — ein Payload, der auch nach dem
+        zweiten json.loads() kein Dict ergibt, bleibt weiterhin ausgeschlossen."""
+        user_manager = _make_user_manager(tmp_path)
+        user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
+        user.link_account("residents", "leonie_roomie", provider_payload="not json at all")
+
+        assert user_manager.get_roomie_ids() == set()

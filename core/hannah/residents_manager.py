@@ -148,15 +148,19 @@ class ResidentsClient:
     # Cache lesen
 
     def is_home(self, roomie_id: Optional[str] = None) -> bool:
-        if roomie_id:
-            return any(
-                resident.is_home()
-                for resident in self._residents.values()
-                if resident.roomie_id == roomie_id
-            )
-        roomie_ids = self._user_manager.get_roomie_ids()
-        return any(
-            resident.is_home()
-            for resident in self._residents.values()
-            if resident.roomie_id in roomie_ids
-        )
+        """Gibt zurück, ob mindestens einer der betrachteten Roomies aktuell zuhause ist.
+
+        Ein Roomie ohne jedes bekannte Presence-Update seit Prozessstart (kein Eintrag
+        in self._residents, oder presence_state noch None) zählt konservativ als
+        "könnte zuhause sein", nicht als "weg" (#281) — sonst meldet is_home() nach
+        jedem Core-Neustart fälschlich "niemand zuhause", bis zufällig die nächste
+        echte Arrival/Departure-Kante durchläuft. Betroffene Aufrufer (z.B. die
+        OTA-Freigabe) sollen im Zweifel abwarten statt fälschlich freizugeben."""
+        ids = {roomie_id} if roomie_id else self._user_manager.get_roomie_ids()
+        for rid in ids:
+            matches = [r for r in self._residents.values() if r.roomie_id == rid]
+            if not matches:
+                return True
+            if any(r.presence_state is None or r.is_home() for r in matches):
+                return True
+        return False

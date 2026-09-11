@@ -17,6 +17,8 @@
 #include "freertos/portmacro.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
+#include "esp_core_dump.h"
+#include "esp_flash.h"
 #include "cJSON.h"
 #include "lwip/sockets.h"
 #include <fcntl.h>
@@ -872,6 +874,57 @@ static esp_err_t debug_wav_capture_handler(httpd_req_t *req)
     return debug_wav_handler(req);
 }
 
+/* ── Handler: GET /debug/coredump (#280) ─────────────────────────────────── */
+
+/* Liefert einen im Flash abgelegten Core Dump (Register+Backtrace, seit einem
+ * Panic-Neustart) als Roh-ELF zum Offline-Dekodieren via espcoredump.py.
+ * Bewusst kein Upload vom ESP aus (siehe Issue #280) — nur Pull. */
+static esp_err_t debug_coredump_handler(httpd_req_t *req)
+{
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_check() != ESP_OK ||
+        esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Kein Coredump vorhanden.");
+        return ESP_OK;
+    }
+
+    uint8_t *buf = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return ESP_ERR_NO_MEM;
+
+    if (esp_flash_read(esp_flash_default_chip, buf, addr, size) != ESP_OK) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Coredump konnte nicht gelesen werden.");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"coredump.elf\"");
+    httpd_resp_send(req, (const char *)buf, (ssize_t)size);
+    free(buf);
+    return ESP_OK;
+}
+
+/* ── Handler: POST /debug/coredump/clear (#280) ──────────────────────────── */
+
+/* Löscht die Coredump-Partition nach Abruf und setzt das retained
+ * coredump_pending-Flag zurück — sonst bliebe Core nach jedem eigenen
+ * Neustart bei "pending":true hängen, obwohl der Dump längst abgeholt ist. */
+static esp_err_t debug_coredump_clear_handler(httpd_req_t *req)
+{
+    esp_err_t err = esp_core_dump_image_erase();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Coredump-Partition konnte nicht gelöscht werden: %s", esp_err_to_name(err));
+    }
+
+    const hannah_config_t *cfg = hannah_config_get();
+    char topic[96];
+    snprintf(topic, sizeof(topic), "hannah/satellite/%s/coredump_pending", cfg->device_id);
+    hannah_net_mqtt_publish(topic, "{\"pending\":false}", 1, 1);
+
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
 /* ── Handler: POST /nvs (Refs #36) ───────────────────────────────────────── */
 
 /* Nur diese Keys sind über /nvs schreibbar. Alles andere wird abgelehnt —
@@ -995,7 +1048,7 @@ void hannah_webserver_start(void)
     config.stack_size        = 8192;
     config.recv_wait_timeout = 60;
     config.send_wait_timeout = 60;
-    config.max_uri_handlers  = 16;
+    config.max_uri_handlers  = 20;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start fehlgeschlagen");
@@ -1016,6 +1069,8 @@ void hannah_webserver_start(void)
         { .uri = "/debug/wav", .method = HTTP_GET,  .handler = debug_wav_handler    },
         { .uri = "/debug/wav/raw", .method = HTTP_GET, .handler = debug_wav_raw_handler },
         { .uri = "/debug/wav/capture", .method = HTTP_GET, .handler = debug_wav_capture_handler },
+        { .uri = "/debug/coredump",       .method = HTTP_GET,  .handler = debug_coredump_handler       },
+        { .uri = "/debug/coredump/clear", .method = HTTP_POST, .handler = debug_coredump_clear_handler },
         { .uri = "/nvs",       .method = HTTP_POST, .handler = nvs_post_handler     },
     };
     for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++) {

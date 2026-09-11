@@ -28,6 +28,7 @@
 #include "esp_https_ota.h"
 #include "esp_crt_bundle.h"
 #include "esp_spiffs.h"
+#include "esp_core_dump.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -347,6 +348,17 @@ static void ota_poll_task(void *arg)
                  current, hannah_net_get_restart_reason(), (unsigned long)hannah_net_get_restart_count());
         hannah_net_mqtt_publish(fw_topic, fw_payload, 1, 1);
         ESP_LOGI(TAG, "Firmware-Version publiziert: %s = %s", fw_topic, fw_payload);
+
+        /* Coredump-Announce (#280) — nur publizieren wenn tatsächlich einer
+         * vorliegt, kein unconditional pending:false bei jedem gesunden Boot
+         * (Gegenstück dazu: POST /debug/coredump/clear setzt pending:false
+         * explizit zurück, siehe hannah_webserver.c). */
+        if (esp_core_dump_image_check() == ESP_OK) {
+            char cd_topic[96];
+            snprintf(cd_topic, sizeof(cd_topic), "hannah/satellite/%s/coredump_pending", cfg->device_id);
+            hannah_net_mqtt_publish(cd_topic, "{\"pending\":true}", 1, 1);
+            ESP_LOGW(TAG, "Coredump-Pending publiziert: %s", cd_topic);
+        }
     }
 
     hannah_net_wait_sntp(10000);
