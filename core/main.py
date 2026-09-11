@@ -2146,6 +2146,7 @@ def main():
             # restart_count == 0 heißt: ältere Firmware ohne #165, keine Neustart-
             # Historie verfügbar — nichts zu speichern.
             satellite_manager.record_restart_report(device, restart_reason, restart_count)
+            log.warning(f"Satellit neu gestartet: {device}, Grund={restart_reason}, Zähler={restart_count}")
         grpc_servicer.publish_event(make_firmware_event(device, version))
         grpc_servicer.agent_firmware_event(device, version)
 

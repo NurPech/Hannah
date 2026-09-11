@@ -3,6 +3,12 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+
+## 0.79.4 (2026-09-11)
+### Hannah Core
+
+* Added: a satellite restart is now logged with its device, reason and restart counter — Core already received this via MQTT and stored it, just never logged it, so it couldn't be alerted on (Refs #278)
+
 ## 0.79.3 (2026-09-10)
 ### Hannah Core
 
