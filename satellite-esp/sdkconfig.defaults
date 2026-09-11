@@ -121,5 +121,18 @@ CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
+# ESP-IDFs esp_flash_erase_region()/esp_flash_write() aborten per Default
+# hart, sobald die Zieladresse in Bootloader/Partitionstabelle/laufende
+# App-Partition fällt (spi_flash/Kconfig: SPI_FLASH_DANGEROUS_WRITE,
+# Default ABORTS) — genau das braucht apply_partition_table_update_if_needed()
+# (main.c, #280) aber bewusst, um die Partitionstabelle selbst umzuschreiben.
+# Live auf echter Hardware reproduziert (Refs #282-Folgefund): jeder
+# Selfupdate-Versuch abortete sofort in esp_flash_erase_region(), CI hatte
+# das nie gefangen (kompiliert nur, kein Hardware-Boot). ALLOWED statt FAILS,
+# weil der Schreibvorgang tatsächlich gelingen soll — die bestehende
+# Erase/Write/Readback-Schleife mit 3 Versuchen (main.c) bleibt die
+# eigentliche Absicherung gegen einen wirklich fehlgeschlagenen Schreibzugriff.
+CONFIG_SPI_FLASH_DANGEROUS_WRITE_ALLOWED=y
+
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

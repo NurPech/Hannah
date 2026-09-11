@@ -3,6 +3,10 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+## 0.79.8 (2026-09-11)
+### Satellite Firmware
+
+* Fixed: the one-time partition-table update added in 0.79.6 (Refs #280) crashed immediately on real hardware instead of running — ESP-IDF blocks writes to the partition table by default as a safety measure, which this update needs to do on purpose. Every satellite that hadn't picked up the update yet was affected (Refs #283)
 
 ## 0.79.7 (2026-09-11)
 ### Satellite Firmware
