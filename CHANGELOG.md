@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.79.7 (2026-09-11)
+### Satellite Firmware
+
+* Fixed: the one-time partition-table update added in 0.79.6 (Refs #280) made the satellite look like it had rejected its own OTA update — it restarted itself before the new firmware had been confirmed healthy, which ESP-IDF's built-in safety net read as "this update never came up properly" and silently reverted to the previous version (Refs #282)
 
 ## 0.79.6 (2026-09-11)
 ### Satellite Firmware

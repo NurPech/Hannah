@@ -16,6 +16,7 @@
 #include "esp_partition.h"
 #include "esp_flash.h"
 #include "esp_core_dump.h"
+#include "esp_ota_ops.h"
 #include "driver/gpio.h"
 
 #include "hannah_config.h"
@@ -156,6 +157,15 @@ static void apply_partition_table_update_if_needed(void)
         ESP_LOGE(TAG, "Partitionstabellen-Update endgültig fehlgeschlagen — bootet mit alter Tabelle weiter.");
         return;
     }
+
+    /* Kritisch: ohne das hier würde ESP-IDFs eigener Rollback-Schutz diesen
+     * selbst ausgelösten Neustart als "neue Firmware nach OTA nie für gültig
+     * erklärt und trotzdem neu gestartet" interpretieren und beim nächsten Boot
+     * automatisch auf die vorherige (alte) App-Partition zurückrollen — die neue
+     * Firmware würde sich dadurch bei jedem OTA, das noch die alte Partitions-
+     * tabelle vorfindet, selbst rückgängig machen. hannah_net.c markiert die App
+     * sonst erst bei MQTT_EVENT_CONNECTED als gültig, weit nach diesem Punkt hier. */
+    esp_ota_mark_app_valid_cancel_rollback();
 
     ESP_LOGW(TAG, "Partitionstabelle erfolgreich aktualisiert — Neustart.");
     esp_restart();

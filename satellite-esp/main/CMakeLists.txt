@@ -21,6 +21,7 @@ idf_component_register(
         esp_partition
         spi_flash
         espcoredump
+        app_update
 )
 
 # Eingebettete Ziel-Partitionstabelle für den einmaligen Selfupdate-Boot (#280) —
