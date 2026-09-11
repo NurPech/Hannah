@@ -343,8 +343,9 @@ class TestRestartReports:
     def test_first_report_creates_entry(self, manager):
         _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
 
-        manager.record_restart_report("wz-esp", "watchdog", 5)
+        is_new = manager.record_restart_report("wz-esp", "watchdog", 5)
 
+        assert is_new is True
         reports = manager.get_restart_reports("wz-esp")
         assert len(reports) == 1
         assert reports[0]["restart_reason"] == "watchdog"
@@ -355,8 +356,9 @@ class TestRestartReports:
         _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
         manager.record_restart_report("wz-esp", "watchdog", 5)
 
-        manager.record_restart_report("wz-esp", "watchdog", 5)
+        is_new = manager.record_restart_report("wz-esp", "watchdog", 5)
 
+        assert is_new is False
         assert len(manager.get_restart_reports("wz-esp")) == 1
 
     def test_higher_restart_count_adds_new_entry(self, manager):

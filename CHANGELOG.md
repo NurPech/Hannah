@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.79.5 (2026-09-11)
+### Hannah Core
+
+* Fixed: the satellite-restart log line added in 0.79.4 fired on every Core restart for every satellite, regardless of whether that satellite had actually restarted recently — the satellite firmware publishes its restart report as a retained MQTT message, so every Core reconnect replayed the last known value for the whole fleet at once. Now only logs on a genuinely new report (Refs #279)
+
 ## 0.79.4 (2026-09-11)
 ### Hannah Core
 

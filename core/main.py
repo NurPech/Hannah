@@ -2144,9 +2144,13 @@ def main():
         satellite_manager.set_satellite_firmware(device, version)
         if restart_count:
             # restart_count == 0 heißt: ältere Firmware ohne #165, keine Neustart-
-            # Historie verfügbar — nichts zu speichern.
-            satellite_manager.record_restart_report(device, restart_reason, restart_count)
-            log.warning(f"Satellit neu gestartet: {device}, Grund={restart_reason}, Zähler={restart_count}")
+            # Historie verfügbar — nichts zu speichern. record_restart_report()
+            # dedupliziert gegen den retained MQTT-Payload (jeder Core-Neustart
+            # liefert sonst den zuletzt gemeldeten Wert erneut) — nur bei einem
+            # echten neuen Report loggen, sonst feuert der Alert bei jedem
+            # Core-Neustart einmal pro Satellit (#278).
+            if satellite_manager.record_restart_report(device, restart_reason, restart_count):
+                log.warning(f"Satellit neu gestartet: {device}, Grund={restart_reason}, Zähler={restart_count}")
         grpc_servicer.publish_event(make_firmware_event(device, version))
         grpc_servicer.agent_firmware_event(device, version)
 

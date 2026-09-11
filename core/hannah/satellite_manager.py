@@ -283,7 +283,7 @@ class SatelliteManager:
             )
         return len(stale)
 
-    def record_restart_report(self, device_id: str, restart_reason: str, restart_count: int) -> None:
+    def record_restart_report(self, device_id: str, restart_reason: str, restart_count: int) -> bool:
         """Persistiert eine vom Satelliten gemeldete Neustart-Kennzahl (#165) —
         restart_count ist der geräteseitige NVS-Zähler (überlebt Neustarts),
         restart_reason unterscheidet "remote" (#161/#162), "ota" und "watchdog"
@@ -291,7 +291,12 @@ class SatelliteManager:
         Satellite.last_reported_restart_count: der Firmware-`firmware`-Topic wird
         mit retain=1 publiziert, jeder MQTT-(Re-)Connect von Core liefert daher den
         zuletzt retained Payload erneut — ohne diese Prüfung würde jeder Core-
-        Neustart eine Phantom-Zeile in die Historie schreiben."""
+        Neustart eine Phantom-Zeile in die Historie schreiben.
+
+        Gibt zurück, ob es sich um einen tatsächlich neuen Report handelt (False
+        bei einem deduplizierten Retained-Replay) — Aufrufer sollen ein Log/Alert
+        nur bei True auslösen, sonst feuert jeder Core-Neustart einen Phantom-Alert
+        pro Satellit (#278)."""
         from hannah.models.satellite_restart import SatelliteRestart
         db = self._db()
         sat = Satellite.get(db, device_id=device_id)
@@ -301,11 +306,12 @@ class SatelliteManager:
             # eine FK auf satellites, die Zeile muss also erst angelegt werden).
             sat = Satellite.create(db, device_id=device_id, last_seen=_now_sql())
         if sat.last_reported_restart_count == restart_count:
-            return
+            return False
         SatelliteRestart.create(
             db, device_id=device_id, restart_reason=restart_reason, restart_count=restart_count,
         )
         sat.update(last_reported_restart_count=restart_count)
+        return True
 
     def get_restart_reports(self, device_id: str) -> list[dict]:
         """Gibt die Neustart-Historie eines Satelliten zurück, neueste zuerst (#165)."""
