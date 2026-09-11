@@ -3,6 +3,11 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+## 0.79.3 (2026-09-10)
+### Hannah Core
+
+* Changed: the voice confirmation after a switching command (e.g. "Licht aus") now just says "OK." instead of naming a device count — the count included every device a command was successfully sent to, not just the ones whose state actually changed (e.g. turning off a room's lights when only one of several was on still reported "2 Geräte geschaltet") (Refs #277)
+
 ## 0.79.2 (2026-09-10)
 ### Hannah Core
 

@@ -1168,7 +1168,7 @@ def main():
             count = iobroker.execute(intent)
             if count > 0:
                 conv_ctx.set_smalltalk_active(_source, False)
-            answer = "Keine Geräte gefunden." if count == 0 else f"OK, {count} Gerät(e) geschaltet."
+            answer = "Keine Geräte gefunden." if count == 0 else "OK."
             conv_ctx.update_from_intent(_source, intent)
 
         return _logged(answer, intent.name, intent)
