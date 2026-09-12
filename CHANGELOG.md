@@ -3,6 +3,13 @@
     Placeholder for the next version (at the beginning of the line):
     ## **WORK IN PROGRESS**
 -->
+
+## 0.79.9 (2026-09-12)
+### Hannah Core
+
+* Fixed: a device name misheard by STT (e.g. "Rolladen seit" instead of "Rolladen Seite") silently fell back to switching every device of that category in the room instead of the one intended — Hannah now tries a fuzzy match against device names in the room first, and only bulk-switches when no device name was mentioned at all. A close match resolves directly, several close matches trigger a clarifying question, and no match at all is now rejected instead of acted on (Refs #261)
+* Fixed: a proactive announcement or notification was never remembered as something Hannah said, so if the microphone reopened right after (e.g. a still-unresolved false wake-word trigger during playback) and the reply went to the LLM, it had no idea what it was replying to. Hannah now keeps a short-lived memory of her own announcements per satellite, the same way she already does for ongoing small talk (Refs #253)
+
 ## 0.79.8 (2026-09-11)
 ### Satellite Firmware
 

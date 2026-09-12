@@ -1,4 +1,5 @@
 import datetime
+import difflib
 import re
 import logging
 from dataclasses import dataclass, field
@@ -41,6 +42,19 @@ _FILLER = {
     "bitte", "mal", "doch", "denn", "einfach", "kannst", "du", "könntest",
     "mach", "die", "das", "den", "der", "hey", "hannah", "und",
 }
+
+# Generische Verben/Präpositionen/Artikel, die nie ein Gerätename sind — zusammen mit
+# Raum- und Kategoriewörtern von den restlichen Tokens abgezogen, um zu erkennen ob der
+# Nutzer einen (nicht erkannten) Gerätenamen genannt hat (#261, Fuzzy-Geräte-Match).
+_DEVICE_NAME_STOPWORDS = {
+    "setze", "setzen", "stelle", "stellen", "schalte", "schalten", "schalt",
+    "dreh", "drehe", "drehen", "mache", "machen",
+    "an", "aus", "auf", "zu", "im", "in", "bei", "fuer", "mit", "von", "vom",
+    "zum", "zur", "dem", "des", "einen", "einem", "eines", "ein", "eine",
+    "hier", "dort", "da", "grad", "prozent", "uhr",
+}
+_DEVICE_FUZZY_CUTOFF = 0.75
+_DEVICE_FUZZY_MIN_LEN = 3
 
 # Anzeigenamen für die Kategorie-Rückfrage (#272), z.B. "Meinst du den Rolladen oder die
 # Klimaanlage?" — nur für die Kategorien nötig, die in _category_finders eine eigene
@@ -95,6 +109,8 @@ class Intent:
     category_candidates: list = field(default_factory=list)  # [(category, label, intent_name,
         # value, unit, is_open_close), ...] bei Kategorie-Mehrdeutigkeit (#272), z.B. "Küche
         # hoch" wenn die Küche sowohl Rolladen als auch Klimaanlage hat
+    device_candidates: list = field(default_factory=list)  # [(device_id, device_name), ...] bei
+        # Geräte-Mehrdeutigkeit im selben Raum, per Fuzzy-Match gefunden (#261)
     weekdays: list = field(default_factory=list)     # [0-6, ...] SetAlarm: erkannter Wochentag (max. 1)
     resolved_date: Optional[object] = None           # datetime.date; DeleteAlarm: konkretes Zieldatum
     satellite_id: Optional[str] = None       # StartCapture/StopCapture: Ziel-Satellit (nie ein Raum), z.B. "Flur01"
@@ -376,6 +392,31 @@ class NLU:
         )
         if resolved_category is not None and category_filter is None:
             category_filter = resolved_category
+        # Fuzzy-Geräte-Match (#261): Raum + Kategorie sind bekannt, aber kein Gerät hat exakt
+        # gematcht — statt stillschweigend auf "alle Geräte der Kategorie im Raum" zu bulken
+        # (der ursprüngliche Bug: ein per STT verhaspelter Gerätename wie "seit" statt "Seite"
+        # fiel sonst komplett unter den Tisch), erst prüfen ob überhaupt noch ein Wort übrig
+        # ist, das wie ein Gerätename-Versuch aussieht. Nur dann greift die Fuzzy-Suche —
+        # ohne solches Restwort bleibt das bewusste Kategorie-Bulk ("Schlafzimmer Licht an")
+        # unverändert erlaubt. Auf Queries ("ist der Rolladen offen?") bewusst nicht
+        # angewendet — deren Wortschatz (z.B. "offen") überschneidet sich mit dem der
+        # Action-Wörter nicht sauber genug, um hier zuverlässig zwischen Statusabfrage-
+        # Vokabular und Gerätename-Versuch zu unterscheiden; Scope bleibt auf den
+        # gemeldeten Bug (Steuerbefehle) beschränkt.
+        device_candidates: list[tuple[str, str]] = []
+        device_not_found = False
+        if (device is None and not device_ambiguous and room_key is not None
+                and category_filter is not None and not is_query):
+            leftover = self._leftover_device_tokens(tokens, room_name, category_filter)
+            if leftover:
+                fuzzy_matches = self._fuzzy_find_devices(leftover, room_key, category_filter)
+                if len(fuzzy_matches) == 1:
+                    device = fuzzy_matches[0]
+                    device_key = device.key
+                elif len(fuzzy_matches) >= 2:
+                    device_candidates = [(d.id, d.name) for d in fuzzy_matches]
+                else:
+                    device_not_found = True
         _timer_trigger = bool({"timer"} & norm_tokens) or any(t.startswith("erinner") for t in norm_tokens)
         timer_seconds       = self._find_timer_seconds(raw) if _timer_trigger else None
         timer_label         = self._find_timer_label(raw) if timer_seconds is not None else None
@@ -585,7 +626,9 @@ class NLU:
         intent_capture_mode: Optional[str] = None
         _is_open_close = False
 
-        if is_car:
+        if device_not_found:
+            intent_name, value, unit = "DeviceNotFound", None, None
+        elif is_car:
             car_scope = self._find_car_scope(norm_tokens)
             intent_name, value, unit = "CarQuery", car_scope, None
         elif is_weather:
@@ -682,6 +725,7 @@ class NLU:
             raw_text=raw,
             candidates=(room_candidates or device_room_candidates) if _actionable else [],
             category_candidates=category_candidates,
+            device_candidates=device_candidates,
             weekdays=intent_weekdays,
             resolved_date=intent_resolved_date,
             satellite_id=satellite_id if intent_name in ("StartCapture", "StopCapture") else None,
@@ -711,6 +755,56 @@ class NLU:
         joined = " ".join(tokens)
         device_key, device, _ = self._find_device(joined, room_key)
         return device_key, device
+
+    def _leftover_device_tokens(
+        self, tokens: list[str], room_name: Optional[str], category_filter: Optional[str],
+    ) -> list[str]:
+        """Tokens die nach Abzug von Raum-, Kategorie- und generischen Füllwörtern übrig
+        bleiben (#261). Ein nicht-leeres Ergebnis ist der Hinweis, dass im Satz ein
+        Gerätename *versucht* wurde, der nur nicht exakt gematcht hat — Voraussetzung für
+        die Fuzzy-Suche in _fuzzy_find_devices(). Bleibt nichts übrig (z.B. "Schlafzimmer
+        Licht an"), war gar kein Gerätename gemeint und das bestehende Kategorie-Bulk-
+        Verhalten greift unverändert."""
+        room_words = set(_normalize(room_name).split()) if room_name else set()
+        cat_tokens = {t for t in tokens if self._category_words.get(_normalize(t)) == category_filter}
+        # Aktions-Vokabular ist Instanz-/DB-konfigurierbar (#272) und darf nicht als
+        # vermeintlicher Gerätename gewertet werden — sonst würden schon simple
+        # Kategorie-Bulk-Befehle wie "Rolladen hoch"/"kuehlen im Buero" fälschlich in die
+        # Fuzzy-Suche laufen, obwohl gar kein Gerätename genannt wurde.
+        action_words: set[str] = (
+            self._turn_on | self._turn_off | self._blind_open_words | self._blind_close_words
+            | {w for words in self._climate_mode_words.values() for w in words}
+            | {w for words in self._fan_speed_words.values() for w in words}
+        )
+        leftover = []
+        for t in tokens:
+            nt = _normalize(t)
+            if nt in room_words or t in cat_tokens or nt in _DEVICE_NAME_STOPWORDS or nt in action_words:
+                continue
+            if nt.isdigit() or nt in self._pct_units:
+                continue
+            leftover.append(t)
+        return leftover
+
+    def _fuzzy_find_devices(
+        self, leftover_tokens: list[str], room_key: str, category_filter: str,
+    ) -> list["Device"]:
+        """Vergleicht die übrig gebliebenen Tokens per Ratio (difflib) gegen die Wörter der
+        Gerätenamen (dev.key) im Raum, eingeschränkt auf category_filter — Fallback wenn
+        der exakte Substring-Match in _find_device() nichts gefunden hat, aber ein
+        Gerätename-Versuch erkennbar ist (#261, z.B. STT "seit" statt "Seite")."""
+        pool = [d for d in self._devices.get(room_key, {}).values() if d.category == category_filter]
+        matches = []
+        for dev in pool:
+            key_words = [w for w in _normalize(dev.key).split() if len(w) >= _DEVICE_FUZZY_MIN_LEN]
+            for tok in leftover_tokens:
+                ntok = _normalize(tok)
+                if len(ntok) < _DEVICE_FUZZY_MIN_LEN:
+                    continue
+                if any(difflib.SequenceMatcher(None, ntok, kw).ratio() >= _DEVICE_FUZZY_CUTOFF for kw in key_words):
+                    matches.append(dev)
+                    break
+        return matches
 
     # ------------------------------------------------------------------
 
@@ -1184,6 +1278,17 @@ def build_category_clarification_question(candidates: list[tuple]) -> str:
         return f"Meinst du {names[0]} oder {names[1]}?"
     options = ", ".join(names[:-1]) + " oder " + names[-1]
     return f"Was genau meinst du? {options}?"
+
+
+def build_device_clarification_question(candidates: list[tuple[str, str]]) -> str:
+    """Analog zu build_clarification_question, aber für Geräte-Mehrdeutigkeit im selben
+    Raum, per Fuzzy-Match gefunden (#261) — candidates sind Intent.device_candidates-Tupel
+    (device_id, device_name)."""
+    names = [name for _, name in candidates]
+    if len(names) == 2:
+        return f"Welches Gerät meinst du — {names[0]} oder {names[1]}?"
+    options = ", ".join(names[:-1]) + " oder " + names[-1]
+    return f"Welches Gerät meinst du? {options}?"
 
 
 def resolve_clarification_answer(

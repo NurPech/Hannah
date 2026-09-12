@@ -35,7 +35,7 @@ from hannah.ble_tags import BleTagManager
 from hannah.grpc_server import GrpcServer, HannahServicer, make_car_parked_event, make_firmware_event, make_resident_event, make_system_notification_event, pb
 from hannah.iobroker import IoBrokerClient
 from hannah.mqtt_handler import MQTTHandler
-from hannah.nlu import NLU, Intent, build_category_clarification_question, build_clarification_question, resolve_clarification_answer, resolve_yes_no
+from hannah.nlu import NLU, Intent, build_category_clarification_question, build_clarification_question, build_device_clarification_question, resolve_clarification_answer, resolve_yes_no
 from hannah.residents_manager import ResidentsClient
 from hannah.stt import STT
 from hannah.tts import TTS
@@ -586,6 +586,12 @@ def main():
                     orig.name, orig.value, orig.unit = name, value, unit
                     orig.category_filter = resolved[0]
                     orig.is_open_close = is_open_close
+                elif kind == "device":
+                    # Geräte-Rückfrage (#261): Fuzzy-Match hatte mehrere Geräte im selben
+                    # Raum gefunden (z.B. "Rolladen Seite 1" vs. "Rolladen Seite 2") —
+                    # Raum/Kategorie des ursprünglichen Intents bleiben unverändert.
+                    orig.device_id = resolved[0]
+                    orig.device    = resolved[1]
                 else:
                     orig.room    = resolved[1]
                     orig.room_id = resolved[0]
@@ -655,6 +661,20 @@ def main():
             question = build_clarification_question(intent.candidates)
             conv_ctx.set_clarification(device, intent, intent.candidates)
             _feedback(device, True, question)
+            _log_pipeline_activity()
+            return
+
+        # Mehrdeutiges Gerät im selben Raum, per Fuzzy-Match gefunden → Rückfrage (#261)
+        if intent.device_candidates:
+            question = build_device_clarification_question(intent.device_candidates)
+            conv_ctx.set_clarification(device, intent, intent.device_candidates, kind="device")
+            _feedback(device, True, question)
+            _log_pipeline_activity()
+            return
+
+        if intent.name == "DeviceNotFound":
+            room_suffix = f" im {intent.room}" if intent.room else ""
+            _feedback(device, False, f"Ich kenne kein Gerät mit diesem Namen{room_suffix}.")
             _log_pipeline_activity()
             return
 
@@ -939,6 +959,10 @@ def main():
                     orig.name, orig.value, orig.unit = name, value, unit
                     orig.category_filter = resolved[0]
                     orig.is_open_close = is_open_close
+                elif kind == "device":
+                    # Geräte-Rückfrage (#261), siehe pipeline() für Details.
+                    orig.device_id = resolved[0]
+                    orig.device    = resolved[1]
                 else:
                     orig.room    = resolved[1]
                     orig.room_id = resolved[0]
@@ -994,6 +1018,16 @@ def main():
             question = build_clarification_question(intent.candidates)
             conv_ctx.set_clarification(_source, intent, intent.candidates)
             return _logged(question, "Clarification", intent)
+
+        # Mehrdeutiges Gerät im selben Raum, per Fuzzy-Match gefunden → Rückfrage (#261)
+        if intent.device_candidates:
+            question = build_device_clarification_question(intent.device_candidates)
+            conv_ctx.set_clarification(_source, intent, intent.device_candidates, kind="device")
+            return _logged(question, "Clarification", intent)
+
+        if intent.name == "DeviceNotFound":
+            room_suffix = f" im {intent.room}" if intent.room else ""
+            return _logged(f"Ich kenne kein Gerät mit diesem Namen{room_suffix}.", "DeviceNotFound", intent)
 
         if intent.name == "CarQuery":
             answer = car_manager.answer_for_roomie(scope=intent.value or "all", roomie_id=_resolve_roomie_id(speaker_user_id))
@@ -1352,6 +1386,14 @@ def main():
                 log.info(f"Announcement → {target} unterdrückt (DND aktiv).")
                 continue
             _send_audio(target, pcm, rate)
+            if not ssml:
+                # #253: proaktive Announcements/Notifications laufen nie über
+                # add_llm_exchange() (kein User-Turn davor) — ohne das hier würde eine
+                # kurz danach eintreffende Folge-Äußerung (z.B. durch den ungeklärten
+                # Selbst-Trigger-Bug erneut geöffnetes Mikrofon, #226/#252) komplett ohne
+                # Kontext beim LLM landen. SSML bewusst ausgenommen, sonst landet Markup
+                # statt Sprachtext in der History.
+                conv_ctx.record_tts(target, text)
 
     def process_room_announce(room: str, text: str):
         process_announcement(room, text)

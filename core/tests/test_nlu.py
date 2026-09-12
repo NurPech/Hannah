@@ -420,6 +420,68 @@ class TestBlindOpenClose:
         assert intent.is_open_close is False
 
 
+class TestFuzzyDeviceMatch:
+    """#261 — Ein STT-verhaspelter Gerätename ("Rolladen seit" statt "Rolladen Seite")
+    darf nicht stillschweigend auf 'alle Geräte der Kategorie im Raum' zurückfallen.
+    Erst wenn nach Abzug von Raum-/Kategorie-/Füllwörtern kein Rest-Token übrig bleibt,
+    ist das bewusste Kategorie-Bulk (kein Gerätename genannt) weiter erlaubt."""
+
+    @pytest.fixture
+    def nlu_two_blinds(self):
+        rooms = {"schlafzimmer": "Schlafzimmer"}
+        devices = {
+            "schlafzimmer": {
+                "seite1": _make_device("seite1", "schlafzimmer", category="blind"),
+                "seite2": _make_device("seite2", "schlafzimmer", category="blind"),
+            },
+        }
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    @pytest.fixture
+    def nlu_one_blind(self):
+        rooms = {"schlafzimmer": "Schlafzimmer"}
+        devices = {
+            "schlafzimmer": {
+                "seite1": _make_device("seite1", "schlafzimmer", category="blind"),
+            },
+        }
+        return NLU(cfg={}, rooms=rooms, devices=devices)
+
+    def test_no_leftover_token_keeps_category_bulk(self, nlu_two_blinds):
+        """Kein Gerätename genannt ('schliesse die rollladen im schlafzimmer') → das
+        bestehende Kategorie-Bulk-Verhalten bleibt unangetastet, keine Rückfrage."""
+        intent = nlu_two_blinds.parse("schliesse die rollladen im schlafzimmer")
+        assert intent.name == "SetLevel"
+        assert intent.value == 0
+        assert intent.category_filter == "blind"
+        assert intent.device_id is None
+        assert intent.device_candidates == []
+
+    def test_single_fuzzy_match_resolves_directly(self, nlu_one_blind):
+        """Nur ein Gerät der Kategorie im Raum → eindeutiger Fuzzy-Treffer wird wie ein
+        exaktes Match behandelt, keine Rückfrage nötig."""
+        intent = nlu_one_blind.parse("setze den rollladen seit im schlafzimmer auf 0 prozent")
+        assert intent.name == "SetLevel"
+        assert intent.value == 0
+        assert intent.device_id == "schlafzimmer.seite1"
+        assert intent.device_candidates == []
+
+    def test_two_fuzzy_matches_ask_for_clarification(self, nlu_two_blinds):
+        """Original-Bug-Report (#261): 'Rolladen seit' passt per Fuzzy-Match auf beide
+        Geräte 'Seite1'/'Seite2' → Rückfrage statt blindem Bulk auf beide."""
+        intent = nlu_two_blinds.parse("setze den rollladen seit im schlafzimmer auf 0 prozent")
+        assert intent.device_id is None
+        assert {d for _, d in intent.device_candidates} == {"seite1", "seite2"}
+
+    def test_no_fuzzy_match_is_rejected_not_bulked(self, nlu_two_blinds):
+        """Das Rest-Token ähnelt keinem Gerätenamen im Raum → ablehnen statt auf alle
+        Geräte der Kategorie zu bulken."""
+        intent = nlu_two_blinds.parse("setze den rollladen vorne im schlafzimmer auf 0 prozent")
+        assert intent.name == "DeviceNotFound"
+        assert intent.device_id is None
+        assert intent.device_candidates == []
+
+
 class TestCategoryAwareDispatch:
     """#272 — Wörter wie 'hoch'/'runter' sind je Kategorie unterschiedlich belegt
     (Rolladen: öffnen/schließen; Klima: Lüfterstufe). Die Dispatch-Tabelle wertet nur

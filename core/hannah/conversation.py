@@ -191,6 +191,22 @@ class ConversationContext:
             ctx.history.append({"role": "assistant", "content": assistant_msg})
             ctx.ts = time.time()
 
+    def record_tts(self, source: str, text: str) -> None:
+        """Merkt sich eine TTS-Ausgabe als reinen Assistant-Turn, auch ohne vorausgehenden
+        User-Turn (#253) — z.B. eine proaktive Announcement/Notification. Verhindert dass
+        eine kurz danach eintreffende Folge-Äußerung (etwa durch einen Selbst-Trigger-Bug
+        erneut geöffnetes Mikrofon) komplett ohne Kontext beim LLM landet. Nutzt dieselbe
+        History/TTL wie add_llm_exchange, damit ein bereits laufendes Smalltalk-Gespräch
+        nicht durch eine separate, konkurrierende Quelle überschrieben wird."""
+        if not text:
+            return
+        with self._lock:
+            ctx = self._ensure(source)
+            if not isinstance(ctx.history, deque) or ctx.history.maxlen != self._max_messages:
+                ctx.history = deque(ctx.history, maxlen=self._max_messages)
+            ctx.history.append({"role": "assistant", "content": text})
+            ctx.ts = time.time()
+
     def get_llm_history(self, source: str) -> list[dict]:
         """Gibt die LLM-Nachrichtenhistorie zurück (leer wenn abgelaufen)."""
         with self._lock:
