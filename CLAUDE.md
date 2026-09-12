@@ -108,7 +108,7 @@ ESP-IDF (C), FreeRTOS, **ESP32-S3** (AI-Beschleuniger + mehr RAM benötigt).
 
 **ESP-IDF Umgebung aktivieren:**
 ```powershell
-C:\esp\v6.0.1\esp-idf\export.ps1
+C:\esp\v6.1\esp-idf\export.ps1
 ```
 
 ---

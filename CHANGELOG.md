@@ -5,6 +5,11 @@
 -->
 
 
+## 0.80.3 (2026-09-12)
+### Satellite Firmware
+
+* Fixed: satellites with BLE indoor-location scanning enabled could crash and reboot repeatedly with a stack overflow in the Bluetooth host task — reporting a watched device's signal strength now happens on its own task instead of inline during Bluetooth scan processing (Refs #291)
+
 ## 0.80.2 (2026-09-12)
 ### Hannah Core
 

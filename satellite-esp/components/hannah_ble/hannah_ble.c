@@ -20,6 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 
 static const char *TAG = "ble";
 
@@ -35,9 +36,15 @@ static const char *TAG = "ble";
         int64_t  last_report_us;
     } ble_watch_entry_t;
 
+    typedef struct {
+        uint8_t mac[6];
+        int8_t  rssi;
+    } ble_report_item_t;
+
     static ble_watch_entry_t s_watchlist[CONFIG_HANNAH_BLE_WATCHLIST_MAX];
     static int               s_watchlist_count = 0;
     static SemaphoreHandle_t s_mutex;
+    static QueueHandle_t     s_report_queue;
 
     /* ── Hilfsfunktionen ─────────────────────────────────────────────────────── */
 
@@ -90,6 +97,13 @@ static const char *TAG = "ble";
 
     /* ── BLE-Scan-Event-Handler ──────────────────────────────────────────────── */
 
+    /* Läuft im Kontext des nimble_host-Tasks (siehe ble_host_task()) — dessen
+     * Stack ist knapp bemessen (CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE) und
+     * bereits durch NimBLEs eigene Verarbeitung des Discovery-Events
+     * ausgelastet. Deshalb hier nur die schnelle Watchlist-Prüfung, alles
+     * Weitere (String-Formatierung, MQTT-Publish) läuft in ble_report_task()
+     * mit eigenem Stack (Refs #291 — Stack-Overflow im nimble_host-Task).
+     */
     static int ble_gap_event_handler(struct ble_gap_event *event, void *arg)
     {
         if (event->type != BLE_GAP_EVENT_DISC) return 0;
@@ -111,26 +125,43 @@ static const char *TAG = "ble";
             if (now - s_watchlist[i].last_report_us < interval_us) break;
 
             s_watchlist[i].last_report_us = now;
+
+            ble_report_item_t report;
+            memcpy(report.mac, s_watchlist[i].mac, 6);
+            report.rssi = rssi;
             xSemaphoreGive(s_mutex);
+
+            if (xQueueSend(s_report_queue, &report, 0) != pdTRUE) {
+                ESP_LOGW(TAG, "Report-Queue voll — RSSI-Update verworfen.");
+            }
+            return 0;
+        }
+        xSemaphoreGive(s_mutex);
+        return 0;
+    }
+
+    /* ── Report-Task (entkoppelt von nimble_host, siehe oben) ───────────────── */
+
+    static void ble_report_task(void *arg)
+    {
+        ble_report_item_t report;
+        while (1) {
+            if (xQueueReceive(s_report_queue, &report, portMAX_DELAY) != pdTRUE) continue;
 
             char mac_str[18];
             snprintf(mac_str, sizeof(mac_str),
                     "%02x:%02x:%02x:%02x:%02x:%02x",
-                    s_watchlist[i].mac[0], s_watchlist[i].mac[1],
-                    s_watchlist[i].mac[2], s_watchlist[i].mac[3],
-                    s_watchlist[i].mac[4], s_watchlist[i].mac[5]);
+                    report.mac[0], report.mac[1], report.mac[2],
+                    report.mac[3], report.mac[4], report.mac[5]);
 
             char topic[128], payload[64];
             snprintf(topic,   sizeof(topic),   "hannah/satellite/%s/ble/report",
                     hannah_config_get()->device_id);
             snprintf(payload, sizeof(payload), "{\"mac\":\"%s\",\"rssi\":%d}",
-                    mac_str, rssi);
+                    mac_str, report.rssi);
             hannah_net_mqtt_publish(topic, payload, 0, 0);
-            ESP_LOGD(TAG, "BLE: %s RSSI=%d", mac_str, rssi);
-            return 0;
+            ESP_LOGD(TAG, "BLE: %s RSSI=%d", mac_str, report.rssi);
         }
-        xSemaphoreGive(s_mutex);
-        return 0;
     }
 
     /* ── Scan starten / neustarten ───────────────────────────────────────────── */
@@ -172,6 +203,7 @@ static const char *TAG = "ble";
     void hannah_ble_init(void)
     {
         s_mutex = xSemaphoreCreateMutex();
+        s_report_queue = xQueueCreate(8, sizeof(ble_report_item_t));
 
         esp_err_t ret = nimble_port_init();
         if (ret != ESP_OK) {
@@ -183,6 +215,7 @@ static const char *TAG = "ble";
 
         hannah_net_set_ble_watchlist_callback(hannah_ble_set_watchlist_json);
 
+        xTaskCreate(ble_report_task, "ble_report", 3072, NULL, 3, NULL);
         nimble_port_freertos_init(ble_host_task);
         ESP_LOGI(TAG, "BLE-Scanner initialisiert.");
 
