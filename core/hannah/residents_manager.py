@@ -37,16 +37,19 @@ class ResidentsClient:
         # Set by main.py: fn(resident_id, mood, resident_type) → sends SetResidentMood via gRPC adapter
         self._mood_setter: Optional[Callable[[str, int, "pb.ResidentType"], bool]] = None
 
-        # Welche presence_state-Werte bedeuten "zuhause" / "weg"?
+        # Welche presence_state-Werte bedeuten "zuhause" / "weg" / "schläft"?
         # Residents-Adapter: 0=Abwesend, 1=zu Hause, 2=Nacht
         self._state_home = cfg.get("state_home", 1)
         self._state_away = cfg.get("state_away", 0)
+        self._state_night = cfg.get("state_night", 2)
 
         # Callbacks: fn(resident: Resident)
         self._on_arrival:   Optional[Callable[[Resident], None]] = None
         self._on_departure: Optional[Callable[[Resident], None]] = None
         # Callback: fn(resident: Resident, old_mood: int, mood: int)
         self._on_mood_changed: Optional[Callable[[Resident, int, int], None]] = None
+        # Callback: fn(resident: Resident, is_asleep: bool)
+        self._on_sleep_changed: Optional[Callable[[Resident, bool], None]] = None
 
     # ------------------------------------------------------------------
     # Callbacks registrieren
@@ -70,6 +73,10 @@ class ResidentsClient:
         """Wird aufgerufen wenn sich die Stimmung eines Residents ändert: fn(resident, old_mood, mood)."""
         self._on_mood_changed = fn
 
+    def on_sleep_changed(self, fn: Callable[[Resident, bool], None]):
+        """Wird aufgerufen wenn ein Resident zwischen Nacht- und Wach-Zustand wechselt: fn(resident, is_asleep)."""
+        self._on_sleep_changed = fn
+
     # ------------------------------------------------------------------
     # Resident-Registry
 
@@ -83,6 +90,7 @@ class ResidentsClient:
                 resident.on("arrival", self._dispatch_arrival)
                 resident.on("departure", self._dispatch_departure)
                 resident.on("mood_changed", self._dispatch_mood_changed)
+                resident.on("sleep_changed", self._dispatch_sleep_changed)
                 self._residents[key] = resident
             return resident
 
@@ -111,6 +119,11 @@ class ResidentsClient:
         if self._on_mood_changed:
             threading.Thread(target=self._on_mood_changed, args=(resident, old_mood, mood), daemon=True).start()
 
+    def _dispatch_sleep_changed(self, resident: Resident, is_asleep: bool):
+        log.info(f"Residents: {resident.roomie_id} ({type(resident).__name__}) ist jetzt {'am Schlafen' if is_asleep else 'wach'}.")
+        if self._on_sleep_changed:
+            threading.Thread(target=self._on_sleep_changed, args=(resident, is_asleep), daemon=True).start()
+
     # ------------------------------------------------------------------
     # State setzen (Hannah → ioBroker)
 
@@ -124,6 +137,12 @@ class ResidentsClient:
 
     def set_user_away(self, roomie: str):
         self.set_presence(roomie, self._state_away, pb.ResidentType.ROOMIE)
+
+    def set_user_asleep(self, roomie: str):
+        self.set_presence(roomie, self._state_night, pb.ResidentType.ROOMIE)
+
+    def set_user_awake(self, roomie: str):
+        self.set_presence(roomie, self._state_home, pb.ResidentType.ROOMIE)
 
     def announce_online(self):
         """Setzt Hannahs eigenen Status auf 'home' (beim Start)."""

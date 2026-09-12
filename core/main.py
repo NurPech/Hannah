@@ -701,6 +701,20 @@ def main():
                 else:
                     log.info(f"[{device}] SetPresence home — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
                 _feedback(device, True, "Willkommen zuhause!")
+        elif intent.name == "SetSleep":
+            roomie_id = _resolve_roomie_id(speaker_user_id) if speaker_user_id else ""
+            if intent.value == "asleep":
+                if roomie_id:
+                    residents.set_user_asleep(roomie_id)
+                else:
+                    log.info(f"[{device}] SetSleep asleep — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
+                _feedback(device, True, "Gute Nacht!")
+            else:
+                if roomie_id:
+                    residents.set_user_awake(roomie_id)
+                else:
+                    log.info(f"[{device}] SetSleep awake — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
+                _feedback(device, True, "Guten Morgen!")
         elif intent.name in ("StopIntent", "PauseIntent", "ResumeIntent"):
             cmd_type = {"StopIntent": "stop", "PauseIntent": "pause", "ResumeIntent": "resume"}[intent.name]
             targets = _resolve_targets(intent.room_id or device)
@@ -1051,6 +1065,20 @@ def main():
                 else:
                     log.info("SetPresence home — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
                 answer = "Willkommen zuhause!"
+        elif intent.name == "SetSleep":
+            roomie_id = _resolve_roomie_id(speaker_user_id) if speaker_user_id else ""
+            if intent.value == "asleep":
+                if roomie_id:
+                    residents.set_user_asleep(roomie_id)
+                else:
+                    log.info("SetSleep asleep — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
+                answer = "Gute Nacht!"
+            else:
+                if roomie_id:
+                    residents.set_user_awake(roomie_id)
+                else:
+                    log.info("SetSleep awake — Sprecher anonym oder ohne Residents-Link, Status nicht gesetzt.")
+                answer = "Guten Morgen!"
         elif intent.name in ("StopIntent", "PauseIntent", "ResumeIntent"):
             cmd_type = {"StopIntent": "stop", "PauseIntent": "pause", "ResumeIntent": "resume"}[intent.name]
             source_device = source if source in {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()} else None
@@ -2171,12 +2199,13 @@ def main():
 
     def _on_resident_arrival(resident: Resident):
         if isinstance(resident, Roomie):
-            process_announcement("all", "Willkommen zuhause!")
             user = _user_manager.get_user_by_linked_account("residents", resident.id)
-            if user:
-                user.presence = True
-            display = user.display_name if user else resident.roomie_id
-            grpc_servicer.publish_event(make_resident_event(resident.roomie_id, display, "arrived"))
+            if not user:
+                log.info(f"Resident '{resident.roomie_id}' ohne Hannah-User-Link — Arrival ignoriert (#287).")
+                return
+            user.presence = True
+            process_announcement("all", "Willkommen zuhause!")
+            grpc_servicer.publish_event(make_resident_event(resident.roomie_id, user.display_name, "arrived"))
         elif isinstance(resident, Guest):
             process_announcement("all", "Es ist Besuch angekommen!")
             grpc_servicer.publish_event(make_resident_event(f"guest:{resident.roomie_id}", resident.roomie_id, "arrived"))
@@ -2230,15 +2259,24 @@ def main():
     def _on_resident_departure(resident: Resident):
         if isinstance(resident, Roomie):
             user = _user_manager.get_user_by_linked_account("residents", resident.id)
-            if user:
-                user.presence = False
-            display = user.display_name if user else resident.roomie_id
-            grpc_servicer.publish_event(make_resident_event(resident.roomie_id, display, "departed"))
+            if not user:
+                log.info(f"Resident '{resident.roomie_id}' ohne Hannah-User-Link — Departure ignoriert (#287).")
+                return
+            user.presence = False
+            grpc_servicer.publish_event(make_resident_event(resident.roomie_id, user.display_name, "departed"))
             if not residents.is_home() and _ota_pending:
                 log.info("Alle weg — OTA-Updates freigeben.")
                 _release_ota_updates()
         elif isinstance(resident, Guest):
             grpc_servicer.publish_event(make_resident_event(f"guest:{resident.roomie_id}", resident.roomie_id, "departed"))
+
+    def _on_resident_sleep_changed(resident: Resident, is_asleep: bool):
+        if isinstance(resident, Roomie):
+            user = _user_manager.get_user_by_linked_account("residents", resident.id)
+            if not user:
+                log.info(f"Resident '{resident.roomie_id}' ohne Hannah-User-Link — Sleep-Status ignoriert (#287).")
+                return
+            user.asleep = is_asleep
 
     def _on_resident_mood_changed(resident: Resident, _old_mood: int, mood: int):
         """Pull-Richtung: ioBroker meldet eine Stimmungsänderung -> auf den verlinkten Hannah-User übertragen.
@@ -2262,6 +2300,7 @@ def main():
     residents.on_arrival(_on_resident_arrival)
     residents.on_departure(_on_resident_departure)
     residents.on_mood_changed(_on_resident_mood_changed)
+    residents.on_sleep_changed(_on_resident_sleep_changed)
 
     # Auto-Einpark-Event → gRPC-Stream (pro Tracker, damit home_address bekannt ist)
     for _ct in car_manager:

@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.80.0 (2026-09-12)
+### Hannah Core
+
+* Added: Hannah now understands "ich gehe schlafen"/"gute Nacht" and "ich bin wach"/"guten Morgen" and syncs sleep status bidirectionally with the residents adapter — replaces the previous Alexa smart-plug workaround (Refs #288)
+* Fixed: a resident switching between "home" and "asleep" (without ever leaving the house) was misreported as arriving/leaving, and being asleep made Hannah think nobody was home at all (Refs #286)
+* Fixed: Hannah announced "Welcome home" and tracked presence for any resident the residents adapter reported, even ones never linked to an actual Hannah user account (Refs #287)
+
 ## 0.79.9 (2026-09-12)
 ### Hannah Core
 

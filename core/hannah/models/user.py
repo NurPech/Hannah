@@ -5,7 +5,7 @@ class User(BaseModel, EventEmitterMixin):
     __table__ = "users"
     __primary_key__ = "id"
     __slots__ = (
-        "id", "username", "display_name","email", "password_hash", "trust_level", "mood_level", "system_messages","is_active", "type", "_db", "_cached_linked_accounts", "_cached_enabled_automations", "_presence"
+        "id", "username", "display_name","email", "password_hash", "trust_level", "mood_level", "system_messages","is_active", "type", "_db", "_cached_linked_accounts", "_cached_enabled_automations", "_presence", "_asleep"
     )
 
     def after_init(self):
@@ -13,12 +13,13 @@ class User(BaseModel, EventEmitterMixin):
         self._cached_linked_accounts = None
         self._cached_enabled_automations = None
         self._presence = False
+        self._asleep = False
 
     @property
     def presence(self):
         """Gibt den aktuellen Präsenzstatus dieses Users zurück."""
         return self._presence
-    
+
     @presence.setter
     def presence(self, value):
         if self._presence != value:
@@ -27,6 +28,20 @@ class User(BaseModel, EventEmitterMixin):
                 self._emit("arrival")
             else:
                 self._emit("departure")
+
+    @property
+    def asleep(self):
+        """Gibt zurück, ob dieser User laut letztem bekannten Residents-Status schläft."""
+        return self._asleep
+
+    @asleep.setter
+    def asleep(self, value):
+        if self._asleep != value:
+            self._asleep = value
+            if self._asleep:
+                self._emit("fell_asleep")
+            else:
+                self._emit("woke_up")
 
     @property
     def mood(self):

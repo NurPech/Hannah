@@ -214,6 +214,14 @@ class NLU:
             "zuhause", "daheim", "heimgekommen", "angekommen",
             "zurueck", "wieder", "hallo",
         ]))
+        # Wörter die auf Schlafengehen hinweisen ("Ich gehe schlafen", "Gute Nacht")
+        self._sleep_words: set[str] = set(cfg.get("sleep_words", [
+            "schlafen", "schlaf", "bett", "nacht", "muede",
+        ]))
+        # Wörter die auf Aufwachen hinweisen ("Ich bin wach", "Guten Morgen")
+        self._awake_words: set[str] = set(cfg.get("awake_words", [
+            "wach", "aufgewacht", "aufgestanden",
+        ]))
 
         # Wörter die auf eine Wetterabfrage hinweisen
         self._weather_words: set[str] = set(cfg.get("weather_words", [
@@ -493,20 +501,35 @@ class NLU:
             and bool(self._message_words & norm_tokens)
         )
 
+        # SetSleep: Schlafengehen/Aufwachen ohne Geräte-/Raumbezug, kein Query
+        is_sleep = (
+            not is_time and not is_date and not is_message_query and not is_send_message
+            and not is_query
+            and no_device_context
+            and bool(self._sleep_words & norm_tokens)
+        )
+        is_awake = (
+            not is_time and not is_date and not is_message_query and not is_send_message
+            and not is_query
+            and no_device_context
+            and not is_sleep
+            and bool(self._awake_words & norm_tokens)
+        )
+
         # SetPresence: Kommen/Gehen ohne Geräte-/Raumbezug, kein Query
         # "Ich gehe schlafen" ist kein Presence-Event — Sleep-Wörter als Veto
-        _has_sleep_words = bool({"schlafen", "schlaf", "bett", "nacht", "muede"} & norm_tokens)
         is_presence_away = (
             not is_time and not is_date and not is_message_query and not is_send_message
             and not is_query
             and no_device_context
-            and not _has_sleep_words
+            and not is_sleep and not is_awake
             and bool(self._presence_away & norm_tokens)
         )
         is_presence_home = (
             not is_time and not is_date and not is_message_query and not is_send_message
             and not is_query
             and no_device_context
+            and not is_sleep and not is_awake
             and bool(self._presence_home & norm_tokens)
         )
 
@@ -516,6 +539,7 @@ class NLU:
         is_stop = (
             not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
+            and not is_sleep and not is_awake
             and not is_query and device is None
             and not is_capture_stop
             and bool(self._stop_words & norm_tokens)
@@ -523,12 +547,14 @@ class NLU:
         is_pause = (
             not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
+            and not is_sleep and not is_awake
             and not is_stop and not is_query and device is None
             and bool(self._pause_words & norm_tokens)
         )
         is_resume = (
             not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
+            and not is_sleep and not is_awake
             and not is_stop and not is_pause and not is_query and device is None
             and bool(self._resume_words & norm_tokens)
         )
@@ -537,12 +563,14 @@ class NLU:
         is_dnd = (
             not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
+            and not is_sleep and not is_awake
             and no_device_context and not is_query
             and bool(self._dnd_words & norm_tokens)
         )
         is_mute_cmd = (
             not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
+            and not is_sleep and not is_awake
             and not is_dnd
             and no_device_context and not is_query
             and bool(self._mute_words & norm_tokens)
@@ -553,6 +581,7 @@ class NLU:
         is_automation = (
             not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
+            and not is_sleep and not is_awake
             and not is_dnd and not is_mute_cmd
             and no_device_context and not is_query
             and _automation_key is not None
@@ -565,6 +594,7 @@ class NLU:
         is_volume = (
             not is_car and not is_weather and not is_time and not is_date and not is_message_query and not is_send_message
             and not is_presence_away and not is_presence_home
+            and not is_sleep and not is_awake
             and not is_dnd and not is_mute_cmd and not is_automation
             and not is_query and device is None
             and (is_volume_up or is_volume_down
@@ -595,6 +625,8 @@ class NLU:
             and not is_send_message
             and not is_presence_away
             and not is_presence_home
+            and not is_sleep
+            and not is_awake
             and not is_stop
             and not is_pause
             and not is_resume
@@ -646,6 +678,10 @@ class NLU:
             intent_name, value, unit = "SetPresence", "away", None
         elif is_presence_home:
             intent_name, value, unit = "SetPresence", "home", None
+        elif is_sleep:
+            intent_name, value, unit = "SetSleep", "asleep", None
+        elif is_awake:
+            intent_name, value, unit = "SetSleep", "awake", None
         elif is_capture_start:
             intent_name, value, unit = "StartCapture", None, None
             intent_capture_sample_type = self._find_capture_sample_type(norm_tokens) or "noise"

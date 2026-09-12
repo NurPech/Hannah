@@ -3,7 +3,9 @@ from typing import Callable, Optional
 
 from hannah.utils import EventEmitterMixin
 
+AWAY_PRESENCE_STATE = 0
 HOME_PRESENCE_STATE = 1
+NIGHT_PRESENCE_STATE = 2
 
 
 class Resident(EventEmitterMixin, ABC):
@@ -23,10 +25,16 @@ class Resident(EventEmitterMixin, ABC):
     # Presence
 
     def is_home(self) -> bool:
-        return self.presence_state == HOME_PRESENCE_STATE
+        """"Zuhause" umfasst sowohl HOME als auch NIGHT — der Residents-Adapter
+        bildet presence.state aus den Booleans away/home/night, und home bleibt
+        während der Nacht durchgehend true (#286). Nur AWAY bedeutet "nicht da"."""
+        return self.presence_state in (HOME_PRESENCE_STATE, NIGHT_PRESENCE_STATE)
+
+    def is_asleep(self) -> bool:
+        return self.presence_state == NIGHT_PRESENCE_STATE
 
     def update(self, display_name: Optional[str], presence_state: Optional[int], mood: Optional[int] = None):
-        """Aktualisiert den Resident und feuert arrival/departure/mood_changed bei Zustandswechsel.
+        """Aktualisiert den Resident und feuert arrival/departure/sleep_changed/mood_changed bei Zustandswechsel.
 
         display_name/presence_state/mood sind None, wenn das jeweilige Feld im
         AgentResident-Update nicht gesetzt war (proto3 `optional`) — ein
@@ -47,12 +55,17 @@ class Resident(EventEmitterMixin, ABC):
             self.mood = mood
 
         if presence_state is not None and old_presence is not None:
-            was_home = old_presence == HOME_PRESENCE_STATE
+            was_home = old_presence in (HOME_PRESENCE_STATE, NIGHT_PRESENCE_STATE)
             is_home = self.is_home()
             if is_home and not was_home:
                 self._emit("arrival")
             elif was_home and not is_home:
                 self._emit("departure")
+
+            was_asleep = old_presence == NIGHT_PRESENCE_STATE
+            is_asleep = self.is_asleep()
+            if is_asleep != was_asleep:
+                self._emit("sleep_changed", is_asleep)
 
         if mood is not None and mood != old_mood:
             self._emit("mood_changed", old_mood, mood)
