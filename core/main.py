@@ -153,17 +153,11 @@ def main():
 
         Roomie-IDs leben in residents/car_tracker (ioBroker-Welt), die User-ID ist Hannahs
         eigene, davon entkoppelte Identität — hier wird zwischen beiden vermittelt.
+        Delegiert an UserManager.resolve_roomie_id(), damit es nur eine (defensive,
+        #281-fixte) Implementierung der Payload-Auflösung gibt statt einer zweiten,
+        divergierenden Kopie hier (#290).
         """
-        if not speaker_user_id:
-            return ""
-        user = _user_manager.get_user_by_id(speaker_user_id)
-        if not user:
-            return ""
-        for la in user.linked_accounts:
-            if la.provider == "residents":
-                payload = la.provider_payload
-                return payload.get("roomie_id", "") if isinstance(payload, dict) else ""
-        return ""
+        return _user_manager.resolve_roomie_id(speaker_user_id)
 
     # Settings (nlu.*/llm.system_prompt — #27 Phase 5, aus config.yaml migriert via
     # deploy/migrate_config_settings.py). Fällt auf cfg/Code-Defaults zurück, solange eine

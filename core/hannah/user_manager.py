@@ -53,6 +53,18 @@ class UserManager:
         allerersten Start: zu dem Zeitpunkt existiert der Link noch nicht)."""
         self._wire_residents_bridge(user)
 
+    def resolve_roomie_id(self, user_id) -> str:
+        """Öffentlicher Wrapper um _resident_link() für Aufrufer außerhalb dieser Klasse
+        (main.py) — verhindert eine zweite, nicht-defensive Kopie der Payload-Parsing-Logik
+        ohne den #281-Schutz gegen doppelt-JSON-kodierte provider_payload-Werte."""
+        if not user_id:
+            return ""
+        user = self.get_user_by_id(user_id)
+        if not user:
+            return ""
+        link = self._resident_link(user)
+        return link[0] if link else ""
+
     def _resident_link(self, user: User) -> Optional[tuple[str, str]]:
         """Liefert (roomie_id, resident_type) für einen User mit verlinktem Residents-Account,
         oder None falls nicht verlinkt bzw. ohne roomie_id im provider_payload."""

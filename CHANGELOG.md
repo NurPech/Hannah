@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.80.1 (2026-09-12)
+### Hannah Core
+
+* Fixed: a linked account whose residents payload was double-JSON-encoded (see 0.79.6) resolved fine for presence tracking on startup, but a second, separate lookup used by voice commands ("ich bin zuhause", "ich gehe schlafen", car queries) never got that same fix — so those commands silently treated a fully linked speaker as unlinked (Refs #290)
+
 ## 0.80.0 (2026-09-12)
 ### Hannah Core
 
