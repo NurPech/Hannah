@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.80.2 (2026-09-12)
+### Hannah Core
+
+* Added: routines can now set a roomie's presence status (home/away/asleep/awake) directly as a trigger action, via the same channel voice commands use — previously blocked because the residents adapter filters generic state writes (Refs #289)
+
 ## 0.80.1 (2026-09-12)
 ### Hannah Core
 

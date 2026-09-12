@@ -73,11 +73,17 @@ Schlüsselfelder im Überblick:
   cooldown                  — Mindestabstand zwischen zwei Auslösungen (Standard: 3600s)
   say                       — TTS-Ansage (Legacy; ignoriert wenn actions gesetzt ist)
   actions                   — Liste von Aktionen, ersetzt say wenn nicht-leer:
-                              [{"say": "...", "room": "..."} | {"set_state": {"id", "value"}}]
+                              [{"say": "...", "room": "..."} | {"set_state": {"id", "value"}}
+                               | {"set_presence": {"roomie", "state"}}]
   ask                       — Frage per TTS; Antwort wird per on_response ausgewertet
   rephrase                  — LLM formuliert say/ask/actions[].say vor der Ausgabe um
   on_response               — Regeln nach ask; condition: llm_match("Kategorie")
   set_state                 — ioBroker-State in on_response setzen: {id, value}
+  set_presence              — Residents-Status eines Roomies setzen (#289): {roomie, state},
+                              state ∈ home/away/asleep/awake. Läuft über den getypten
+                              Residents-gRPC-Kanal statt einem generischen ioBroker-State —
+                              der Adapter filtert direkte Schreibzugriffe auf Residents-States,
+                              set_state käme dort nie an. In actions[] und on_response nutzbar.
 
 Reload: triggers-Tabelle wird einmal pro Minute (Tick-Loop) und beim Start neu abgefragt —
 SQL-Query ist immer aktuell, kein Hot-Reload-Mechanismus mehr nötig.
@@ -120,6 +126,7 @@ class TriggerEngine:
         ask_fn: Callable[[str, str, Callable[[str], None]], None] | None = None,
         match_fn: Callable[[str, str], bool] | None = None,
         set_state_fn: Callable[[str, Any], None] | None = None,
+        set_presence_fn: Callable[[str, str], None] | None = None,
         schedule_timer_fn: Callable[[str, str, int, dict], None] | None = None,  # (timer_id, label, fire_at, metadata)
         cancel_timer_fn: Callable[[str], None] | None = None,                    # (timer_id)
         on_change: Callable[[], None] | None = None,                            # nach Create/Update: WatchMore neu pushen
@@ -133,6 +140,9 @@ class TriggerEngine:
                        callback(answer_text) auf wenn der Nutzer antwortet
         match_fn:      fn(text, category) → bool — LLM-Klassifikation für on_response
         set_state_fn:  fn(state_id, value) — setzt einen ioBroker-State; für set_state in on_response
+        set_presence_fn: fn(roomie_id, state) — setzt den Residents-Status (home/away/asleep/awake)
+                       über den getypten Residents-Kanal statt eines generischen ioBroker-States
+                       (#289) — für set_presence in actions/on_response
         on_change:     fn() — nach create_trigger/update_trigger; lässt den Aufrufer die aktuelle
                        Menge referenzierter State-IDs erneut per WatchMore an den Adapter pushen,
                        sonst würde ein frisch angelegter State-Trigger erst beim nächsten
@@ -145,6 +155,7 @@ class TriggerEngine:
         self._ask_fn = ask_fn
         self._match_fn = match_fn
         self._set_state_fn = set_state_fn
+        self._set_presence_fn = set_presence_fn
         self._schedule_timer_fn = schedule_timer_fn
         self._cancel_timer_fn = cancel_timer_fn
         self._on_change = on_change
@@ -559,6 +570,32 @@ class TriggerEngine:
                     except Exception as e:
                         log.error(f"Trigger '{tid}': set_state fehlgeschlagen: {e}")
 
+        self._execute_set_presence(action.get("set_presence"), tid)
+
+    _PRESENCE_STATES = {"home", "away", "asleep", "awake"}
+
+    def _execute_set_presence(self, set_presence: Optional[dict], tid: str) -> None:
+        """Führt eine set_presence-Action aus (#289): {roomie, state}, state ∈ home/away/asleep/awake.
+
+        Läuft über den getypten Residents-Kanal (set_presence_fn) statt einem generischen
+        ioBroker-State — der Adapter filtert direkte Schreibzugriffe auf Residents-States
+        ohnehin, ein set_state käme dort also nie an."""
+        if not set_presence or not isinstance(set_presence, dict):
+            return
+        if not self._set_presence_fn:
+            log.warning(f"Trigger '{tid}': set_presence definiert aber set_presence_fn fehlt — übersprungen.")
+            return
+        roomie = (set_presence.get("roomie") or "").strip()
+        state = (set_presence.get("state") or "").strip()
+        if not roomie or state not in self._PRESENCE_STATES:
+            log.warning(f"Trigger '{tid}': ungültige set_presence-Angabe (roomie={roomie!r}, state={state!r}) — übersprungen.")
+            return
+        log.info(f"Trigger '{tid}' set_presence → {roomie} = {state!r}")
+        try:
+            self._set_presence_fn(roomie, state)
+        except Exception as e:
+            log.error(f"Trigger '{tid}': set_presence fehlgeschlagen: {e}")
+
     def _schedule_delay(self, trigger: dict, room: str) -> None:
         """Registriert einen Delay-Timer beim Timer Service statt sofortiger Ausführung."""
         tid = trigger.get("id", "?")
@@ -654,6 +691,8 @@ class TriggerEngine:
                         self._set_state_fn(state_id, value)
                     except Exception as e:
                         log.error(f"Trigger '{tid}': set_state fehlgeschlagen: {e}")
+
+        self._execute_set_presence(rule.get("set_presence"), tid)
 
     # ------------------------------------------------------------------
     # Bedingungen prüfen

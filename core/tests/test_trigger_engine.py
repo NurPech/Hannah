@@ -18,10 +18,12 @@ def engine(tmp_path):
         db_module.get_db,
         announce_fn=lambda room, text: eng.announced.append((room, text)),
         set_state_fn=lambda state_id, value: eng.states_set.append((state_id, value)),
+        set_presence_fn=lambda roomie, state: eng.presences_set.append((roomie, state)),
         state_cache_path=os.path.join(str(tmp_path), "state_cache.json"),
     )
     eng.announced = []
     eng.states_set = []
+    eng.presences_set = []
     return eng
 
 
@@ -210,6 +212,59 @@ class TestActionsList:
         engine.on_state_update("s1", "true")
 
         assert engine.announced == [("all", "Legacy")]
+
+
+class TestSetPresenceAction:
+    """set_presence-Action (#289) — setzt den Residents-Status über den getypten Kanal,
+    unabhängig vom generischen set_state (der Adapter filtert direkte Residents-State-Writes)."""
+
+    def test_valid_state_calls_set_presence_fn(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": True}, actions=[
+            {"set_presence": {"roomie": "leonie", "state": "asleep"}},
+        ])
+
+        engine.on_state_update("s1", "true")
+
+        assert engine.presences_set == [("leonie", "asleep")]
+
+    def test_invalid_state_is_rejected_without_crashing(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": True}, actions=[
+            {"set_presence": {"roomie": "leonie", "state": "hibernating"}},
+        ])
+
+        engine.on_state_update("s1", "true")
+
+        assert engine.presences_set == []
+
+    def test_missing_roomie_is_rejected_without_crashing(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": True}, actions=[
+            {"set_presence": {"state": "asleep"}},
+        ])
+
+        engine.on_state_update("s1", "true")
+
+        assert engine.presences_set == []
+
+    def test_missing_set_presence_fn_does_not_crash(self, tmp_path):
+        db_module.DB_PATH = os.path.join(str(tmp_path), "h2.db")
+        db_module.init_db()
+        eng = TriggerEngine(
+            db_module.get_db,
+            announce_fn=lambda room, text: None,
+            state_cache_path=os.path.join(str(tmp_path), "state_cache2.json"),
+        )
+        _create(eng, "t1", {"state": "s1", "value": True}, actions=[
+            {"set_presence": {"roomie": "leonie", "state": "asleep"}},
+        ])
+
+        eng.on_state_update("s1", "true")  # darf nicht crashen
+
+    def test_works_in_on_response_too(self, engine):
+        engine._execute_response_action(
+            {"say": "Ok.", "set_presence": {"roomie": "leonie", "state": "awake"}}, "t1", "all",
+        )
+
+        assert engine.presences_set == [("leonie", "awake")]
 
 
 class TestUnlessUnchanged:

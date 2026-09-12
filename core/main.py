@@ -1629,6 +1629,16 @@ def main():
     def _trigger_set_state(state_id: str, value: object) -> None:
         grpc_servicer.agent_set_state(state_id, value)
 
+    _PRESENCE_SETTERS = {
+        "home": lambda roomie: residents.set_user_home(roomie),
+        "away": lambda roomie: residents.set_user_away(roomie),
+        "asleep": lambda roomie: residents.set_user_asleep(roomie),
+        "awake": lambda roomie: residents.set_user_awake(roomie),
+    }
+
+    def _trigger_set_presence(roomie_id: str, state: str) -> None:
+        _PRESENCE_SETTERS[state](roomie_id)
+
     def _schedule_trigger_timer(timer_id: str, label: str, fire_at: int, metadata: dict) -> None:
         grpc_servicer.timer_create(timer_id, label, fire_at, metadata)
 
@@ -1645,6 +1655,7 @@ def main():
         ask_fn=_ask_fn,
         match_fn=llm.match,
         set_state_fn=_trigger_set_state,
+        set_presence_fn=_trigger_set_presence,
         schedule_timer_fn=_schedule_trigger_timer,
         cancel_timer_fn=_cancel_trigger_timer,
         on_change=_on_trigger_change,
