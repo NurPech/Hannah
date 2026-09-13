@@ -552,7 +552,7 @@ def main():
         log.info(f"[{device}] Text: '{text}'")
 
         # Phrase-Trigger-Check vor NLU (#139, Nachfolger des alten Routine-Checks)
-        phrase_reply = trigger_engine.match_phrase(text)
+        phrase_reply = trigger_engine.match_phrase(text, source_device=device)
         if phrase_reply is not None:
             _feedback(device, True, phrase_reply)
             _log_pipeline_activity()
@@ -915,7 +915,7 @@ def main():
                 log.info(f"[{_source}] Antwort ({intent_name}): {answer!r}")
             return answer, intent_name
 
-        phrase_reply = trigger_engine.match_phrase(text)
+        phrase_reply = trigger_engine.match_phrase(text, source_device=device)
         if phrase_reply is not None:
             return _logged(phrase_reply, "Trigger")
 

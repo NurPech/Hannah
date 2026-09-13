@@ -34,11 +34,22 @@ def test_build_required_versions_covers_every_method_with_full_method_path():
     versions = build_required_versions(HANNAH_SERVICE)
 
     assert "/hannah.HannahService/SubmitText" in versions
-    # SubmitSatelliteAudioRequest.compat_version=2 (hannah-proto#17, #210) is the
-    # first message to set it explicitly — every other method still requires
-    # the default.
-    assert versions["/hannah.HannahService/SubmitSatelliteAudio"] == 2
-    other_methods = {k: v for k, v in versions.items() if k != "/hannah.HannahService/SubmitSatelliteAudio"}
+    # Methods whose request/response message carries an explicit compat_version > 1 —
+    # every other method still requires the default. SubmitSatelliteAudioRequest is at
+    # 3 since hannah-proto 4.0.0 (speaker_user_id removal, hannah-proto#17/#210 first
+    # bumped it to 2). CreateTrigger/UpdateTrigger are at 2 since Trigger.room -> target
+    # (hannah-proto#5, #295). TriggerCollectorCapture/CollectorConnect are at 2 since
+    # CaptureCommand.compat_version was first set explicitly (hannah-proto 4.0.0).
+    elevated = {
+        "/hannah.HannahService/SubmitSatelliteAudio": 3,
+        "/hannah.HannahService/CreateTrigger": 2,
+        "/hannah.HannahService/UpdateTrigger": 2,
+        "/hannah.HannahService/TriggerCollectorCapture": 2,
+        "/hannah.HannahService/CollectorConnect": 2,
+    }
+    for method, expected in elevated.items():
+        assert versions[method] == expected
+    other_methods = {k: v for k, v in versions.items() if k not in elevated}
     assert all(v == DEFAULT_COMPAT_VERSION for v in other_methods.values())
 
 

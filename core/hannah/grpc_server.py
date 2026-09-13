@@ -735,10 +735,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             when, cancel_when, on_response, actions = self._parse_trigger_json(request)
         except json.JSONDecodeError as e:
             return pb.StatusResponse(ok=False, message=f"invalid JSON: {e}")
-        room = request.room or "all"
+        target = request.target or "all"
         cooldown = request.cooldown if request.cooldown > 0 else 3600
         ok = self._create_trigger(request.id, when, cancel_when, on_response, actions, request.say, request.ask,
-                                   request.rephrase, room, cooldown, request.delay)
+                                   request.rephrase, target, cooldown, request.delay)
         return pb.StatusResponse(ok=ok, message="created" if ok else "id existiert bereits")
 
     def UpdateTrigger(self, request, _context):
@@ -746,10 +746,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             when, cancel_when, on_response, actions = self._parse_trigger_json(request)
         except json.JSONDecodeError as e:
             return pb.StatusResponse(ok=False, message=f"invalid JSON: {e}")
-        room = request.room or "all"
+        target = request.target or "all"
         cooldown = request.cooldown if request.cooldown > 0 else 3600
         ok = self._update_trigger(request.id, when, cancel_when, on_response, actions, request.say, request.ask,
-                                   request.rephrase, room, cooldown, request.delay)
+                                   request.rephrase, target, cooldown, request.delay)
         return pb.StatusResponse(ok=ok, message="updated" if ok else "not found")
 
     def DeleteTrigger(self, request, _context):
@@ -1986,7 +1986,7 @@ def _trigger_to_pb(t: dict) -> pb.Trigger:
         say=t.get("say") or "",
         ask=t.get("ask") or "",
         rephrase=bool(t.get("rephrase")),
-        room=t.get("room") or "all",
+        target=t.get("room") or "all",  # DB-Spalte heißt weiterhin "room" (kein Schema-Migrationsschritt hier, #295)
         cooldown=int(t.get("cooldown") or 3600),
         delay=t.get("delay") or "",
     )

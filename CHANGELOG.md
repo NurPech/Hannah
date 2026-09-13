@@ -4,6 +4,19 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.81.0 (2026-09-13)
+### Hannah Core
+
+* Added: a trigger's announcement action can now target "this device" — the satellite a phrase trigger (e.g. "gute Nacht") was actually spoken on — instead of always going to a fixed room/group/all satellites. Only resolves for phrase-triggered actions; a state/time-triggered action requesting this falls back to being skipped (with a warning logged) since there's no originating device to target (Refs #295)
+* Changed: updated to hannah-proto 4.0.0 (Refs #295)
+
+### Hannah Proxy
+
+* Changed: updated to hannah-proto 4.0.0 (Refs #295)
+
+### Telegram
+
+* Changed: updated to hannah-proto 4.0.0 (Refs #295)
 
 ## 0.80.3 (2026-09-12)
 ### Satellite Firmware

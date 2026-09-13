@@ -2,7 +2,7 @@
 python-telegram-bot>=20.0
 
 # gRPC
-grpcio>=1.83.0
+grpcio>=1.83.1     # hannah-proto>=4.0.0's generated grpc code requires this floor
 protobuf>=7.35.0
 
 # Proto schema — published package instead of the git-submodule/local-codegen
@@ -11,7 +11,8 @@ protobuf>=7.35.0
 # 5 bump (Group.satellites/SetGroupSatellites, #56) — Core enforces an exact
 # x-proto-version match, so this MUST move in lockstep with core/requirements.txt.
 # >=3.2.0 for hannah_proto.interceptor.compat_interceptor.CompatVersionClientInterceptor (#217)
-hannah-proto>=3.2.0
+# >=4.0.0 for Trigger.room -> target (hannah-proto#5, #295) — MUST move in lockstep with core/requirements.txt
+hannah-proto>=4.0.0
 
 # Config
 pyyaml>=6.0

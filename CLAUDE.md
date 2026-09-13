@@ -111,6 +111,8 @@ ESP-IDF (C), FreeRTOS, **ESP32-S3** (AI-Beschleuniger + mehr RAM benötigt).
 C:\esp\v6.1\esp-idf\export.ps1
 ```
 
+**Coredump-Debugging:** Panics landen in der `coredump`-Partition, Abruf per Pull über `GET /debug/coredump` (kein Upload vom ESP aus), Dekodierung offline via `espcoredump.py info_corefile` gegen das passende `hannah_satellite.elf`. Seit dem Tag-Build nach #291 liegt das `.elf` (rev4 + rev5) versioniert in der Generic Package Registry und ist als Asset auf der jeweiligen GitLab-Release-Seite verlinkt — davor nur als 1-Woche-CI-Artifact verfügbar.
+
 ---
 
 ## Kommunikations-Protokoll

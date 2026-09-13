@@ -355,6 +355,31 @@ class TestPhraseTrigger:
 
         assert engine.match_phrase("nachtlicht") == "Ok."
 
+    def test_self_device_resolves_to_source_device(self, engine):
+        """#295: action.room == SELF_DEVICE löst auf das Gerät auf, das die Phrase gesprochen hat."""
+        _create(engine, "t1", {"phrase": "gute nacht"}, actions=[
+            {"say": "Schlaf gut", "target": trigger_engine_module.SELF_DEVICE},
+        ])
+
+        reply = engine.match_phrase("gute nacht", source_device="schlafzimmer-esp")
+
+        assert reply == "Ok."
+        assert engine.announced == [("schlafzimmer-esp", "Schlaf gut")]
+
+    def test_self_device_without_source_device_is_skipped(self, engine, caplog):
+        """Kein auslösendes Gerät bekannt (z.B. Telegram-Text ohne Satelliten-Bezug) →
+        Action wird übersprungen statt still auf einen Broadcast zurückzufallen."""
+        _create(engine, "t1", {"phrase": "gute nacht"}, actions=[
+            {"say": "Schlaf gut", "target": trigger_engine_module.SELF_DEVICE},
+        ])
+
+        with caplog.at_level("WARNING"):
+            reply = engine.match_phrase("gute nacht")
+
+        assert reply == "Ok."
+        assert engine.announced == []
+        assert "dieses Gerät" in caplog.text
+
     def test_rephrase_applied_to_say(self, tmp_path):
         import hannah.utils.db as db_module
         db_module.DB_PATH = str(tmp_path / "h2.db")
@@ -369,6 +394,22 @@ class TestPhraseTrigger:
                             "", True, "all", 0, "")
 
         assert eng.match_phrase("gute nacht") == "[rephrased] Gute Nacht."
+
+
+class TestSelfDeviceOnStateTrigger:
+    """#295: State-/Zeit-Trigger (_fire()-Pfad) kennen kein auslösendes Gerät —
+    SELF_DEVICE muss dort immer übersprungen werden, nie auf 'all' zurückfallen."""
+
+    def test_self_device_skipped_on_state_trigger(self, engine, caplog):
+        _create(engine, "t1", {"state": "s1", "value": True}, actions=[
+            {"say": "Schlaf gut", "target": trigger_engine_module.SELF_DEVICE},
+        ])
+
+        with caplog.at_level("WARNING"):
+            engine.on_state_update("s1", "true")
+
+        assert engine.announced == []
+        assert "dieses Gerät" in caplog.text
 
 
 class TestPersistentStateCache:

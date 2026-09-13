@@ -73,8 +73,11 @@ Schlüsselfelder im Überblick:
   cooldown                  — Mindestabstand zwischen zwei Auslösungen (Standard: 3600s)
   say                       — TTS-Ansage (Legacy; ignoriert wenn actions gesetzt ist)
   actions                   — Liste von Aktionen, ersetzt say wenn nicht-leer:
-                              [{"say": "...", "room": "..."} | {"set_state": {"id", "value"}}
+                              [{"say": "...", "target": "..."} | {"set_state": {"id", "value"}}
                                | {"set_presence": {"roomie", "state"}}]
+                              ("target" war "room" — hannah-proto#5/hannah#295; "room" wird
+                              beim Lesen noch als Fallback akzeptiert für Alt-Daten, die noch
+                              nicht über die WebUI neu gespeichert wurden)
   ask                       — Frage per TTS; Antwort wird per on_response ausgewertet
   rephrase                  — LLM formuliert say/ask/actions[].say vor der Ausgabe um
   on_response               — Regeln nach ask; condition: llm_match("Kategorie")
@@ -104,6 +107,12 @@ from hannah.models.trigger import Trigger
 log = logging.getLogger(__name__)
 
 _UMLAUT_MAP = {"ae": "ä", "oe": "ö", "ue": "ü", "Ae": "Ä", "Oe": "Ö", "Ue": "Ü"}
+
+# Sentinel-Wert für room/action.room: "dieses Gerät" (#295) — löst zur Laufzeit auf das
+# auslösende Gerät auf. Nur bei Phrase-Triggern bekannt (match_phrase reicht source_device
+# durch); State-/Zeit-Trigger (_fire()) haben kein auslösendes Gerät und überspringen die
+# Aktion in dem Fall, statt still auf einen Broadcast zurückzufallen.
+SELF_DEVICE = "__self__"
 
 # Persistenter State-Cache (siehe TriggerEngine._load_state_cache/_save_state_cache) —
 # überlebt Core-Neustarts, damit when.state-Transitionen und also/unless-Bedingungen
@@ -381,7 +390,7 @@ class TriggerEngine:
                 self._fire(trigger)
                 break
 
-    def match_phrase(self, text: str) -> Optional[str]:
+    def match_phrase(self, text: str, source_device: str = "") -> Optional[str]:
         """
         Prüft, ob text eine when.phrase-Bedingung trifft — vom Sprach-/Text-Pfad synchron
         aufgerufen, VOR NLU (Nachfolger von RoutineManager.match(), #139).
@@ -390,6 +399,10 @@ class TriggerEngine:
         set_state in anderen Räumen) und 'say' wird — anders als beim async _fire()-Pfad —
         nicht announced, sondern direkt als Antworttext zurückgegeben. Kein Cooldown: ein
         bewusst gesprochener Befehl soll jedes Mal wirken, nicht gedrosselt werden.
+
+        source_device: Satellit, auf dem die Phrase gesprochen wurde (leer wenn unbekannt,
+        z.B. Telegram/Text-Kanäle ohne Satelliten-Bezug) — löst room=SELF_DEVICE ("dieses
+        Gerät", #295) in den Actions auf.
         """
         norm = _normalize(text)
         with self._lock:
@@ -410,7 +423,7 @@ class TriggerEngine:
 
                 for action in (trigger.get("actions") or []):
                     self._execute_trigger_action_entry(action, tid, trigger.get("room", "all"),
-                                                          bool(trigger.get("rephrase")))
+                                                          bool(trigger.get("rephrase")), source_device)
 
                 say = trigger.get("say", "").strip()
                 if say and trigger.get("rephrase") and self._rephrase_fn:
@@ -488,17 +501,32 @@ class TriggerEngine:
         else:
             self._execute_trigger_action(trigger, room)
 
-    def _execute_trigger_action(self, trigger: dict, room: str) -> None:
+    def _resolve_self_target(self, room: str, source_device: str, tid: str) -> Optional[str]:
+        """Löst SELF_DEVICE ("dieses Gerät", #295) auf das auslösende Gerät auf. Gibt room
+        unverändert zurück wenn kein Sentinel, None wenn Sentinel aber kein auslösendes Gerät
+        bekannt ist (State-/Zeit-Trigger) — der Aufrufer überspringt die Aktion in dem Fall,
+        statt still auf einen Broadcast zurückzufallen."""
+        if room != SELF_DEVICE:
+            return room
+        if source_device:
+            return source_device
+        log.warning(f"Trigger '{tid}': Ziel 'dieses Gerät' ohne auslösendes Gerät (State-/Zeit-Trigger) — Aktion übersprungen.")
+        return None
+
+    def _execute_trigger_action(self, trigger: dict, room: str, source_device: str = "") -> None:
         """Führt die ask/actions/say-Aktion eines Triggers aus (ohne Cooldown-Prüfung)."""
         tid = trigger.get("id", "?")
         ask = trigger.get("ask", "").strip()
         say = trigger.get("say", "").strip()
 
         if ask:
+            target = self._resolve_self_target(room, source_device, tid)
+            if target is None:
+                return
             if not self._ask_fn:
                 log.warning(f"Trigger '{tid}': 'ask' definiert aber ask_fn fehlt — Fallback auf say.")
                 if say:
-                    self._announce(room, say)
+                    self._announce(target, say)
                 return
             text = ask
             if trigger.get("rephrase") and self._rephrase_fn:
@@ -507,9 +535,9 @@ class TriggerEngine:
                 except Exception as e:
                     log.warning(f"Trigger '{tid}': LLM-Rephrase fehlgeschlagen, nutze Original: {e}")
             on_response = trigger.get("on_response", [])
-            log.info(f"Trigger '{tid}' fragt → [{room}] \"{text}\"")
+            log.info(f"Trigger '{tid}' fragt → [{target}] \"{text}\"")
             try:
-                self._ask_fn(room, text, lambda answer, _tid=tid, _room=room, _rules=on_response:
+                self._ask_fn(target, text, lambda answer, _tid=tid, _room=target, _rules=on_response:
                              self._process_response(answer, _tid, _room, _rules))
             except Exception as e:
                 log.error(f"Trigger '{tid}': ask_fn fehlgeschlagen: {e}")
@@ -519,11 +547,15 @@ class TriggerEngine:
         if actions:
             rephrase = bool(trigger.get("rephrase"))
             for action in actions:
-                self._execute_trigger_action_entry(action, tid, room, rephrase)
+                self._execute_trigger_action_entry(action, tid, room, rephrase, source_device)
             return
 
         if not say:
             log.warning(f"Trigger '{tid}': weder 'say'/'actions' noch 'ask' definiert.")
+            return
+
+        target = self._resolve_self_target(room, source_device, tid)
+        if target is None:
             return
 
         text = say
@@ -533,28 +565,31 @@ class TriggerEngine:
             except Exception as e:
                 log.warning(f"Trigger '{tid}': LLM-Rephrase fehlgeschlagen, nutze Original: {e}")
 
-        log.info(f"Trigger '{tid}' ausgelöst → [{room}] \"{text}\"")
+        log.info(f"Trigger '{tid}' ausgelöst → [{target}] \"{text}\"")
         try:
-            self._announce(room, text)
+            self._announce(target, text)
         except Exception as e:
             log.error(f"Trigger '{tid}': Announcement fehlgeschlagen: {e}")
 
-    def _execute_trigger_action_entry(self, action: dict, tid: str, room: str, rephrase: bool) -> None:
+    def _execute_trigger_action_entry(self, action: dict, tid: str, room: str, rephrase: bool,
+                                       source_device: str = "") -> None:
         """Führt einen einzelnen Eintrag aus trigger['actions'] aus (say und/oder set_state)."""
         say = (action.get("say") or "").strip()
         if say:
-            action_room = action.get("room") or room
-            text = say
-            if rephrase and self._rephrase_fn:
+            action_room = action.get("target") or action.get("room") or room
+            target = self._resolve_self_target(action_room, source_device, tid)
+            if target is not None:
+                text = say
+                if rephrase and self._rephrase_fn:
+                    try:
+                        text = self._rephrase_fn(say) or say
+                    except Exception as e:
+                        log.warning(f"Trigger '{tid}': LLM-Rephrase fehlgeschlagen, nutze Original: {e}")
+                log.info(f"Trigger '{tid}' Aktion → [{target}] \"{text}\"")
                 try:
-                    text = self._rephrase_fn(say) or say
+                    self._announce(target, text)
                 except Exception as e:
-                    log.warning(f"Trigger '{tid}': LLM-Rephrase fehlgeschlagen, nutze Original: {e}")
-            log.info(f"Trigger '{tid}' Aktion → [{action_room}] \"{text}\"")
-            try:
-                self._announce(action_room, text)
-            except Exception as e:
-                log.error(f"Trigger '{tid}': Announcement fehlgeschlagen: {e}")
+                    log.error(f"Trigger '{tid}': Announcement fehlgeschlagen: {e}")
 
         set_state = action.get("set_state")
         if set_state:
