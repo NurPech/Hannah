@@ -153,6 +153,12 @@ static i2s_chan_handle_t s_rx_chan    = NULL;
 static i2s_chan_handle_t s_tx_chan    = NULL;
 static RingbufHandle_t   s_spk_ringbuf = NULL;
 static volatile bool     s_ptt_active        = false;
+/* PTT durchbricht bewusst den Hardware-Mute (#296): nur mic_task selbst
+ * schreibt/liest das, kein ISR-Zugriff nötig. Mic-Stromversorgung (GPIO,
+ * siehe on_hw_mute()) wird nur für die Dauer des Tastendrucks wieder
+ * zugeschaltet, der Mute-Zustand selbst (hannah_net_is_muted()) bleibt
+ * unverändert bestehen. */
+static bool              s_ptt_mic_power_override = false;
 static volatile bool     s_streaming_paused  = false;
 static volatile bool     s_wakeword_paused   = false;
 /* Vollständige Hardware-Pause für OTA (#193) — anders als s_wakeword_paused
@@ -1086,14 +1092,35 @@ static void mic_task(void *arg)
             continue;
         }
 
-        if (hannah_net_is_muted()) {
+        bool muted = hannah_net_is_muted();
+
+        /* PTT durchbricht bewusst den Mute (#296) — physische Anwesenheit +
+         * aktive Aktion direkt am Gerät. Mic-Stromversorgung wird nur für die
+         * Dauer des Tastendrucks wieder zugeschaltet, der Mute-Zustand selbst
+         * (hannah_net_is_muted(), MQTT-Retained-State, LED) bleibt unberührt. */
+        if (muted && s_ptt_active) {
+            if (!s_ptt_mic_power_override) {
+                gpio_set_level(CONFIG_HANNAH_MUTE_HW_GPIO, 1);
+                s_ptt_mic_power_override = true;
+            }
+        } else if (s_ptt_mic_power_override) {
+            /* Override endet entweder weil PTT losgelassen wurde (weiterhin
+             * muted → Strom aktiv wieder kappen) oder weil zwischenzeitlich
+             * komplett entmutet wurde (Strom bleibt an, das übernimmt bereits
+             * on_hw_mute() über den normalen Mute-Toggle-Pfad). */
+            if (muted)
+                gpio_set_level(CONFIG_HANNAH_MUTE_HW_GPIO, 0);
+            s_ptt_mic_power_override = false;
+        }
+
+        if (muted && !s_ptt_active && state != AUDIO_STATE_STREAMING) {
             state = AUDIO_STATE_IDLE;
             if (!s_sampling_mode)
                 update_idle_led();
             was_ptt = false;
             if (!s_sampling_mode) {
                 vTaskDelay(pdMS_TO_TICKS(1));
-                continue;  /* Im Sampling-Mode: Audio trotz Mute streamen */
+                continue;  /* Im Sampling-Mode: Audio trotz Mute streamen; PTT: siehe oben */
             }
         }
 

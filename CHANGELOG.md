@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.81.1 (2026-09-13)
+### Satellite Firmware
+
+* Added: pressing PTT now works even while the satellite is muted — the hardware mic power is switched back on for the duration of the button press, since standing right at the device and pressing PTT is an intentional action. The mute state itself (LED, MQTT state) stays unchanged (Refs #296)
+
 ## 0.81.0 (2026-09-13)
 ### Hannah Core
 
