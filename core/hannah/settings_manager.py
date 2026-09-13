@@ -110,6 +110,15 @@ DEFAULT_VOICE_ENROLLMENT_SETTINGS: dict = {
     "max_questions": 10,
 }
 
+# Presence-Fusion (hannah#294): globale Fusionsparameter, gelten für alle presence_sources-
+# Einträge. Pro-Quelle-Konfidenzen (home_confidence/away_confidence) leben nicht hier,
+# sondern eigenständig pro Zeile in presence_sources (hannah.presence_sources.PresenceSourceManager)
+# — default_confidence ist nur der Vorbelegungswert beim Anlegen einer neuen Quelle.
+DEFAULT_PRESENCE_SETTINGS: dict = {
+    "default_confidence": 0.3,
+    "grace_period_seconds": 120,
+}
+
 
 class SettingsManager:
     def __init__(self, db: Callable):
@@ -182,4 +191,8 @@ class SettingsManager:
         if not self.get_settings_dict("voice_enrollment"):
             cat = self.ensure_category("voice_enrollment")
             for name, value in DEFAULT_VOICE_ENROLLMENT_SETTINGS.items():
+                self.create_setting(cat, name, value)
+        if not self.get_settings_dict("presence"):
+            cat = self.ensure_category("presence")
+            for name, value in DEFAULT_PRESENCE_SETTINGS.items():
                 self.create_setting(cat, name, value)

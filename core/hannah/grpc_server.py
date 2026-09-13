@@ -162,6 +162,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         create_car: Optional[Callable[..., Optional[dict]]] = None,              # (topic_prefix, home_address, owner_user_ids) → dict | None
         update_car: Optional[Callable[..., bool]] = None,                        # (id, topic_prefix, home_address, owner_user_ids) → bool
         delete_car: Optional[Callable[[int], bool]] = None,                      # (id) → bool
+        get_presence_source_records: Optional[Callable[[], list]] = None,        # () → [{id, user_id, source_type, reference, home_confidence, away_confidence, enabled}]
+        create_presence_source: Optional[Callable[..., Optional[dict]]] = None,  # (user_id, source_type, reference, home_confidence, away_confidence, enabled) → dict | None
+        update_presence_source: Optional[Callable[..., bool]] = None,            # (id, user_id, source_type, reference, home_confidence, away_confidence, enabled) → bool
+        delete_presence_source: Optional[Callable[[int], bool]] = None,          # (id) → bool
         get_residents: Optional[Callable[[], list]] = None,                      # () → [Resident]
         on_automation_register: Optional[Callable[[str], list]] = None,          # (automation) → [user_id] currently enabled
         list_activity: Optional[Callable[..., tuple]] = None,                    # (requestor_id, filter_user_id, page_size, before_id) → (list[dict], has_more)
@@ -242,6 +246,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._create_car                = create_car or (lambda *_a, **_k: None)
         self._update_car                = update_car or (lambda *_: False)
         self._delete_car                = delete_car or (lambda *_: False)
+        self._get_presence_source_records = get_presence_source_records or (lambda: [])
+        self._create_presence_source      = create_presence_source or (lambda *_a, **_k: None)
+        self._update_presence_source      = update_presence_source or (lambda *_: False)
+        self._delete_presence_source      = delete_presence_source or (lambda *_: False)
         self._get_residents             = get_residents or (lambda: [])
         self._on_automation_register    = on_automation_register or (lambda _automation: [])
         self._list_activity             = list_activity or (lambda *_: ([], False))
@@ -858,6 +866,34 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
 
     def DeleteCar(self, request, _context):
         ok = self._delete_car(request.id)
+        return pb.StatusResponse(ok=ok, message="deleted" if ok else "not found")
+
+    # ------------------------------------------------------------------
+    # Presence Sources (Admin-UI, hannah#294 — presence fusion)
+
+    def GetPresenceSources(self, _request, _context):
+        return pb.GetPresenceSourcesResponse(
+            presence_sources=[_presence_source_to_pb(s) for s in self._get_presence_source_records()]
+        )
+
+    def CreatePresenceSource(self, request, _context):
+        result = self._create_presence_source(
+            request.user_id, request.source_type, request.reference,
+            request.home_confidence, request.away_confidence, request.enabled,
+        )
+        if result is None:
+            return pb.CreatePresenceSourceResponse(ok=False, message="konnte nicht angelegt werden")
+        return pb.CreatePresenceSourceResponse(ok=True, id=result["id"], message="created")
+
+    def UpdatePresenceSource(self, request, _context):
+        ok = self._update_presence_source(
+            request.id, request.user_id, request.source_type, request.reference,
+            request.home_confidence, request.away_confidence, request.enabled,
+        )
+        return pb.StatusResponse(ok=ok, message="updated" if ok else "not found")
+
+    def DeletePresenceSource(self, request, _context):
+        ok = self._delete_presence_source(request.id)
         return pb.StatusResponse(ok=ok, message="deleted" if ok else "not found")
 
     def TriggerFirmwareUpdate(self, request, _context):
@@ -2056,6 +2092,18 @@ def _ble_tag_to_pb(t: dict) -> pb.BleTag:
         mac_address=t.get("mac_address") or "",
         label=t.get("label") or "",
         user_id=t.get("user_id") or 0,
+    )
+
+
+def _presence_source_to_pb(s: dict) -> pb.PresenceSource:
+    return pb.PresenceSource(
+        id=s["id"],
+        user_id=s.get("user_id") or 0,
+        source_type=s.get("source_type") or "",
+        reference=s.get("reference") or "",
+        home_confidence=s.get("home_confidence") or 0.0,
+        away_confidence=s.get("away_confidence") or 0.0,
+        enabled=bool(s.get("enabled")),
     )
 
 

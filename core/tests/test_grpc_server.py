@@ -4,6 +4,8 @@ import queue
 import sqlite3
 import threading
 import time
+
+import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -15,10 +17,10 @@ from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
 from hannah.weather import WeatherCache
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand, StartVoiceEnrollmentRequest
+from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreatePresenceSourceRequest, UpdatePresenceSourceRequest, DeletePresenceSourceRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, EnumValues, StateType, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand, StartVoiceEnrollmentRequest
 from hannah.satellite_manager import SatellitePermissionError
 
-def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_residents=None,get_devices=None):
+def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_presence_source_records=None,create_presence_source=None,update_presence_source=None,delete_presence_source=None,get_residents=None,get_devices=None):
     return HannahServicer(
         user_manager=user_manager or MagicMock(),
         satellite_manager=satellite_manager or MagicMock(),
@@ -65,6 +67,10 @@ def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handl
         create_car=create_car,
         update_car=update_car,
         delete_car=delete_car,
+        get_presence_source_records=get_presence_source_records,
+        create_presence_source=create_presence_source,
+        update_presence_source=update_presence_source,
+        delete_presence_source=delete_presence_source,
         get_residents=get_residents,
     )
 
@@ -1024,6 +1030,65 @@ class TestBleTagRpcs:
         response = servicer.DeleteBleTag(DeleteBleTagRequest(id=5), None)
 
         delete_ble_tag.assert_called_once_with(5)
+        assert response.ok is True
+
+class TestPresenceSourceRpcs:
+    """hannah#294 — Verdrahtung auf PresenceSourceManager.get_source_records/
+    create_source/update_source/delete_source (eigenes Modell statt Settings-JSON-Blob)."""
+
+    def test_get_presence_sources(self):
+        get_presence_source_records = MagicMock(return_value=[
+            {"id": 1, "user_id": 3, "source_type": "ble_tag", "reference": "aa:bb",
+             "home_confidence": 0.3, "away_confidence": 1.0, "enabled": 1},
+        ])
+        servicer = _make_server(get_presence_source_records=get_presence_source_records)
+
+        response = servicer.GetPresenceSources(None, None)
+
+        assert len(response.presence_sources) == 1
+        s = response.presence_sources[0]
+        assert s.id == 1
+        assert s.user_id == 3
+        assert s.source_type == "ble_tag"
+        assert s.reference == "aa:bb"
+        assert s.home_confidence == pytest.approx(0.3)
+        assert s.away_confidence == pytest.approx(1.0)
+        assert s.enabled is True
+
+    def test_create_presence_source_ok(self):
+        create_presence_source = MagicMock(return_value={"id": 5})
+        servicer = _make_server(create_presence_source=create_presence_source)
+
+        response = servicer.CreatePresenceSource(CreatePresenceSourceRequest(
+            user_id=3, source_type="ble_tag", reference="aa:bb",
+            home_confidence=0.3, away_confidence=1.0, enabled=True,
+        ), None)
+
+        create_presence_source.assert_called_once_with(3, "ble_tag", "aa:bb", pytest.approx(0.3), pytest.approx(1.0), True)
+        assert response.ok is True
+        assert response.id == 5
+
+    def test_create_presence_source_failed(self):
+        servicer = _make_server(create_presence_source=MagicMock(return_value=None))
+
+        response = servicer.CreatePresenceSource(CreatePresenceSourceRequest(user_id=3), None)
+
+        assert response.ok is False
+
+    def test_update_presence_source_not_found(self):
+        servicer = _make_server(update_presence_source=MagicMock(return_value=False))
+
+        response = servicer.UpdatePresenceSource(UpdatePresenceSourceRequest(id=99), None)
+
+        assert response.ok is False
+
+    def test_delete_presence_source_ok(self):
+        delete_presence_source = MagicMock(return_value=True)
+        servicer = _make_server(delete_presence_source=delete_presence_source)
+
+        response = servicer.DeletePresenceSource(DeletePresenceSourceRequest(id=5), None)
+
+        delete_presence_source.assert_called_once_with(5)
         assert response.ok is True
 
 class TestCarRpcs:

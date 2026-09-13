@@ -153,6 +153,19 @@ CREATE TABLE IF NOT EXISTS "ble_tags" (
 	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS "presence_sources" (
+	"id"	INTEGER NOT NULL,
+	"user_id"	INTEGER NOT NULL,
+	"source_type"	TEXT NOT NULL,
+	"reference"	TEXT NOT NULL,
+	"home_confidence"	REAL NOT NULL DEFAULT 1.0,
+	"away_confidence"	REAL NOT NULL DEFAULT 1.0,
+	"enabled"	INTEGER NOT NULL DEFAULT 1,
+	"created_at"	TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY("id" AUTOINCREMENT),
+	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS "cars" (
 	"id"	INTEGER NOT NULL,
 	"name"	TEXT,

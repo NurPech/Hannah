@@ -32,6 +32,8 @@ from hannah import config as config_mod
 from hannah.car_tracker import CarManager, CarTracker
 from hannah.car_registry import CarRegistry
 from hannah.ble_tags import BleTagManager
+from hannah.presence_sources import PresenceSourceManager
+from hannah.presence_manager import PresenceManager
 from hannah.grpc_server import GrpcServer, HannahServicer, make_car_parked_event, make_firmware_event, make_resident_event, make_system_notification_event, pb
 from hannah.iobroker import IoBrokerClient
 from hannah.mqtt_handler import MQTTHandler
@@ -168,9 +170,20 @@ def main():
     settings_manager = SettingsManager(get_db)
     ble_tag_manager = BleTagManager(get_db)
     car_registry = CarRegistry(get_db)
+    presence_source_manager = PresenceSourceManager(get_db)
     # nlu/llm.system_prompt automatisch mit generischen Defaults befüllen, falls die
     # Kategorie noch leer ist (Neuinstallation, #114/#115).
     settings_manager.seed_defaults()
+
+    # Presence-Fusion (#294): WLAN-/BLE-Rohsignale statt zwei unkoordinierter Presence-
+    # Schreiber (Residents-Adapter per Foreign-State + Hannah per BLE-Sichtung, siehe
+    # main.py's _on_ble_location_change/_on_state_update weiter unten für die Signal-Einspeisung).
+    _presence_cfg = settings_manager.get_settings_dict("presence")
+    presence_manager = PresenceManager(
+        get_db,
+        user_lookup=_user_manager.get_user_by_id,
+        grace_period_seconds=_presence_cfg.get("grace_period_seconds", 120),
+    )
 
     # Hannah selbst als Roomie verlinken (für Trust-Level/Announcements über die
     # residents-Bridge) — einmalig, danach bereits über linked_accounts auffindbar.
@@ -1493,14 +1506,12 @@ def main():
         mqtt_handler.publish_raw(f"hannah/ble/{tag.label}/location", payload)
         grpc_servicer.agent_ble_update(tag.label, tag.mac, room_str, sat_str, rssi)
 
-        # BLE-Sichtung ist ein starkes "zuhause"-Signal, aber kein zuverlässiges
-        # "weg"-Signal (schwacher Empfang ≠ Haus verlassen) — daher nur bei aktiver
-        # Sichtung (room gesetzt) presence_state auf HOME setzen, nie zurücksetzen.
+        # BLE-Sichtung geht seit #294 durch die Presence-Fusion statt direkt user.presence
+        # zu setzen — dort wird sie mit anderen Quellen (z.B. WLAN) gegeneinander gewichtet
+        # statt bedingungslos "home" zu erzwingen. Nur bei aktiver Sichtung (room gesetzt),
+        # kein explizites "weg" von hier aus (schwacher Empfang ≠ Haus verlassen).
         if tag.user_id and room is not None:
-            user = _user_manager.get_user_by_id(tag.user_id)
-            if user is None:
-                return
-            user.presence = True
+            presence_manager.on_ble_sighting(tag.user_id)
 
     ble_engine.set_location_change_handler(_on_ble_location_change)
     mqtt_handler.set_ble_report_handler(ble_engine.on_report)
@@ -1646,7 +1657,7 @@ def main():
         grpc_servicer.timer_cancel(timer_id)
 
     def _on_trigger_change() -> None:
-        grpc_servicer.agent_watch_more(list(trigger_engine.get_referenced_state_ids()))
+        grpc_servicer.agent_watch_more(list(trigger_engine.get_referenced_state_ids() | presence_manager.get_referenced_state_ids()))
 
     trigger_engine = TriggerEngine(
         db=get_db,
@@ -1664,6 +1675,7 @@ def main():
     def _on_state_update(state_id: str, raw: str) -> None:
         iobroker.handle_state_update(state_id, raw)
         trigger_engine.on_state_update(state_id, raw)
+        presence_manager.on_state_update(state_id, raw)
 
     def _json_to_raw(json_value: str) -> str:
         """Decode a JSON-encoded gRPC state value to a plain string for legacy handlers."""
@@ -2066,9 +2078,9 @@ def main():
             grpc_servicer.agent_satellite_deleted(device_id, room_id)
 
     def _on_agent_connect():
-        state_ids = trigger_engine.get_referenced_state_ids()
+        state_ids = trigger_engine.get_referenced_state_ids() | presence_manager.get_referenced_state_ids()
         if state_ids:
-            log.info(f"[grpc] ioBroker-Adapter connected — WatchMore: {len(state_ids)} trigger states")
+            log.info(f"[grpc] ioBroker-Adapter connected — WatchMore: {len(state_ids)} states (trigger + presence)")
             grpc_servicer.agent_watch_more(list(state_ids))
         for tag, room, satellite, rssi in ble_engine.get_current_locations():
             grpc_servicer.agent_ble_update(tag.label, tag.mac, room or "", satellite or "", rssi)
@@ -2163,6 +2175,10 @@ def main():
         create_car=car_registry.create_car,
         update_car=car_registry.update_car,
         delete_car=car_registry.delete_car,
+        get_presence_source_records=presence_source_manager.get_source_records,
+        create_presence_source=presence_source_manager.create_source,
+        update_presence_source=presence_source_manager.update_source,
+        delete_presence_source=presence_source_manager.delete_source,
         # `residents` ist erst weiter unten definiert (ResidentsClient) — Lambda löst das
         # Forward-Reference-Problem (gleiches Muster wie get_satellites oben mit grpc_servicer).
         get_residents=lambda: residents.all_residents(),
@@ -2477,6 +2493,18 @@ def main():
 
     residents.announce_online()
     log.info(f"Residents: Hannah online ({residents.hannah_name})")
+
+    # Presence-Fusion (#294): periodischer Re-Check, damit BLE-Staleness und ablaufende
+    # Grace-Perioden auch ohne neu eintreffende Signale zum Tragen kommen.
+    def _presence_tick_loop():
+        while True:
+            time.sleep(15.0)
+            try:
+                presence_manager.tick()
+            except Exception:
+                log.exception("PresenceManager.tick() fehlgeschlagen")
+
+    threading.Thread(target=_presence_tick_loop, daemon=True, name="presence-tick").start()
 
     # ------------------------------------------------------------------
     # gRPC-Server starten

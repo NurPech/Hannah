@@ -6,6 +6,7 @@ import hannah.utils.db as db_module
 from hannah.settings_manager import (
     DEFAULT_AUTOMATION_WORDS,
     DEFAULT_NLU_SETTINGS,
+    DEFAULT_PRESENCE_SETTINGS,
     DEFAULT_VOICE_ENROLLMENT_SETTINGS,
     SettingsManager,
 )
@@ -108,6 +109,21 @@ class TestSeedDefaults:
 
         assert manager.get_settings_dict("voice_enrollment") == {"target_speech_s": 5.0}
 
+    def test_seeds_presence_when_empty(self, manager):
+        """hannah#294: globale Presence-Fusion-Parameter (default_confidence,
+        grace_period_seconds) laufen wie nlu/llm über SettingsManager."""
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("presence") == DEFAULT_PRESENCE_SETTINGS
+
+    def test_does_not_overwrite_existing_presence_values(self, manager):
+        cat_id = manager.ensure_category("presence")
+        manager.create_setting(cat_id, "grace_period_seconds", 60)
+
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("presence") == {"grace_period_seconds": 60}
+
     def test_idempotent_on_repeated_calls(self, manager):
         manager.seed_defaults()
         manager.seed_defaults()
@@ -115,8 +131,9 @@ class TestSeedDefaults:
         assert manager.get_settings_dict("nlu") == DEFAULT_NLU_SETTINGS
         assert manager.get_settings_dict("automations") == DEFAULT_AUTOMATION_WORDS
         assert manager.get_settings_dict("voice_enrollment") == DEFAULT_VOICE_ENROLLMENT_SETTINGS
+        assert manager.get_settings_dict("presence") == DEFAULT_PRESENCE_SETTINGS
         # + llm.system_prompt
         assert len(manager.get_settings()) == (
             len(DEFAULT_NLU_SETTINGS) + len(DEFAULT_AUTOMATION_WORDS)
-            + len(DEFAULT_VOICE_ENROLLMENT_SETTINGS) + 1
+            + len(DEFAULT_VOICE_ENROLLMENT_SETTINGS) + len(DEFAULT_PRESENCE_SETTINGS) + 1
         )

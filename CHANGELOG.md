@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.82.0 (2026-09-13)
+### Hannah Core
+
+* Added: Hannah is now the sole writer of a person's presence status — WLAN and BLE raw signals are fused per person (with per-source confidence and a hysteresis grace period) instead of BLE and the ioBroker Residents adapter's WLAN-based coupling writing the same status independently, which caused it to flap on short dropouts (Refs #294)
+* Changed: updated to hannah-proto 4.1.0 (Refs #294)
+
 ## 0.81.1 (2026-09-13)
 ### Satellite Firmware
 
