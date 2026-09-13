@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.82.2 (2026-09-13)
+### Hannah Core
+
+* Fixed: the presence-fusion grace-period timeout could flip someone marked asleep back to "away" on a brief signal dropout (e.g. a phone in doze mode overnight), overwriting the night flag — an automatic presence source can no longer override an explicit sleep status (Refs #294)
+
 ## 0.82.1 (2026-09-13)
 ### Hannah Core
 

@@ -67,7 +67,11 @@ class PresenceManager:
     # Signal-Eingänge
 
     def on_state_update(self, state_id: str, raw_value: str) -> None:
-        value = raw_value.strip().lower() in ("true", "1", "on")
+        # Nicht nur bool-States (true/false): das Residents-Adapter-Präsenzfeld z.B. ist
+        # tristate (0=weg, 1=wach, 2=schlafend) — 1 UND 2 bedeuten "zuhause". Daher als
+        # Home werten, was nicht explizit "weg"/"aus"/falsy ist, statt nur "true"/"1"/"on"
+        # als Home zu akzeptieren (das hätte 2/schlafend fälschlich als "weg" gezählt).
+        value = raw_value.strip().lower() not in ("0", "false", "off", "")
         now = time.time()
         matched_user_ids: set[int] = set()
         with self._lock:
@@ -137,6 +141,14 @@ class PresenceManager:
     def _apply(self, user_id: int, is_home: bool) -> None:
         user = self._user_lookup(user_id)
         if user is None:
+            return
+        # Schlaf-Status (residents.*.presence.night, gesetzt über den expliziten "ich gehe
+        # schlafen"-Pfad, siehe main.py's _trigger_set_presence -> residents.set_user_asleep)
+        # geht nie über user.presence/user.asleep, daher weiß die Fusion sonst nichts davon.
+        # Ohne diese Sperre würde ein nächtlicher Signalausfall (Handy im Doze-Mode, BLE
+        # kurz nicht gesichtet) nach der Grace-Period fälschlich "weg" auslösen und damit
+        # den Night-Flag in ioBroker zurücksetzen, obwohl die Person nur schläft.
+        if not is_home and user.asleep:
             return
         if user.presence != is_home:
             user.presence = is_home

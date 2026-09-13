@@ -30,8 +30,9 @@ class _FakeUser:
     """Test-Double für hannah.models.user.User — presence_manager kennt nur die
     presence-Property, nicht arrival/departure-Events (die hängen an der echten
     User.presence-Property, siehe models/user.py, hier nicht relevant)."""
-    def __init__(self):
+    def __init__(self, asleep=False):
         self.presence = False
+        self.asleep = asleep
 
 
 @pytest.fixture
@@ -102,6 +103,35 @@ class TestFusion:
         # Away-Signal allein flippt nicht sofort — Grace-Period (hier absichtlich lang) muss ablaufen
         assert fake.presence is True
 
+    def test_tristate_residents_value_asleep_counts_as_home(self, db, sources):
+        """Residents-Adapter-Präsenzfeld: 0=weg, 1=wach, 2=schlafend — 1 UND 2 sind
+        'zuhause'. Ein reiner true/false-Parser hätte "2" fälschlich als weg gewertet."""
+        user_id = _create_user(db)
+        sources.create_source(user_id, "iobroker_state", "residents.0.person.leonie.state", 1.0, 0.3)
+        fake = _FakeUser()
+        pm = self._make(db, user_id, fake, grace_period_seconds=999)
+
+        pm.on_state_update("residents.0.person.leonie.state", "1")
+        assert fake.presence is True
+
+        pm.on_state_update("residents.0.person.leonie.state", "2")
+        assert fake.presence is True  # schlafend bleibt zuhause
+
+    def test_tristate_residents_value_zero_counts_as_away(self, db, sources):
+        user_id = _create_user(db)
+        sources.create_source(user_id, "iobroker_state", "residents.0.person.leonie.state", 1.0, 0.3)
+        fake = _FakeUser()
+        pm = self._make(db, user_id, fake, grace_period_seconds=0.2)
+
+        pm.on_state_update("residents.0.person.leonie.state", "1")
+        pm.on_state_update("residents.0.person.leonie.state", "0")
+        assert fake.presence is True  # Grace-Period läuft gerade erst an
+
+        time.sleep(0.3)
+        pm.tick()
+
+        assert fake.presence is False
+
     def test_away_after_grace_period_elapses(self, db, sources):
         user_id = _create_user(db)
         sources.create_source(user_id, "iobroker_state", "wlan.present", 1.0, 0.3)
@@ -116,6 +146,24 @@ class TestFusion:
         pm.tick()
 
         assert fake.presence is False
+
+    def test_asleep_user_never_gets_flipped_to_away(self, db, sources):
+        """"Ich gehe schlafen" läuft über residents.set_user_asleep() direkt, nicht über
+        user.presence/user.asleep — die Fusion weiß nichts davon außer über user.asleep.
+        Ein nächtlicher Signalausfall darf den Night-Flag nicht auf "weg" zurücksetzen."""
+        user_id = _create_user(db)
+        sources.create_source(user_id, "iobroker_state", "wlan.present", 1.0, 0.3)
+        fake = _FakeUser(asleep=True)
+        fake.presence = True  # war zuhause, bevor sie schlafen ging
+        pm = self._make(db, user_id, fake, grace_period_seconds=0.2)
+
+        pm.on_state_update("wlan.present", "true")
+        pm.on_state_update("wlan.present", "false")  # Handy im Doze-Mode
+
+        time.sleep(0.3)
+        pm.tick()
+
+        assert fake.presence is True  # bleibt "home", trotz abgelaufener Grace-Period
 
     def test_stale_ble_reading_counts_as_away(self, db, sources):
         """BLE ist push-only (keine explizite 'weg'-Meldung) — eine Sichtung, die älter
