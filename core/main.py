@@ -1656,8 +1656,29 @@ def main():
     def _cancel_trigger_timer(timer_id: str) -> None:
         grpc_servicer.timer_cancel(timer_id)
 
-    def _on_trigger_change() -> None:
+    def _refresh_watch_more() -> None:
         grpc_servicer.agent_watch_more(list(trigger_engine.get_referenced_state_ids() | presence_manager.get_referenced_state_ids()))
+
+    # PresenceSource-CRUD muss _refresh_watch_more() genauso anstoßen wie eine Trigger-
+    # Änderung — sonst sieht ein bereits verbundener Adapter eine neu angelegte
+    # iobroker_state-Quelle erst beim nächsten Reconnect (#294).
+    def _create_presence_source(*args, **kwargs):
+        result = presence_source_manager.create_source(*args, **kwargs)
+        if result is not None:
+            _refresh_watch_more()
+        return result
+
+    def _update_presence_source(*args, **kwargs):
+        ok = presence_source_manager.update_source(*args, **kwargs)
+        if ok:
+            _refresh_watch_more()
+        return ok
+
+    def _delete_presence_source(*args, **kwargs):
+        ok = presence_source_manager.delete_source(*args, **kwargs)
+        if ok:
+            _refresh_watch_more()
+        return ok
 
     trigger_engine = TriggerEngine(
         db=get_db,
@@ -1669,7 +1690,7 @@ def main():
         set_presence_fn=_trigger_set_presence,
         schedule_timer_fn=_schedule_trigger_timer,
         cancel_timer_fn=_cancel_trigger_timer,
-        on_change=_on_trigger_change,
+        on_change=_refresh_watch_more,
     )
 
     def _on_state_update(state_id: str, raw: str) -> None:
@@ -2176,9 +2197,9 @@ def main():
         update_car=car_registry.update_car,
         delete_car=car_registry.delete_car,
         get_presence_source_records=presence_source_manager.get_source_records,
-        create_presence_source=presence_source_manager.create_source,
-        update_presence_source=presence_source_manager.update_source,
-        delete_presence_source=presence_source_manager.delete_source,
+        create_presence_source=_create_presence_source,
+        update_presence_source=_update_presence_source,
+        delete_presence_source=_delete_presence_source,
         # `residents` ist erst weiter unten definiert (ResidentsClient) — Lambda löst das
         # Forward-Reference-Problem (gleiches Muster wie get_satellites oben mit grpc_servicer).
         get_residents=lambda: residents.all_residents(),

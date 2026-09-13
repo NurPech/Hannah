@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.82.1 (2026-09-13)
+### Hannah Core
+
+* Fixed: a newly configured presence-fusion source (WLAN state) only started being tracked after the ioBroker adapter's next reconnect instead of immediately — creating/editing/removing a source now pushes the updated watch list right away (Refs #294)
+
 ## 0.82.0 (2026-09-13)
 ### Hannah Core
 
