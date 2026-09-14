@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.82.3 (2026-09-14)
+### Hannah Core
+
+* Fixed: the 0.82.2 guard against presence fusion overriding an explicit sleep status only blocked fusion deciding "away" — a fusion decision of "home" (e.g. a delayed arrival confirmation landing right after a "gute Nacht" push) still silently downgraded the night flag back to plain "home". The guard now blocks fusion from touching presence in either direction while asleep is set (Refs #299)
+
 ## 0.82.2 (2026-09-13)
 ### Hannah Core
 

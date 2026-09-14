@@ -165,6 +165,21 @@ class TestFusion:
 
         assert fake.presence is True  # bleibt "home", trotz abgelaufener Grace-Period
 
+    def test_asleep_user_never_gets_flipped_from_night_to_plain_home(self, db, sources):
+        """Spiegelfall zu test_asleep_user_never_gets_flipped_to_away (#299): eine
+        (z.B. verzögerte) Ankunfts-Bestätigung, die kurz nach dem expliziten "asleep"-Push
+        eintrifft, darf presence nicht neu auf True setzen — sonst feuert arrival und
+        residents_manager schreibt "home" (1) über den gerade gesetzten Night-Flag (2)."""
+        user_id = _create_user(db)
+        sources.create_source(user_id, "iobroker_state", "wlan.present", 1.0, 0.3)
+        fake = _FakeUser(asleep=True)
+        fake.presence = False  # Ankunft von Hannah noch nicht bestätigt, als "gute Nacht" kam
+        pm = self._make(db, user_id, fake, grace_period_seconds=0.2)
+
+        pm.on_state_update("wlan.present", "true")
+
+        assert fake.presence is False  # bleibt unangetastet, solange asleep gesetzt ist
+
     def test_stale_ble_reading_counts_as_away(self, db, sources):
         """BLE ist push-only (keine explizite 'weg'-Meldung) — eine Sichtung, die älter
         als ble_staleness_seconds ist, zählt für strongest_away statt strongest_home."""

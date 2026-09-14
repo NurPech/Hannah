@@ -145,10 +145,14 @@ class PresenceManager:
         # Schlaf-Status (residents.*.presence.night, gesetzt über den expliziten "ich gehe
         # schlafen"-Pfad, siehe main.py's _trigger_set_presence -> residents.set_user_asleep)
         # geht nie über user.presence/user.asleep, daher weiß die Fusion sonst nichts davon.
-        # Ohne diese Sperre würde ein nächtlicher Signalausfall (Handy im Doze-Mode, BLE
-        # kurz nicht gesichtet) nach der Grace-Period fälschlich "weg" auslösen und damit
-        # den Night-Flag in ioBroker zurücksetzen, obwohl die Person nur schläft.
-        if not is_home and user.asleep:
+        # Sperre gilt in beide Richtungen: "weg" würde nach der Grace-Period einen
+        # nächtlichen Signalausfall (Handy im Doze-Mode, BLE kurz nicht gesichtet)
+        # fälschlich als Abwesenheit werten; "zuhause" würde (z.B. eine verzögerte
+        # Ankunfts-Bestätigung, die zufällig kurz nach dem "gute Nacht"-Push eintrifft)
+        # den Night-Flag ebenso fälschlich auf schlichtes "zuhause" zurückstufen (#299).
+        # In beiden Fällen bleibt der Night-Flag unangetastet, bis ein expliziter
+        # awake/departure-Pfad ihn aufhebt.
+        if user.asleep:
             return
         if user.presence != is_home:
             user.presence = is_home
