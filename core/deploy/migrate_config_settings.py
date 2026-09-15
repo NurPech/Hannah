@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """One-time migration for Issue #27 Phase 5 (extended by #115): copy the config.yaml
-sections that move out of static YAML config into hannah.db. nlu.*/llm.system_prompt/
-iobroker.state_names go into the generic Settings module (settings_category/settings
-tables). ble.tags/cars go directly into their own tables (ble_tags/cars/user_to_car,
-#115 — these were never a good fit for the generic JSON-blob Settings schema). Safe to
-re-run - uses INSERT OR IGNORE throughout.
+sections that move out of static YAML config into hannah.db. nlu.*/llm.system_prompt
+go into the generic Settings module (settings_category/settings tables). ble.tags/cars
+go directly into their own tables (ble_tags/cars/user_to_car, #115 — these were never a
+good fit for the generic JSON-blob Settings schema). iobroker.state_names used to be
+migrated here too, but is a hardcoded, non-editable fallback since #257 — see
+SettingsManager.cleanup_legacy_settings() for removing an already-migrated leftover.
+Safe to re-run - uses INSERT OR IGNORE throughout.
 
 Assumes hannah.db already has all tables from hannah.utils.db.SCHEMA (i.e. init_db()
 has run at least once - they're created by Hannah Core's normal startup), including
@@ -130,14 +132,6 @@ def migrate_llm(cfg: dict, db: sqlite3.Connection) -> int:
     return 1 if _create_setting(db, cat, "system_prompt", prompt) else 0
 
 
-def migrate_iobroker_state_names(cfg: dict, db: sqlite3.Connection) -> int:
-    state_names = cfg.get("iobroker", {}).get("state_names")
-    if not state_names:
-        return 0
-    cat = _ensure_category(db, "iobroker")
-    return 1 if _create_setting(db, cat, "state_names", state_names) else 0
-
-
 def migrate(config_path: str, hannah_db_path: str) -> None:
     with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
@@ -149,7 +143,6 @@ def migrate(config_path: str, hannah_db_path: str) -> None:
     print(f"cars: {migrate_cars(cfg, db)} Zeile(n) übernommen")
     print(f"nlu: {migrate_nlu(cfg, db)} Zeile(n) übernommen")
     print(f"llm.system_prompt: {migrate_llm(cfg, db)} Zeile(n) übernommen")
-    print(f"iobroker.state_names: {migrate_iobroker_state_names(cfg, db)} Zeile(n) übernommen")
 
     db.close()
 

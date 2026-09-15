@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-# Hartkodierter Fallback für Deployments mit Adapter <3.8.0, der noch keine
-# AgentDevice.canonical_key sendet (#257) — vorher aus Settings/DB editierbar
+# Hartkodierter Fallback für Deployments mit Adapter <1.1.0 (hannah-proto <3.8.0), der
+# noch keine AgentDevice.canonical_key sendet (#257) — vorher aus Settings/DB editierbar
 # (siehe deploy/migrate_config_settings.py), jetzt nur noch Code-Konstante, da der
 # Adapter die Rolle selbst aus common.role auflöst und kein Nutzer-Mapping mehr nötig ist.
 DEFAULT_IOBROKER_STATE_NAMES: dict = {
@@ -182,7 +182,7 @@ class IoBrokerClient:
 
                 parts = device.state_id.split(".")
                 # device_id vom Adapter übernehmen wenn vorhanden (#257) — sonst Pfadtiefen-
-                # Heuristik als Fallback für Deployments mit Adapter <3.8.0.
+                # Heuristik als Fallback für Deployments mit Adapter <1.1.0 (hannah-proto <3.8.0).
                 if device.device_id:
                     device_id = device.device_id
                 else:
@@ -215,7 +215,7 @@ class IoBrokerClient:
                     dev.inverted = True
                 # canonical_key vom Adapter übernehmen wenn vorhanden (#257) — vom Adapter
                 # aus common.role aufgelöst, zuverlässiger als die alte suffix-basierte
-                # state_names-Übersetzung. Fallback für Adapter <3.8.0: state_names-Lookup
+                # state_names-Übersetzung. Fallback für Adapter <1.1.0 (hannah-proto <3.8.0): state_names-Lookup
                 # auf den rohen Suffix (#256) — sonst bliebe dev.states für Geräte mit
                 # nicht-kanonischem Suffix (z.B. Homematic "STATE"/"LEVEL") für
                 # execute()/SetState für immer unauffindbar. Unbekannte Suffixe (z.B.

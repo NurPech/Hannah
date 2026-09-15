@@ -6,7 +6,7 @@ config.yaml in die DB gewandert sind (nlu.*, llm.system_prompt). iobroker.state_
 war hier bis #257 auch dabei — der Adapter löst die semantische Rolle eines States
 inzwischen selbst über common.role auf (AgentDevice.canonical_key), state_names ist
 nur noch ein hartkodierter Fallback in hannah.iobroker für Deployments mit Adapter
-<3.8.0 (siehe dort DEFAULT_IOBROKER_STATE_NAMES), nicht mehr nutzereditierbar.
+<1.1.0 (hannah-proto <3.8.0, siehe dort DEFAULT_IOBROKER_STATE_NAMES), nicht mehr nutzereditierbar.
 ble.tags/cars haben seit #115 eigene Modelle + CRUD (siehe hannah.ble_tags/hannah.car_registry)
 statt hier als JSON-Blob zu laufen. Zwei Tabellen:
   - settings_category: hierarchisch (self-referencing parent), name = voller
@@ -196,3 +196,18 @@ class SettingsManager:
             cat = self.ensure_category("presence")
             for name, value in DEFAULT_PRESENCE_SETTINGS.items():
                 self.create_setting(cat, name, value)
+
+    def cleanup_legacy_settings(self) -> None:
+        """Entfernt Settings-Categories, die in einer früheren Version noch aus
+        config.yaml in die DB migriert wurden, inzwischen aber nicht mehr gelesen
+        werden — sonst bleiben sie als scheinbar wirkungslos editierbare Karteileichen
+        in der Admin-UI stehen (GetSettings/WebUI zeigen jede DB-Zeile ungefiltert,
+        #27 Phase 5). Idempotent, sicher bei jedem Start aufzurufen.
+
+        iobroker.state_names: war bis #257 hier migrierbar (siehe
+        deploy/migrate_config_settings.py), ist seit dem ein hartkodierter,
+        nicht-editierbarer Fallback in hannah.iobroker — eine schon migrierte Zeile
+        würde sonst für immer in der DB liegen bleiben."""
+        cat = SettingsCategory.get(self._db(), name="iobroker")
+        if cat:
+            cat.delete()  # ON DELETE CASCADE räumt zugehörige "settings"-Zeilen mit auf

@@ -137,3 +137,36 @@ class TestSeedDefaults:
             len(DEFAULT_NLU_SETTINGS) + len(DEFAULT_AUTOMATION_WORDS)
             + len(DEFAULT_VOICE_ENROLLMENT_SETTINGS) + len(DEFAULT_PRESENCE_SETTINGS) + 1
         )
+
+
+class TestCleanupLegacySettings:
+    """#257: iobroker.state_names used to be migrated into the DB (deploy/
+    migrate_config_settings.py) but is a hardcoded, non-editable fallback in
+    hannah.iobroker now — GetSettings/WebUI show every DB row unfiltered, so an
+    already-migrated leftover would otherwise sit there forever looking editable
+    while silently doing nothing."""
+
+    def test_removes_leftover_iobroker_category_and_its_settings(self, manager):
+        cat_id = manager.ensure_category("iobroker")
+        manager.create_setting(cat_id, "state_names", {"current": "current"})
+
+        manager.cleanup_legacy_settings()
+
+        assert manager.get_category_id("iobroker") is None
+        assert manager.get_settings_dict("iobroker") == {}
+
+    def test_noop_when_no_iobroker_category_exists(self, manager):
+        manager.seed_defaults()
+
+        manager.cleanup_legacy_settings()
+
+        assert manager.get_settings_dict("nlu") == DEFAULT_NLU_SETTINGS
+
+    def test_idempotent_on_repeated_calls(self, manager):
+        cat_id = manager.ensure_category("iobroker")
+        manager.create_setting(cat_id, "state_names", {"current": "current"})
+
+        manager.cleanup_legacy_settings()
+        manager.cleanup_legacy_settings()
+
+        assert manager.get_category_id("iobroker") is None

@@ -559,11 +559,11 @@ class TestHandleDeviceSnapshotStateNameTranslation:
 
 
 class TestHandleDeviceSnapshotAdapterResolvedKeys:
-    """#257 — der Adapter (>=3.8.0) löst device_id (Grouping) und canonical_key (Rolle,
-    z.B. on/level/color) selbst auf und schickt sie direkt mit, statt dass Core sie aus
-    der Pfadtiefe von state_id bzw. der state_names-Suffix-Tabelle errät. Beide Felder
-    sind optional/leer bei Adaptern <3.8.0 — dann greift weiterhin die alte Heuristik
-    (siehe TestHandleDeviceSnapshotStateNameTranslation)."""
+    """#257 — der Adapter (>=1.1.0, hannah-proto >=3.8.0) löst device_id (Grouping) und
+    canonical_key (Rolle, z.B. on/level/color) selbst auf und schickt sie direkt mit,
+    statt dass Core sie aus der Pfadtiefe von state_id bzw. der state_names-Suffix-Tabelle
+    errät. Beide Felder sind optional/leer bei Adaptern <1.1.0 — dann greift weiterhin die
+    alte Heuristik (siehe TestHandleDeviceSnapshotStateNameTranslation)."""
 
     def _device_msg(self, state_id: str, device_id: str = "", canonical_key: str = "",
                      device_type: str = "light") -> AgentDevice:

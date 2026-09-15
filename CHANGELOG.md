@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.82.5 (2026-09-15)
+### Hannah Core
+
+* Chore: corrected internal documentation/comments that described `iobroker.state_names` as still configurable via `config.yaml`/DB, and mislabeled the adapter-version gate for adapter-resolved `canonical_key` (it's the `hannah-proto` version, 3.8.0, not the adapter's own version, 1.1.0) — no functional change
+* Chore: an `iobroker.state_names` setting migrated into the database before #257 (back when it was still DB-editable) is now automatically removed on startup — it silently did nothing since #257 but kept showing up as an editable setting in the Admin/Settings UI. Fresh installs were never affected
 
 ## 0.82.4 (2026-09-15)
 ### Hannah Core
