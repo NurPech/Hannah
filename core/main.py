@@ -646,6 +646,15 @@ def main():
                 intent.room    = room
                 intent.room_id = room
                 log.debug(f"[{device}] Raum-Fallback: '{room}'")
+                # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
+                # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
+                # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
+                # völlig anderen Raum gematcht worden sein.
+                device_key, dev = nlu.resolve_device_in_room(intent.raw_text, room)
+                intent.device_key = device_key
+                intent.device      = dev.name if dev else None
+                intent.device_id   = dev.id if dev else None
+                intent.candidates  = []
 
         log.info(
             f"[{device}] Intent: {intent.name} | "
@@ -1021,6 +1030,15 @@ def main():
                 intent.room    = room
                 intent.room_id = room
                 log.debug(f"[{device}] Raum-Fallback: '{room}'")
+                # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
+                # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
+                # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
+                # völlig anderen Raum gematcht worden sein.
+                device_key, dev = nlu.resolve_device_in_room(intent.raw_text, room)
+                intent.device_key = device_key
+                intent.device      = dev.name if dev else None
+                intent.device_id   = dev.id if dev else None
+                intent.candidates  = []
 
         log.info(
             f"[textcmd] Text: '{text}' → Intent: {intent.name} | "

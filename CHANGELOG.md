@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.82.4 (2026-09-15)
+### Hannah Core
+
+* Fixed: a voice command without an explicitly spoken room (e.g. "Licht aus") could match and control a device from a completely different room than the satellite it was spoken at — device resolution is now repeated once the satellite's own room is known (Refs #300)
+
 ## 0.82.3 (2026-09-14)
 ### Hannah Core
 
