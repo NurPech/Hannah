@@ -43,6 +43,12 @@ class MQTTHandler:
         self._playback_done_events: dict[str, threading.Event] = {}
         self._playback_done_lock = threading.Lock()
 
+        # Playback-Busy (#304): welche Satelliten spielen gerade etwas ab, unabhängig
+        # von playback_done — der Lock wird beim Senden gesetzt (schon vor dem ersten
+        # playback_done-Event) und beim Ende der Wiedergabe wieder freigegeben.
+        self._busy_devices: set[str] = set()
+        self._busy_lock = threading.Lock()
+
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
@@ -202,6 +208,19 @@ class MQTTHandler:
         with self._playback_done_lock:
             event = self._playback_done_events.setdefault(device, threading.Event())
         return event.wait(timeout)
+
+    def is_busy(self, device: str) -> bool:
+        """True wenn der Satellit laut Busy-Flag gerade eine Wiedergabe laufen hat."""
+        with self._busy_lock:
+            return device in self._busy_devices
+
+    def mark_busy(self, device: str):
+        with self._busy_lock:
+            self._busy_devices.add(device)
+
+    def clear_busy(self, device: str):
+        with self._busy_lock:
+            self._busy_devices.discard(device)
 
     # ------------------------------------------------------------------
     # Discovery / raw

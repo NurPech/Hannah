@@ -44,6 +44,7 @@ def _never_done(device, timeout):
 @pytest.fixture
 def manager(db):
     fired, played, volumes, announced = [], [], [], []
+    captured = {"flag": False}
     mgr = AlarmManager(
         db=db,
         on_fire=lambda record: fired.append(record),
@@ -53,12 +54,14 @@ def manager(db):
         reset_playback_done_fn=lambda device: None,
         wait_playback_done_fn=_never_done,
         announce_fn=lambda device, text: announced.append((device, text)),
+        is_captured_fn=lambda device: captured["flag"],
         cycle_seconds=999,  # real delay irrelevant — tests invoke cycles directly
     )
     mgr.fired = fired
     mgr.played = played
     mgr.volumes = volumes
     mgr.announced = announced
+    mgr.captured = captured
     return mgr
 
 
@@ -345,3 +348,68 @@ class TestPlayResultFallback:
         mgr._ringing_cycle(sat)
 
         assert played == [(sat, "alarm_ring"), (sat, "alarm_ring")]
+
+
+class TestCapturePause:
+    """#308 — ein Satellit im Wakeword-Sampling-Capture-Modus gilt als nicht
+    betriebsbereit: der Ring-Loop pausiert dort (statt die Aufnahme mit Alarm-
+    Audio zu kontaminieren) und klingelt automatisch weiter, sobald Capture endet."""
+
+    def test_ringing_cycle_skipped_while_captured(self, db, manager):
+        sat = _create_satellite(db)
+        manager._start_ringing(sat)
+        manager.captured["flag"] = True
+
+        manager._ringing_cycle(sat)
+
+        assert manager.played == [(sat, "alarm_ring")]  # kein zweiter Play-Versuch
+        assert manager.volumes == [(sat, manager._volume_high)]  # keine weitere Änderung
+
+    def test_ringing_resumes_after_capture_ends(self, db, manager):
+        sat = _create_satellite(db)
+        manager._start_ringing(sat)
+        manager.captured["flag"] = True
+        manager._ringing_cycle(sat)
+        manager.captured["flag"] = False
+
+        manager._ringing_cycle(sat)
+
+        assert manager.played == [(sat, "alarm_ring"), (sat, "alarm_ring")]
+
+    def test_start_ringing_first_cycle_also_skipped_while_captured(self, db, manager):
+        sat = _create_satellite(db)
+        manager.captured["flag"] = True
+
+        manager._start_ringing(sat)
+
+        assert manager.played == []
+        assert manager.is_ringing(sat) is True  # Loop läuft trotzdem, wartet nur
+
+    def test_asset_broken_fallback_also_skipped_while_captured(self, db, manager):
+        sat = _create_satellite(db)
+        manager._start_ringing(sat)
+        manager.on_play_result(sat, "alarm_ring", ok=False)
+        manager.captured["flag"] = True
+
+        manager._ringing_cycle(sat)
+
+        assert manager.announced == []
+
+    def test_default_is_captured_fn_never_pauses(self, db):
+        """Ohne is_captured_fn (None) bleibt das alte Verhalten: nie pausieren."""
+        played = []
+        mgr = AlarmManager(
+            db=db,
+            on_fire=lambda record: None,
+            play_asset_fn=lambda device, asset: played.append((device, asset)),
+            set_volume_fn=lambda device, level: None,
+            get_volume_fn=lambda device: 50,
+            reset_playback_done_fn=lambda device: None,
+            wait_playback_done_fn=_never_done,
+            cycle_seconds=999,
+        )
+        sat = _create_satellite(db)
+
+        mgr._start_ringing(sat)
+
+        assert played == [(sat, "alarm_ring")]

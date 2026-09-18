@@ -148,3 +148,34 @@ class TestCoredumpPendingReport:
         handler._on_message(None, None, _msg(
             "hannah/satellite/wz-sat/coredump_pending", {"pending": True},
         ))
+
+
+class TestPlaybackBusy:
+    """#304 — Busy-Flag pro Satellit, unabhängig vom playback_done-Ack, damit
+    überlappende TTS/Announcement-Sends auf denselben Satelliten verworfen statt
+    überlagert werden können."""
+
+    def test_not_busy_by_default(self):
+        handler = MQTTHandler({}, {})
+        assert handler.is_busy("wz-sat") is False
+
+    def test_mark_busy_sets_flag(self):
+        handler = MQTTHandler({}, {})
+        handler.mark_busy("wz-sat")
+        assert handler.is_busy("wz-sat") is True
+
+    def test_clear_busy_resets_flag(self):
+        handler = MQTTHandler({}, {})
+        handler.mark_busy("wz-sat")
+        handler.clear_busy("wz-sat")
+        assert handler.is_busy("wz-sat") is False
+
+    def test_busy_flag_is_per_device(self):
+        handler = MQTTHandler({}, {})
+        handler.mark_busy("wz-sat")
+        assert handler.is_busy("ku-sat") is False
+
+    def test_clear_busy_without_prior_mark_does_not_raise(self):
+        handler = MQTTHandler({}, {})
+        handler.clear_busy("wz-sat")
+        assert handler.is_busy("wz-sat") is False

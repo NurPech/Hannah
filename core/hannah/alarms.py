@@ -44,6 +44,7 @@ class AlarmManager:
         reset_playback_done_fn: Callable[[str], None],
         wait_playback_done_fn: Callable[[str, float], bool],
         announce_fn: Optional[Callable[[str, str], None]] = None,
+        is_captured_fn: Optional[Callable[[str], bool]] = None,
         asset_id: str = "alarm_ring",
         volume_low: int = 30,
         volume_high: int = 80,
@@ -65,6 +66,12 @@ class AlarmManager:
             allein war komplett Fire-and-Forget und konnte bei einem defekten/fehlenden
             Asset-Cache still für immer ins Leere laufen. None = kein Fallback (alter
             Zustand, z.B. für Tests ohne MQTT-Ack-Wiring).
+        is_captured_fn(satellite_id): grpc_servicer.is_captured — ein Satellit im
+            Wakeword-Sampling-Capture-Modus gilt als "nicht betriebsbereit": der Ring-Loop
+            pausiert dort (spielt nichts, klingelt aber automatisch weiter sobald Capture
+            endet), statt die Aufnahme mit Alarm-Audio zu kontaminieren (#308). Bewusst
+            unabhängig von DND — ein Wecker soll trotz DND klingeln, s. #307. None = nie
+            pausieren (alter Zustand, z.B. für Tests ohne Capture-Wiring).
         """
         self._db = db
         self._on_fire = on_fire
@@ -74,6 +81,7 @@ class AlarmManager:
         self._reset_playback_done_fn = reset_playback_done_fn
         self._wait_playback_done_fn = wait_playback_done_fn
         self._announce_fn = announce_fn
+        self._is_captured_fn = is_captured_fn or (lambda _device: False)
         self._asset_id = asset_id
         self._volume_low = volume_low
         self._volume_high = volume_high
@@ -272,8 +280,11 @@ class AlarmManager:
                 if satellite_id not in self._ringing:
                     return  # gestoppt
                 asset_broken = self._asset_broken.get(satellite_id, False)
-            if asset_broken:
-                time.sleep(self._cycle_seconds)  # TTS-Fallback hat kein playback_done-Ack
+            if asset_broken or self._is_captured_fn(satellite_id):
+                # TTS-Fallback hat kein playback_done-Ack; im Capture-Modus wird eh
+                # nichts abgespielt (#308) — beide Male auf den Safety-Timeout warten
+                # statt auf ein Ack, das nicht kommt.
+                time.sleep(self._cycle_seconds)
             else:
                 self._wait_playback_done_fn(satellite_id, self._cycle_seconds)
             with self._ringing_lock:
@@ -282,6 +293,12 @@ class AlarmManager:
             self._ringing_cycle(satellite_id)
 
     def _ringing_cycle(self, satellite_id: str) -> None:
+        if self._is_captured_fn(satellite_id):
+            # Satellit im Wakeword-Sampling-Capture-Modus (#308) — Runde überspringen
+            # statt die Aufnahme mit Alarm-Audio zu kontaminieren. Klingelt automatisch
+            # weiter, sobald Capture endet (nächste Runde prüft erneut).
+            log.debug(f"[alarm] '{satellite_id}' im Capture-Modus — Klingeln pausiert.")
+            return
         with self._ringing_lock:
             if satellite_id not in self._ringing:
                 return  # inzwischen gestoppt

@@ -1295,6 +1295,42 @@ def main():
             udp_server.send_tts(target, pcm, sample_rate=rate)
             log.info(f"{label}Announcement → {target} (via UDP)")
 
+    # ── Playback-Busy-Gate (#304) ────────────────────────────────────────────
+    # Einziger Punkt, über den TTS/Announcement-Audio an einen Satelliten geht:
+    # verwirft, wenn der Satellit laut Busy-Flag gerade etwas anderes abspielt,
+    # statt es zu überlagern (#304/#305). Busy wird beim Senden gesetzt und per
+    # Hintergrund-Thread wieder freigegeben, sobald playback_done kommt — mit
+    # einem generösen Timeout als Sicherheitsnetz falls das Ack mal verloren geht
+    # (Paketverlust/Neustart), sonst bliebe der Satellit für immer stumm.
+    _PLAYBACK_SAFETY_MARGIN_S = 5.0
+
+    def _pcm_duration_s(pcm: bytes, rate: int) -> float:
+        return (len(pcm) / 2 / rate) if rate else 0.0
+
+    def _release_busy_after_playback(device: str, pcm: bytes, rate: int):
+        timeout = _pcm_duration_s(pcm, rate) + _PLAYBACK_SAFETY_MARGIN_S
+        mqtt_handler.wait_for_playback_done(device, timeout=timeout)
+        mqtt_handler.clear_busy(device)
+
+    def _begin_playback(device: str, pcm: bytes, rate: int):
+        """Markiert `device` als beschäftigt und startet den Wartethread, der das
+        Busy-Flag nach dem echten Wiedergabe-Ende (playback_done) wieder freigibt."""
+        mqtt_handler.reset_playback_done(device)
+        mqtt_handler.mark_busy(device)
+        threading.Thread(target=_release_busy_after_playback, args=(device, pcm, rate),
+                          daemon=True, name="playback-busy-release").start()
+
+    def _dispatch_audio(target: str, pcm: bytes, rate: int, label: str = "") -> bool:
+        """Gate-Funktion für alle TTS/Announcement-Sends (#304): verwirft, statt zu
+        überlagern, wenn der Satellit bereits beschäftigt ist. Gibt False zurück wenn
+        verworfen wurde."""
+        if mqtt_handler.is_busy(target):
+            log.info(f"{label}Announcement → {target} verworfen (Satellit spielt bereits etwas ab).")
+            return False
+        _begin_playback(target, pcm, rate)
+        _send_audio(target, pcm, rate, label)
+        return True
+
     def _resolve_targets(device: str = "", label: str = "", *, room_id: str = "", user_id: int = 0) -> list[str]:
         """Löst device/room/group/'all' auf eine Liste von Ziel-Geräten auf.
 
@@ -1442,7 +1478,8 @@ def main():
             if _device_dnd.get(target):
                 log.info(f"Announcement → {target} unterdrückt (DND aktiv).")
                 continue
-            _send_audio(target, pcm, rate)
+            if not _dispatch_audio(target, pcm, rate):
+                continue
             if not ssml:
                 # #253: proaktive Announcements/Notifications laufen nie über
                 # add_llm_exchange() (kein User-Turn davor) — ohne das hier würde eine
@@ -1484,10 +1521,12 @@ def main():
         play_asset_fn=mqtt_handler.publish_play_asset,
         set_volume_fn=mqtt_handler.publish_volume_set,
         get_volume_fn=lambda d: _device_volume.get(d, _global_volume),
-        # TTS-Fallback, falls der Satellit einen play_asset-Versuch nackt (#116) —
-        # _handle_feedback ist erst weiter unten definiert, gleiches Forward-Reference-
-        # Muster wie _on_alarm_fire oben.
-        announce_fn=lambda d, text: _handle_feedback(d, True, text),
+        # TTS-Fallback, falls ein play_asset-Versuch nackt (#116) — _dispatch_alarm_tts/
+        # grpc_servicer sind erst weiter unten definiert, gleiches Forward-Reference-
+        # Muster wie _on_alarm_fire oben. Bewusst nicht _handle_feedback (#307/#308):
+        # Alarme sollen durch DND klingeln, aber während Capture-Modus pausieren.
+        announce_fn=lambda d, text: _dispatch_alarm_tts(d, text),
+        is_captured_fn=lambda d: grpc_servicer.is_captured(d),
         reset_playback_done_fn=mqtt_handler.reset_playback_done,
         wait_playback_done_fn=mqtt_handler.wait_for_playback_done,
     )
@@ -1606,22 +1645,31 @@ def main():
     _pending_lock = threading.Lock()
 
     def _ask_fn(room: str, question: str, callback: Callable[[str], None]) -> None:
+        targets = _resolve_targets(room)
         process_announcement(room, question)
-        for target in _resolve_targets(room):
-            mqtt_handler.publish_listen(target)
 
         def _on_timeout():
             with _pending_lock:
                 _pending_questions.pop(room, None)
             log.info(f"Pending-Frage für Raum '{room}' abgelaufen (keine Antwort in 60s).")
 
-        timer = threading.Timer(60.0, _on_timeout)
-        with _pending_lock:
-            old = _pending_questions.pop(room, None)
-            if old:
-                old[1].cancel()
-            _pending_questions[room] = (callback, timer)
-        timer.start()
+        def _open_mics_when_ready():
+            # Mic erst öffnen, wenn die Frage wirklich fertig abgespielt ist (#306) —
+            # sonst hört der Satellit sich noch selbst reden. 60s-Antwort-Timeout
+            # startet bewusst erst ab hier, nicht schon beim Senden der Frage.
+            for target in targets:
+                mqtt_handler.wait_for_playback_done(target, timeout=15.0)
+                mqtt_handler.publish_listen(target)
+
+            timer = threading.Timer(60.0, _on_timeout)
+            with _pending_lock:
+                old = _pending_questions.pop(room, None)
+                if old:
+                    old[1].cancel()
+                _pending_questions[room] = (callback, timer)
+            timer.start()
+
+        threading.Thread(target=_open_mics_when_ready, daemon=True, name="ask-mic-open").start()
 
     # Voice-Enrollment-Dialog (hannah#8): eigener, Audio-basierter Turn-Taking-Mechanismus,
     # bewusst getrennt von _pending_questions oben (Transkript-basiert, für Trigger-Engine-
@@ -1630,7 +1678,12 @@ def main():
     # _pending_questions liegen, den niemand konsumiert.
     def _ask_enrollment_question(device_id: str, question: str) -> None:
         process_announcement(device_id, question)
-        mqtt_handler.publish_listen(device_id)
+
+        def _open_mic_when_ready():
+            mqtt_handler.wait_for_playback_done(device_id, timeout=15.0)
+            mqtt_handler.publish_listen(device_id)
+
+        threading.Thread(target=_open_mic_when_ready, daemon=True, name="ask-mic-open").start()
 
     voice_enrollment = VoiceEnrollmentManager(
         _user_manager, voiceid_client,
@@ -1862,7 +1915,15 @@ def main():
             if result:
                 tts_pcm, sample_rate = result
                 tts_pcm, sample_rate = _resample_to_16k(tts_pcm, sample_rate)
-                log.info(f"[{device}] TTS: {len(tts_pcm)} Bytes @ {sample_rate} Hz")
+                # Proxy-Pfad: Audio geht als Werte zurück statt über _dispatch_audio zu
+                # laufen (der Proxy spielt es ab, nicht wir) — Busy-Gate (#304) daher
+                # hier direkt geprüft/gesetzt statt über _send_audio.
+                if mqtt_handler.is_busy(device):
+                    log.info(f"[{device}] TTS-Antwort verworfen (Satellit spielt bereits etwas ab).")
+                    tts_pcm, sample_rate = b"", 0
+                else:
+                    _begin_playback(device, tts_pcm, sample_rate)
+                    log.info(f"[{device}] TTS: {len(tts_pcm)} Bytes @ {sample_rate} Hz")
             else:
                 log.warning(f"[{device}] TTS: synthesize() lieferte kein Ergebnis für Antwort: {answer!r}")
         elif not answer:
@@ -1986,7 +2047,7 @@ def main():
                 if result:
                     pcm, rate = _resample_to_16k(*result)
                     for d in targets:
-                        _send_audio(d, pcm, rate, label="[satellite_control] ")
+                        _dispatch_audio(d, pcm, rate, label="[satellite_control] ")
         via = f"device_id={device_id!r}" if device_id else f"room={room!r}"
         log.info(f"[satellite_control] {via} {key}={value!r} → {len(targets)} Satelliten")
 
@@ -1997,7 +2058,7 @@ def main():
         (Weckton + alternierende Lautstärke) läuft separat in AlarmManager selbst (#4)."""
         label = record.get("label")
         text = f"Wecker! {label}." if label else "Wecker! Guten Morgen!"
-        _handle_feedback(record["satellite_id"], True, text)
+        _dispatch_alarm_tts(record["satellite_id"], text)
 
     def _on_timer_fired(timer_id: str, label: str, metadata: dict):
         trigger_id = metadata.get("trigger_id")
@@ -2007,7 +2068,13 @@ def main():
             return
 
         room = metadata.get("room", "all")
-        targets = [d for d in _resolve_targets(room) if not _device_dnd.get(d)]
+        candidates = [d for d in _resolve_targets(room) if not _device_dnd.get(d)]
+        targets = [d for d in candidates if not mqtt_handler.is_busy(d)]
+        for d in candidates:
+            if d not in targets:
+                log.info(f"[timer] Timer-Ansage → {d} verworfen (Satellit spielt bereits etwas ab).")
+        if not targets:
+            return
 
         # TTS vorab synthetisieren damit Jingle + TTS nahtlos aufeinanderfolgen
         tts_pcm: Optional[tuple] = None
@@ -2016,7 +2083,10 @@ def main():
             if result:
                 tts_pcm = _resample_to_16k(*result)
 
+        # Jingle + TTS bilden eine zusammenhängende Ansage (#304) — Busy-Flag für die
+        # gesamte Dauer gesetzt, nicht nur pro Einzel-Send.
         for device in targets:
+            mqtt_handler.mark_busy(device)
             mqtt_handler.reset_playback_done(device)
         for device in targets:
             mqtt_handler.publish_play_asset(device, "timer_jingle")
@@ -2024,11 +2094,17 @@ def main():
             if not mqtt_handler.wait_for_playback_done(device, timeout=3.0):
                 log.warning(f"[timer] Kein playback_done von '{device}' erhalten (alte Firmware?) — Fallback-Sleep")
                 time.sleep(1.1)
+            mqtt_handler.reset_playback_done(device)
 
         if tts_pcm:
             pcm, rate = tts_pcm
             for device in targets:
                 _send_audio(device, pcm, rate)
+                threading.Thread(target=_release_busy_after_playback, args=(device, pcm, rate),
+                                  daemon=True, name="playback-busy-release").start()
+        else:
+            for device in targets:
+                mqtt_handler.clear_busy(device)
 
     def _on_timer_list(timers: list) -> None:
         trigger_engine.reconcile_timers(timers)
@@ -2394,7 +2470,7 @@ def main():
                     pcm, rate = _resample_to_16k(*result)
                     for target in _resolve_targets("all"):
                         if not _device_dnd.get(target):
-                            _send_audio(target, pcm, rate)
+                            _dispatch_audio(target, pcm, rate)
             grpc_servicer.publish_event(make_system_notification_event(raw_text))
             return
 
@@ -2436,7 +2512,7 @@ def main():
                 pcm, rate = _resample_to_16k(*result)
                 for target in _resolve_targets("all"):
                     if not _device_dnd.get(target):
-                        _send_audio(target, pcm, rate)
+                        _dispatch_audio(target, pcm, rate)
 
         # gRPC-Event → Telegram
         grpc_servicer.publish_event(make_system_notification_event(text))
@@ -2488,7 +2564,7 @@ def main():
             result = tts.synthesize(answer)
             if result:
                 pcm, rate = result
-                udp_server.send_tts(device, pcm, sample_rate=rate)
+                _dispatch_audio(device, pcm, rate)
 
     def _handle_feedback(satellite_device: str, is_success: bool, text: str):
         """
@@ -2496,20 +2572,47 @@ def main():
         - is_success=True + text: Smalltalk (Text sprechen)
         - is_success=True + kein text: Erfolgreiche Steuerung (Confirmation-Ton)
         - is_success=False + text: Fehler (Text sprechen)
+
+        Läuft über _dispatch_audio (#305): wenn der Satellit gerade noch das 'say'
+        einer Trigger-Action abspielt, wird die Confirmation verworfen statt sie zu
+        überlagern. Respektiert außerdem DND (#307) — deckt auch Capture-/Sampling-
+        Modus ab, damit z.B. eine Trigger-Confirmation keine laufende Wakeword-
+        Aufnahme kontaminiert. Alarme laufen bewusst NICHT über diese Funktion,
+        siehe _dispatch_alarm_tts (#308).
         """
         log.info(f"[{satellite_device}] Feedback: {'✓' if is_success else '✗'} — {text}")
+
+        if _device_dnd.get(satellite_device):
+            log.info(f"[{satellite_device}] Feedback unterdrückt (DND aktiv).")
+            return
 
         if is_success and not text:
             # Erfolgreiche Steuerung: Confirmation-Ton
             if tts.enabled:
                 pcm, rate = tts.confirmation_tone()
-                udp_server.send_tts(satellite_device, pcm, sample_rate=rate)
+                _dispatch_audio(satellite_device, pcm, rate)
         elif text and tts.enabled:
             # Smalltalk oder Fehler: Text sprechen
             result = tts.synthesize(text)
             if result:
                 pcm, rate = result
-                udp_server.send_tts(satellite_device, pcm, sample_rate=rate)
+                _dispatch_audio(satellite_device, pcm, rate)
+
+    def _dispatch_alarm_tts(satellite_device: str, text: str):
+        """TTS-Pfad für Alarme (#308): bewusst getrennt von _handle_feedback, weil Alarme
+        das genau entgegengesetzte DND-/Capture-Verhalten brauchen — sie sollen durch
+        manuelles DND klingeln (Sinn eines Weckers), aber während Capture-Modus
+        pausieren (Satellit "nicht betriebsbereit", würde sonst die Aufnahme
+        kontaminieren). Läuft daher weder über _dispatch_audio (kein Busy-Check) noch
+        über den DND-Check aus _handle_feedback."""
+        if grpc_servicer.is_captured(satellite_device):
+            log.info(f"[{satellite_device}] Alarm-Ansage unterdrückt (Capture-Modus aktiv).")
+            return
+        if tts.enabled:
+            result = tts.synthesize(text)
+            if result:
+                pcm, rate = result
+                _send_audio(satellite_device, pcm, rate, label="[alarm] ")
 
     feedback_timeout = cfg.get("iobroker", {}).get("feedback_timeout", 3.0)
     iobroker.set_feedback_handler(_handle_feedback, timeout=feedback_timeout)

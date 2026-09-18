@@ -4,6 +4,19 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.82.6 (2026-09-18)
+### Hannah Core
+
+* Fixed: a satellite already playing back audio (a conversation reply, an announcement, a ringing timer, ...) could get a second, overlapping TTS/audio push from a notification, trigger, or timer arriving in the meantime, garbling both — satellites now ignore a new playback request while already busy instead of layering it on top (Refs #304)
+* Fixed: a trigger combining a spoken text with a device action could speak a redundant generic confirmation on top of its own announcement (Refs #305)
+* Fixed: after a trigger asked a question, the satellite's microphone reopened for the answer before the question had actually finished playing (Refs #306)
+* Fixed: a trigger's spoken confirmation could play on a satellite that had Do-Not-Disturb active, including one that was mid-recording for wakeword-training data collection, contaminating the recording (Refs #307)
+* Fixed: an alarm's spoken announcement/fallback was tied to the same suppression as regular announcements — alarms now keep ringing through Do-Not-Disturb (that's the point of a wake-up alarm) but pause instead of playing over a satellite that's mid-recording for wakeword-training data collection (Refs #308)
+
+### Hannah Proxy
+
+* Chore: updated `hannah-proto-go` dependency to v4.1.0
+
 ## 0.82.5 (2026-09-15)
 ### Hannah Core
 
