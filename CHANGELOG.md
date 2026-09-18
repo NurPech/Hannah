@@ -4,6 +4,18 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.83.1 (2026-09-18)
+### Telegram
+
+* Fixed: the release-shipped config template carried a stray real value in an unused settings block instead of a placeholder — renamed `config.yaml` to `config.example.yaml` (matching Core/Proxy) and removed the unused block (Refs #311)
+
+### VoiceID
+
+* Chore: renamed `config.yaml` to `config.example.yaml`, matching the naming used by Core/Proxy/Telegram (Refs #312)
+
+### Hannah Proxy
+
+* Fixed: a fresh native install had no `config.example.yaml` to start from, unlike Core/WebUI/Telegram/VoiceID — the release archive only ever contained the binary. It's now included in the release and copied to `/etc/hannah-proxy/` on install (Refs #313)
 
 ## 0.83.0 (2026-09-18)
 ### Hannah Core

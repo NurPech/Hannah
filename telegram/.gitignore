@@ -7,7 +7,7 @@ venv/
 dist/
 build/
 .env
-config.local.yaml
+config.yaml
 *.wav
 *.ogg
 *.mp3

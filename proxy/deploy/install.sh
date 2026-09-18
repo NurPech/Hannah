@@ -84,8 +84,8 @@ curl -sf \
     "${UPDATE_SERVER_URL}/releases/${LATEST_VERSION}?channel=${PROXY_CHANNEL}"
 
 tar -xzf "$TMPTAR" -C "$TMPDIR"
-BINARY="${TMPDIR}/hannah-proxy"
-[[ -f "$BINARY" ]] || err "hannah-proxy not found in downloaded archive."
+BINARY="${TMPDIR}/hannah-proxy-linux-${ARCH}"
+[[ -f "$BINARY" ]] || err "hannah-proxy-linux-${ARCH} not found in downloaded archive."
 file "$BINARY" | grep -q ELF || err "Extracted file is not a valid ELF binary."
 chmod +x "$BINARY"
 
@@ -104,6 +104,11 @@ if [[ ! -d "$CONFIG_DIR" ]]; then
     mkdir -p "$CONFIG_DIR"
     chown "${SERVICE_USER}:${SERVICE_USER}" "$CONFIG_DIR"
     info "Created ${CONFIG_DIR} — place your config.yaml there."
+fi
+
+if [[ -f "${TMPDIR}/config.example.yaml" ]]; then
+    cp "${TMPDIR}/config.example.yaml" "${CONFIG_DIR}/config.example.yaml"
+    ok "Config template refreshed at ${CONFIG_DIR}/config.example.yaml"
 fi
 
 # ── systemd unit ──────────────────────────────────────────────────────────────

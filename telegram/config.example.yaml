@@ -1,0 +1,12 @@
+# hannah-telegram configuration
+# Copy this file to config.yaml and fill in the secrets.
+
+# Telegram Bot Token from @BotFather
+telegram_token: "YOUR_BOT_TOKEN_HERE"
+
+# URL der Hannah WebUI — für Links in Bot-Antworten an unbekannte User
+webui_url: "https://hannah.example.com"
+
+grpc:
+  host: "127.0.0.1"
+  port: 50051
