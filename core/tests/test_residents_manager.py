@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+from hannah_proto import hannah_pb2 as pb
 
 from hannah.residents_manager import ResidentsClient
 from hannah.residents import Roomie
@@ -68,3 +69,64 @@ class TestIsHomeUnknownPresence:
         r.update(display_name="Leonie", presence_state=0, mood=None)
 
         assert residents.is_home("leonie") is False
+
+
+class TestSetPresenceAction:
+    """hannah-proto#7 / hannah#309 — jeder Presence-Write sendet jetzt zusätzlich zum
+    Legacy-Absolutwert (presence_state, für Adapter < compat_version 2) die passende
+    Einzel-Flag-Action, damit der Adapter nur noch das jeweils betroffene
+    presence.{away,home,night}-Flag setzt statt des kombinierten Werts."""
+
+    def test_set_user_home_sends_home_action(self, residents):
+        setter = MagicMock()
+        residents.set_setter(setter)
+
+        residents.set_user_home("leonie")
+
+        setter.assert_called_once_with("leonie", residents._state_home, pb.ResidentType.ROOMIE, pb.HOME)
+
+    def test_set_user_away_sends_away_action(self, residents):
+        setter = MagicMock()
+        residents.set_setter(setter)
+
+        residents.set_user_away("leonie")
+
+        setter.assert_called_once_with("leonie", residents._state_away, pb.ResidentType.ROOMIE, pb.AWAY)
+
+    def test_set_user_asleep_sends_asleep_action(self, residents):
+        setter = MagicMock()
+        residents.set_setter(setter)
+
+        residents.set_user_asleep("leonie")
+
+        setter.assert_called_once_with("leonie", residents._state_night, pb.ResidentType.ROOMIE, pb.ASLEEP)
+
+    def test_set_user_awake_sends_awake_action_not_home(self, residents):
+        """AWAKE ist bewusst eine eigene Action statt HOME — sie darf beim Adapter nur
+        den Night-Flag löschen, nicht implizit auch eine Ankunft (home=true) auslösen."""
+        setter = MagicMock()
+        residents.set_setter(setter)
+
+        residents.set_user_awake("leonie")
+
+        setter.assert_called_once_with("leonie", residents._state_home, pb.ResidentType.ROOMIE, pb.AWAKE)
+
+    def test_set_guest_home_and_away_send_matching_actions(self, residents):
+        setter = MagicMock()
+        residents.set_setter(setter)
+
+        residents.set_guest_home("besuch")
+        residents.set_guest_away("besuch")
+
+        setter.assert_any_call("besuch", residents._state_home, pb.ResidentType.GUEST, pb.HOME)
+        setter.assert_any_call("besuch", residents._state_away, pb.ResidentType.GUEST, pb.AWAY)
+
+    def test_announce_online_and_offline_send_matching_actions(self, residents):
+        setter = MagicMock()
+        residents.set_setter(setter)
+
+        residents.announce_online()
+        residents.announce_offline()
+
+        setter.assert_any_call(residents.hannah_name, residents._state_home, pb.ResidentType.ROOMIE, pb.HOME)
+        setter.assert_any_call(residents.hannah_name, residents._state_away, pb.ResidentType.ROOMIE, pb.AWAY)

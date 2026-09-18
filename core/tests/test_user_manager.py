@@ -40,7 +40,7 @@ class TestDumpPresentUsers:
         user_manager.set_residents_pusher(pusher)
         user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
         user.link_account("residents", "leonie_roomie", provider_payload={"roomie_id": "leonie", "resident_type": "roomie"})
-        user.presence = True
+        user.presence_state = "home"
 
         user_manager.dump_present_users()
 
@@ -52,7 +52,7 @@ class TestDumpPresentUsers:
         user_manager.set_residents_pusher(pusher)
         user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
         user.link_account("residents", "leonie_roomie", provider_payload={"roomie_id": "leonie", "resident_type": "roomie"})
-        # presence bleibt False (Default) — kein Aufruf erwartet
+        # presence_state bleibt "away" (Default) — kein Aufruf erwartet
 
         user_manager.dump_present_users()
 
@@ -65,7 +65,7 @@ class TestDumpPresentUsers:
         pusher = MagicMock()
         user_manager.set_residents_pusher(pusher)
         user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
-        user.presence = True
+        user.presence_state = "home"
 
         user_manager.dump_present_users()
 
@@ -74,7 +74,7 @@ class TestDumpPresentUsers:
     def test_no_pusher_set_does_not_crash(self, tmp_path):
         user_manager = _make_user_manager(tmp_path)
         user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
-        user.presence = True
+        user.presence_state = "home"
 
         user_manager.dump_present_users()
 
@@ -103,7 +103,7 @@ class TestResidentLinkDoubleEncodedPayload:
         user_manager.set_residents_pusher(pusher)
         user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
         user.link_account("residents", "leonie_roomie", provider_payload='{"roomie_id": "leonie", "resident_type": "roomie"}')
-        user.presence = True
+        user.presence_state = "home"
 
         user_manager.dump_present_users()
 

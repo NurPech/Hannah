@@ -52,6 +52,10 @@ _DEVICE_NAME_STOPWORDS = {
     "an", "aus", "auf", "zu", "im", "in", "bei", "fuer", "mit", "von", "vom",
     "zum", "zur", "dem", "des", "einen", "einem", "eines", "ein", "eine",
     "hier", "dort", "da", "grad", "prozent", "uhr",
+    # "alles"/"alle" ist die Bulk-Wildcard (siehe _has_all) und nie ein Gerätename-Versuch —
+    # ohne diesen Ausschluss würde z.B. "im Wohnzimmer alles ausschalten" (#301) fälschlich
+    # als nicht gefundener Gerätename gewertet, statt als beabsichtigtes Raum-Bulk.
+    "alles", "alle",
 }
 _DEVICE_FUZZY_CUTOFF = 0.75
 _DEVICE_FUZZY_MIN_LEN = 3
@@ -400,21 +404,25 @@ class NLU:
         )
         if resolved_category is not None and category_filter is None:
             category_filter = resolved_category
-        # Fuzzy-Geräte-Match (#261): Raum + Kategorie sind bekannt, aber kein Gerät hat exakt
-        # gematcht — statt stillschweigend auf "alle Geräte der Kategorie im Raum" zu bulken
-        # (der ursprüngliche Bug: ein per STT verhaspelter Gerätename wie "seit" statt "Seite"
-        # fiel sonst komplett unter den Tisch), erst prüfen ob überhaupt noch ein Wort übrig
-        # ist, das wie ein Gerätename-Versuch aussieht. Nur dann greift die Fuzzy-Suche —
-        # ohne solches Restwort bleibt das bewusste Kategorie-Bulk ("Schlafzimmer Licht an")
-        # unverändert erlaubt. Auf Queries ("ist der Rolladen offen?") bewusst nicht
-        # angewendet — deren Wortschatz (z.B. "offen") überschneidet sich mit dem der
-        # Action-Wörter nicht sauber genug, um hier zuverlässig zwischen Statusabfrage-
-        # Vokabular und Gerätename-Versuch zu unterscheiden; Scope bleibt auf den
-        # gemeldeten Bug (Steuerbefehle) beschränkt.
+        # Fuzzy-Geräte-Match (#261, erweitert in #301): Raum ist bekannt, aber kein Gerät hat
+        # exakt gematcht — statt stillschweigend auf "alle Geräte (der Kategorie) im Raum" zu
+        # bulken (der ursprüngliche Bug: ein per STT verhaspelter Gerätename wie "seit" statt
+        # "Seite" fiel sonst komplett unter den Tisch), erst prüfen ob überhaupt noch ein Wort
+        # übrig ist, das wie ein Gerätename-Versuch aussieht. Nur dann greift die Fuzzy-Suche —
+        # ohne solches Restwort bleibt das bewusste Bulk-Verhalten ("Schlafzimmer Licht an" /
+        # "Wohnzimmer aus") unverändert erlaubt. Ursprünglich nur bei bekannter Kategorie aktiv;
+        # #301 (manne01) zeigte, dass ein unbekannter Gerätename ohne Kategoriewort ("Schalte
+        # das Radio aus", tatsächliches Gerät heißt "Musik") denselben Bulk-Fallback auslöste —
+        # category_filter ist jetzt keine Voraussetzung mehr, nur noch ein Pool-Filter innerhalb
+        # der Fuzzy-Suche. Auf Queries ("ist der Rolladen offen?") bewusst nicht angewendet —
+        # deren Wortschatz (z.B. "offen") überschneidet sich mit dem der Action-Wörter nicht
+        # sauber genug, um hier zuverlässig zwischen Statusabfrage-Vokabular und
+        # Gerätename-Versuch zu unterscheiden; Scope bleibt auf den gemeldeten Bug
+        # (Steuerbefehle) beschränkt.
         device_candidates: list[tuple[str, str]] = []
         device_not_found = False
         if (device is None and not device_ambiguous and room_key is not None
-                and category_filter is not None and not is_query):
+                and not is_query):
             leftover = self._leftover_device_tokens(tokens, room_name, category_filter)
             if leftover:
                 fuzzy_matches = self._fuzzy_find_devices(leftover, room_key, category_filter)
@@ -802,7 +810,10 @@ class NLU:
         Licht an"), war gar kein Gerätename gemeint und das bestehende Kategorie-Bulk-
         Verhalten greift unverändert."""
         room_words = set(_normalize(room_name).split()) if room_name else set()
-        cat_tokens = {t for t in tokens if self._category_words.get(_normalize(t)) == category_filter}
+        cat_tokens = (
+            {t for t in tokens if self._category_words.get(_normalize(t)) == category_filter}
+            if category_filter is not None else set()
+        )
         # Aktions-Vokabular ist Instanz-/DB-konfigurierbar (#272) und darf nicht als
         # vermeintlicher Gerätename gewertet werden — sonst würden schon simple
         # Kategorie-Bulk-Befehle wie "Rolladen hoch"/"kuehlen im Buero" fälschlich in die
@@ -823,13 +834,15 @@ class NLU:
         return leftover
 
     def _fuzzy_find_devices(
-        self, leftover_tokens: list[str], room_key: str, category_filter: str,
+        self, leftover_tokens: list[str], room_key: str, category_filter: Optional[str],
     ) -> list["Device"]:
         """Vergleicht die übrig gebliebenen Tokens per Ratio (difflib) gegen die Wörter der
-        Gerätenamen (dev.key) im Raum, eingeschränkt auf category_filter — Fallback wenn
-        der exakte Substring-Match in _find_device() nichts gefunden hat, aber ein
-        Gerätename-Versuch erkennbar ist (#261, z.B. STT "seit" statt "Seite")."""
-        pool = [d for d in self._devices.get(room_key, {}).values() if d.category == category_filter]
+        Gerätenamen (dev.key) im Raum, eingeschränkt auf category_filter falls bekannt (sonst
+        alle Geräte im Raum, #301) — Fallback wenn der exakte Substring-Match in
+        _find_device() nichts gefunden hat, aber ein Gerätename-Versuch erkennbar ist
+        (#261, z.B. STT "seit" statt "Seite")."""
+        pool = [d for d in self._devices.get(room_key, {}).values()
+                if category_filter is None or d.category == category_filter]
         matches = []
         for dev in pool:
             key_words = [w for w in _normalize(dev.key).split() if len(w) >= _DEVICE_FUZZY_MIN_LEN]

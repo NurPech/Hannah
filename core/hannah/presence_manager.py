@@ -142,17 +142,35 @@ class PresenceManager:
         user = self._user_lookup(user_id)
         if user is None:
             return
+        # DEPRECATED (hannah#309 Schritt 4, seit dem Adapter-Release 1.1.5 der ioBroker-
+        # Seite strukturell überflüssig): residents_manager.py sendet Presence-Writes
+        # inzwischen als Einzel-Flag-Action (AWAY/HOME/ASLEEP/AWAKE, hannah-proto#7) —
+        # ein Adapter >=1.1.5 setzt dadurch nur noch das jeweils betroffene
+        # presence.{away,home,night}-Flag und kann den Night-Flag gar nicht mehr aus
+        # Versehen überschreiben. Dieser Guard bleibt trotzdem bestehen, weil Core den
+        # Adapter-Stand einer konkreten Verbindung nicht kennt: ein noch nicht
+        # aktualisierter Adapter (<1.1.5, versteht `action` nicht, generierter Code hat
+        # das Feld gar nicht) fällt weiterhin auf den alten kombinierten
+        # `presence_state`-Write zurück, der den Night-Flag wieder überschreiben würde —
+        # betrifft potenziell jeden externen Hannah-Core-Nutzer mit nicht aktualisiertem
+        # Adapter. Kosten hier nahe null (unterdrückt höchstens eine überflüssige, aber
+        # harmlose Fusion-Bestätigung während "asleep"), daher als dauerhaftes Defense-
+        # in-Depth belassen statt entfernt — nicht an einen bestimmten Zeitpunkt zum
+        # Wegräumen gebunden.
+        #
+        # Ursprüngliche Begründung (#299, weiterhin gültig für den Fallback-Fall oben):
         # Schlaf-Status (residents.*.presence.night, gesetzt über den expliziten "ich gehe
         # schlafen"-Pfad, siehe main.py's _trigger_set_presence -> residents.set_user_asleep)
-        # geht nie über user.presence/user.asleep, daher weiß die Fusion sonst nichts davon.
+        # geht nie über user.presence_state, daher weiß die Fusion sonst nichts davon.
         # Sperre gilt in beide Richtungen: "weg" würde nach der Grace-Period einen
         # nächtlichen Signalausfall (Handy im Doze-Mode, BLE kurz nicht gesichtet)
         # fälschlich als Abwesenheit werten; "zuhause" würde (z.B. eine verzögerte
         # Ankunfts-Bestätigung, die zufällig kurz nach dem "gute Nacht"-Push eintrifft)
-        # den Night-Flag ebenso fälschlich auf schlichtes "zuhause" zurückstufen (#299).
+        # den Night-Flag ebenso fälschlich auf schlichtes "zuhause" zurückstufen.
         # In beiden Fällen bleibt der Night-Flag unangetastet, bis ein expliziter
         # awake/departure-Pfad ihn aufhebt.
-        if user.asleep:
+        if user.presence_state == "asleep":
             return
-        if user.presence != is_home:
-            user.presence = is_home
+        target = "home" if is_home else "away"
+        if user.presence_state != target:
+            user.presence_state = target

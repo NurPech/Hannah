@@ -5,43 +5,54 @@ class User(BaseModel, EventEmitterMixin):
     __table__ = "users"
     __primary_key__ = "id"
     __slots__ = (
-        "id", "username", "display_name","email", "password_hash", "trust_level", "mood_level", "system_messages","is_active", "type", "_db", "_cached_linked_accounts", "_cached_enabled_automations", "_presence", "_asleep"
+        "id", "username", "display_name","email", "password_hash", "trust_level", "mood_level", "system_messages","is_active", "type", "_db", "_cached_linked_accounts", "_cached_enabled_automations", "_presence_state"
     )
+
+    # Tristate, deckt sich 1:1 mit dem Residents-Adapter-Tristate (0/1/2, siehe
+    # hannah/residents/Resident.py) — ersetzt die früheren zwei unabhängigen Booleans
+    # presence/asleep (hannah#309, Nachfolger von #298), die eine ungültige Kombination
+    # wie presence=False + asleep=True zuließen.
+    PRESENCE_STATES = ("away", "home", "asleep")
 
     def after_init(self):
         """Wird vom BaseModel am Ende von __init__ aufgerufen."""
         self._cached_linked_accounts = None
         self._cached_enabled_automations = None
-        self._presence = False
-        self._asleep = False
+        self._presence_state = "away"
 
     @property
-    def presence(self):
-        """Gibt den aktuellen Präsenzstatus dieses Users zurück."""
-        return self._presence
+    def presence_state(self):
+        """Gibt den aktuellen Tristate-Anwesenheitsstatus zurück: "away" | "home" | "asleep"."""
+        return self._presence_state
 
-    @presence.setter
-    def presence(self, value):
-        if self._presence != value:
-            self._presence = value
-            if self._presence:
-                self._emit("arrival")
-            else:
-                self._emit("departure")
+    @presence_state.setter
+    def presence_state(self, value):
+        if value not in self.PRESENCE_STATES:
+            raise ValueError(f"invalid presence_state: {value!r}")
+        if value == self._presence_state:
+            return
+        old = self._presence_state
+        was_home, is_home = old != "away", value != "away"
+        was_asleep, is_asleep = old == "asleep", value == "asleep"
+        self._presence_state = value
+        if is_home and not was_home:
+            self._emit("arrival")
+        elif was_home and not is_home:
+            self._emit("departure")
+        if is_asleep and not was_asleep:
+            self._emit("fell_asleep")
+        elif was_asleep and not is_asleep:
+            self._emit("woke_up")
 
     @property
-    def asleep(self):
-        """Gibt zurück, ob dieser User laut letztem bekannten Residents-Status schläft."""
-        return self._asleep
+    def is_home(self):
+        """"Zuhause" umfasst sowohl "home" als auch "asleep" — analog zu
+        Resident.is_home() (hannah#286)."""
+        return self._presence_state != "away"
 
-    @asleep.setter
-    def asleep(self, value):
-        if self._asleep != value:
-            self._asleep = value
-            if self._asleep:
-                self._emit("fell_asleep")
-            else:
-                self._emit("woke_up")
+    @property
+    def is_asleep(self):
+        return self._presence_state == "asleep"
 
     @property
     def mood(self):

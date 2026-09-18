@@ -32,8 +32,8 @@ class ResidentsClient:
         # statische Config-Liste — vermeidet doppelte Pflege seit #72.
         self._user_manager = user_manager
 
-        # Set by main.py: fn(resident_id, presence_state, resident_type) → sends SetResident via gRPC adapter
-        self._setter: Optional[Callable[[str, int, "pb.ResidentType"], bool]] = None
+        # Set by main.py: fn(resident_id, presence_state, resident_type, action) → sends SetResident via gRPC adapter
+        self._setter: Optional[Callable[[str, int, "pb.ResidentType", int], bool]] = None
         # Set by main.py: fn(resident_id, mood, resident_type) → sends SetResidentMood via gRPC adapter
         self._mood_setter: Optional[Callable[[str, int, "pb.ResidentType"], bool]] = None
 
@@ -53,8 +53,8 @@ class ResidentsClient:
 
     # ------------------------------------------------------------------
     # Callbacks registrieren
-    def set_setter(self, fn: Callable[[str, int, "pb.ResidentType"], bool]):
-        """Register the gRPC state setter: fn(resident_id, presence_state, resident_type) → True if adapter is connected."""
+    def set_setter(self, fn: Callable[[str, int, "pb.ResidentType", int], bool]):
+        """Register the gRPC state setter: fn(resident_id, presence_state, resident_type, action) → True if adapter is connected."""
         self._setter = fn
 
     def set_mood_setter(self, fn: Callable[[str, int, "pb.ResidentType"], bool]):
@@ -127,36 +127,42 @@ class ResidentsClient:
     # ------------------------------------------------------------------
     # State setzen (Hannah → ioBroker)
 
-    def set_presence(self, roomie: str, state_value: int, resident_type: "pb.ResidentType" = pb.ResidentType.ROOMIE):
-        """Setzt den Anwesenheits-Status eines Residents via gRPC."""
-        self._setter(roomie, state_value, resident_type)
-        log.info(f"Residents: {roomie} → {state_value!r} ({resident_type})")
+    def set_presence(
+        self, roomie: str, state_value: int, resident_type: "pb.ResidentType" = pb.ResidentType.ROOMIE,
+        action: int = pb.RESIDENT_PRESENCE_ACTION_UNSPECIFIED,
+    ):
+        """Setzt den Anwesenheits-Status eines Residents via gRPC.
+        state_value bleibt der Legacy-Absolut-Wert (kombinierter presence.state-Write,
+        Adapter < hannah-proto compat_version 2) — action ist die bevorzugte Einzel-Flag-
+        Variante (hannah-proto#7, hannah#309, Root-Cause-Fix für #299)."""
+        self._setter(roomie, state_value, resident_type, action)
+        log.info(f"Residents: {roomie} → {state_value!r} ({resident_type}), action={action}")
 
     def set_user_home(self, roomie: str):
-        self.set_presence(roomie, self._state_home, pb.ResidentType.ROOMIE)
+        self.set_presence(roomie, self._state_home, pb.ResidentType.ROOMIE, pb.HOME)
 
     def set_user_away(self, roomie: str):
-        self.set_presence(roomie, self._state_away, pb.ResidentType.ROOMIE)
+        self.set_presence(roomie, self._state_away, pb.ResidentType.ROOMIE, pb.AWAY)
 
     def set_user_asleep(self, roomie: str):
-        self.set_presence(roomie, self._state_night, pb.ResidentType.ROOMIE)
+        self.set_presence(roomie, self._state_night, pb.ResidentType.ROOMIE, pb.ASLEEP)
 
     def set_user_awake(self, roomie: str):
-        self.set_presence(roomie, self._state_home, pb.ResidentType.ROOMIE)
+        self.set_presence(roomie, self._state_home, pb.ResidentType.ROOMIE, pb.AWAKE)
 
     def announce_online(self):
         """Setzt Hannahs eigenen Status auf 'home' (beim Start)."""
-        self.set_presence(self.hannah_name, self._state_home, pb.ResidentType.ROOMIE)
+        self.set_presence(self.hannah_name, self._state_home, pb.ResidentType.ROOMIE, pb.HOME)
 
     def announce_offline(self):
         """Setzt Hannahs eigenen Status auf 'away' (beim Stop)."""
-        self.set_presence(self.hannah_name, self._state_away, pb.ResidentType.ROOMIE)
+        self.set_presence(self.hannah_name, self._state_away, pb.ResidentType.ROOMIE, pb.AWAY)
 
     def set_guest_home(self, roomie: str):
-        self.set_presence(roomie, self._state_home, pb.ResidentType.GUEST)
+        self.set_presence(roomie, self._state_home, pb.ResidentType.GUEST, pb.HOME)
 
     def set_guest_away(self, roomie: str):
-        self.set_presence(roomie, self._state_away, pb.ResidentType.GUEST)
+        self.set_presence(roomie, self._state_away, pb.ResidentType.GUEST, pb.AWAY)
 
     def set_mood(self, roomie: str, mood: int, resident_type: "pb.ResidentType" = pb.ResidentType.ROOMIE):
         """Pusht eine Stimmungsänderung an den Residents-Adapter, unabhängig vom Presence-Status."""

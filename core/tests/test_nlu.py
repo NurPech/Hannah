@@ -482,6 +482,43 @@ class TestFuzzyDeviceMatch:
         assert intent.device_candidates == []
 
 
+class TestUnknownDeviceNameWithoutCategory:
+    """#301 (manne01) — ein genannter, aber nicht erkannter Gerätename ohne begleitendes
+    Kategoriewort ('Schalte das Radio aus', tatsächliches Gerät heißt 'Musik') fiel bisher
+    unter den Tisch: die #261-Fuzzy-Erkennung griff nur bei bekannter Kategorie, sonst blieb
+    device_not_found nie gesetzt und execute() bulkte auf alle Geräte im Raum."""
+
+    @pytest.fixture
+    def nlu_mixed_room(self):
+        rooms = {"wohnzimmer": "Wohnzimmer"}
+        devices = {
+            "wohnzimmer": {
+                "musik": _make_device("musik", "wohnzimmer", category="media"),
+                "licht": _make_device("licht", "wohnzimmer", category="light"),
+            },
+        }
+        return NLU(cfg={"turn_off_words": ["aus"]}, rooms=rooms, devices=devices)
+
+    def test_unmatched_device_name_is_rejected_not_bulked(self, nlu_mixed_room):
+        intent = nlu_mixed_room.parse("schalte das radio im wohnzimmer aus")
+        assert intent.name == "DeviceNotFound"
+        assert intent.device_id is None
+
+    def test_wildcard_alles_still_bulks(self, nlu_mixed_room):
+        """'alles' ist die bewusste Bulk-Wildcard, kein Gerätename-Versuch — darf durch die
+        #301-Erweiterung nicht fälschlich als unbekannter Gerätename abgelehnt werden."""
+        intent = nlu_mixed_room.parse("schalte im wohnzimmer alles aus")
+        assert intent.name == "TurnOff"
+        assert intent.device_id is None
+
+    def test_plain_room_bulk_without_device_still_works(self, nlu_mixed_room):
+        """Kein Gerätename genannt ('Wohnzimmer aus') → bestehendes Raum-Bulk-Verhalten
+        bleibt unangetastet."""
+        intent = nlu_mixed_room.parse("schalte das wohnzimmer aus")
+        assert intent.name == "TurnOff"
+        assert intent.device_id is None
+
+
 class TestCategoryAwareDispatch:
     """#272 — Wörter wie 'hoch'/'runter' sind je Kategorie unterschiedlich belegt
     (Rolladen: öffnen/schließen; Klima: Lüfterstufe). Die Dispatch-Tabelle wertet nur

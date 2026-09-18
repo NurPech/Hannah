@@ -28,11 +28,10 @@ def _create_user(db, username="leonie") -> int:
 
 class _FakeUser:
     """Test-Double für hannah.models.user.User — presence_manager kennt nur die
-    presence-Property, nicht arrival/departure-Events (die hängen an der echten
-    User.presence-Property, siehe models/user.py, hier nicht relevant)."""
+    presence_state-Property, nicht arrival/departure-Events (die hängen an der echten
+    User.presence_state-Property, siehe models/user.py, hier nicht relevant)."""
     def __init__(self, asleep=False):
-        self.presence = False
-        self.asleep = asleep
+        self.presence_state = "asleep" if asleep else "away"
 
 
 @pytest.fixture
@@ -76,7 +75,7 @@ class TestFusion:
 
         pm.on_ble_sighting(user_id)
 
-        assert fake.presence is True
+        assert fake.presence_state == "home"
 
     def test_tie_between_home_and_away_favors_home(self, db, sources):
         user_id = _create_user(db)
@@ -88,7 +87,7 @@ class TestFusion:
         pm.on_ble_sighting(user_id)  # BLE home_confidence=0.3, fresh
         pm.on_state_update("wlan.present", "false")  # WLAN away_confidence=0.3 -> tie
 
-        assert fake.presence is True
+        assert fake.presence_state == "home"
 
     def test_stronger_away_signal_starts_grace_period_not_instant_away(self, db, sources):
         user_id = _create_user(db)
@@ -97,11 +96,11 @@ class TestFusion:
         pm = self._make(db, user_id, fake, grace_period_seconds=999)
 
         pm.on_state_update("wlan.present", "true")
-        assert fake.presence is True
+        assert fake.presence_state == "home"
 
         pm.on_state_update("wlan.present", "false")
         # Away-Signal allein flippt nicht sofort — Grace-Period (hier absichtlich lang) muss ablaufen
-        assert fake.presence is True
+        assert fake.presence_state == "home"
 
     def test_tristate_residents_value_asleep_counts_as_home(self, db, sources):
         """Residents-Adapter-Präsenzfeld: 0=weg, 1=wach, 2=schlafend — 1 UND 2 sind
@@ -112,10 +111,10 @@ class TestFusion:
         pm = self._make(db, user_id, fake, grace_period_seconds=999)
 
         pm.on_state_update("residents.0.person.leonie.state", "1")
-        assert fake.presence is True
+        assert fake.presence_state == "home"
 
         pm.on_state_update("residents.0.person.leonie.state", "2")
-        assert fake.presence is True  # schlafend bleibt zuhause
+        assert fake.presence_state == "home"  # schlafend bleibt zuhause (Fusion kennt nur home/away)
 
     def test_tristate_residents_value_zero_counts_as_away(self, db, sources):
         user_id = _create_user(db)
@@ -125,12 +124,12 @@ class TestFusion:
 
         pm.on_state_update("residents.0.person.leonie.state", "1")
         pm.on_state_update("residents.0.person.leonie.state", "0")
-        assert fake.presence is True  # Grace-Period läuft gerade erst an
+        assert fake.presence_state == "home"  # Grace-Period läuft gerade erst an
 
         time.sleep(0.3)
         pm.tick()
 
-        assert fake.presence is False
+        assert fake.presence_state == "away"
 
     def test_away_after_grace_period_elapses(self, db, sources):
         user_id = _create_user(db)
@@ -140,21 +139,21 @@ class TestFusion:
 
         pm.on_state_update("wlan.present", "true")
         pm.on_state_update("wlan.present", "false")
-        assert fake.presence is True  # Grace-Period läuft gerade erst an
+        assert fake.presence_state == "home"  # Grace-Period läuft gerade erst an
 
         time.sleep(0.3)
         pm.tick()
 
-        assert fake.presence is False
+        assert fake.presence_state == "away"
 
     def test_asleep_user_never_gets_flipped_to_away(self, db, sources):
         """"Ich gehe schlafen" läuft über residents.set_user_asleep() direkt, nicht über
-        user.presence/user.asleep — die Fusion weiß nichts davon außer über user.asleep.
-        Ein nächtlicher Signalausfall darf den Night-Flag nicht auf "weg" zurücksetzen."""
+        user.presence_state — die Fusion weiß nichts davon außer über den bereits gesetzten
+        "asleep"-Wert selbst. Ein nächtlicher Signalausfall darf presence_state nicht auf
+        "away" zurücksetzen."""
         user_id = _create_user(db)
         sources.create_source(user_id, "iobroker_state", "wlan.present", 1.0, 0.3)
-        fake = _FakeUser(asleep=True)
-        fake.presence = True  # war zuhause, bevor sie schlafen ging
+        fake = _FakeUser(asleep=True)  # bereits als schlafend markiert (impliziert "zuhause")
         pm = self._make(db, user_id, fake, grace_period_seconds=0.2)
 
         pm.on_state_update("wlan.present", "true")
@@ -163,22 +162,21 @@ class TestFusion:
         time.sleep(0.3)
         pm.tick()
 
-        assert fake.presence is True  # bleibt "home", trotz abgelaufener Grace-Period
+        assert fake.presence_state == "asleep"  # bleibt unangetastet, trotz abgelaufener Grace-Period
 
-    def test_asleep_user_never_gets_flipped_from_night_to_plain_home(self, db, sources):
+    def test_asleep_user_never_gets_flipped_from_asleep_to_plain_home(self, db, sources):
         """Spiegelfall zu test_asleep_user_never_gets_flipped_to_away (#299): eine
         (z.B. verzögerte) Ankunfts-Bestätigung, die kurz nach dem expliziten "asleep"-Push
-        eintrifft, darf presence nicht neu auf True setzen — sonst feuert arrival und
-        residents_manager schreibt "home" (1) über den gerade gesetzten Night-Flag (2)."""
+        eintrifft, darf presence_state nicht auf "home" zurückstufen — sonst wäre der gerade
+        gesetzte Night-Flag verloren."""
         user_id = _create_user(db)
         sources.create_source(user_id, "iobroker_state", "wlan.present", 1.0, 0.3)
         fake = _FakeUser(asleep=True)
-        fake.presence = False  # Ankunft von Hannah noch nicht bestätigt, als "gute Nacht" kam
         pm = self._make(db, user_id, fake, grace_period_seconds=0.2)
 
         pm.on_state_update("wlan.present", "true")
 
-        assert fake.presence is False  # bleibt unangetastet, solange asleep gesetzt ist
+        assert fake.presence_state == "asleep"  # bleibt unangetastet, nicht auf "home" zurückgestuft
 
     def test_stale_ble_reading_counts_as_away(self, db, sources):
         """BLE ist push-only (keine explizite 'weg'-Meldung) — eine Sichtung, die älter
@@ -189,16 +187,16 @@ class TestFusion:
         pm = self._make(db, user_id, fake, grace_period_seconds=0.2, ble_staleness_seconds=0.2)
 
         pm.on_ble_sighting(user_id)
-        assert fake.presence is True
+        assert fake.presence_state == "home"
 
         time.sleep(0.3)
         pm.tick()  # BLE jetzt stale -> instantaneous_home wird False, Grace-Period startet
-        assert fake.presence is True  # Grace-Period läuft gerade erst an
+        assert fake.presence_state == "home"  # Grace-Period läuft gerade erst an
 
         time.sleep(0.3)
         pm.tick()  # Grace-Period abgelaufen
 
-        assert fake.presence is False
+        assert fake.presence_state == "away"
 
     def test_fresh_ble_sighting_cancels_pending_away(self, db, sources):
         user_id = _create_user(db)
@@ -216,7 +214,7 @@ class TestFusion:
         time.sleep(0.15)  # insgesamt > 0.2s seit dem ersten Away-Signal, aber < 0.2s seit BLE-Sichtung
         pm.tick()
 
-        assert fake.presence is True
+        assert fake.presence_state == "home"
 
     def test_no_sources_is_a_noop(self, db):
         user_id = _create_user(db)
@@ -225,4 +223,4 @@ class TestFusion:
 
         pm.on_ble_sighting(user_id)
 
-        assert fake.presence is False  # unverändert, kein Fehler
+        assert fake.presence_state == "away"  # unverändert, kein Fehler

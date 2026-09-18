@@ -92,7 +92,7 @@ class UserManager:
         return roomie_id, payload.get("resident_type", "roomie")
 
     def _wire_residents_bridge(self, user: User):
-        """Bei verlinktem Roomie: user.presence/.mood-Änderungen Richtung ioBroker pushen.
+        """Bei verlinktem Roomie: user.presence_state/.mood-Änderungen Richtung ioBroker pushen.
         Presence und Mood werden unabhängig verdrahtet (separate Pusher, separates Tracking),
         falls einer der beiden noch nicht gebunden ist, wenn der andere ankommt."""
         link = self._resident_link(user)
@@ -119,7 +119,7 @@ class UserManager:
         if not self._residents_pusher:
             return
         for user in self.users():
-            if not user.presence:
+            if not user.is_home:
                 continue
             link = self._resident_link(user)
             if not link:

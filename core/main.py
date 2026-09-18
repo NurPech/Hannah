@@ -26,7 +26,7 @@ from hannah.user_manager import UserManager
 from hannah.utils.db import get_db, init_db
 from hannah import activity_log
 from hannah.utils.activity_db import init_activity_db
-from hannah.residents import Roomie, Guest, Pet, Resident, HOME_PRESENCE_STATE
+from hannah.residents import Roomie, Guest, Pet, Resident, AWAY_PRESENCE_STATE, HOME_PRESENCE_STATE, NIGHT_PRESENCE_STATE
 from hannah import audio as audio_mod
 from hannah import config as config_mod
 from hannah.car_tracker import CarManager, CarTracker
@@ -1567,8 +1567,8 @@ def main():
         mqtt_handler.publish_raw(f"hannah/ble/{tag.label}/location", payload)
         grpc_servicer.agent_ble_update(tag.label, tag.mac, room_str, sat_str, rssi)
 
-        # BLE-Sichtung geht seit #294 durch die Presence-Fusion statt direkt user.presence
-        # zu setzen — dort wird sie mit anderen Quellen (z.B. WLAN) gegeneinander gewichtet
+        # BLE-Sichtung geht seit #294 durch die Presence-Fusion statt direkt
+        # user.presence_state zu setzen — dort wird sie mit anderen Quellen (z.B. WLAN) gegeneinander gewichtet
         # statt bedingungslos "home" zu erzwingen. Nur bei aktiver Sichtung (room gesetzt),
         # kein explizites "weg" von hier aus (schwacher Empfang ≠ Haus verlassen).
         if tag.user_id and room is not None:
@@ -2003,6 +2003,7 @@ def main():
             )
 
     def _on_agent_text_command(text: str) -> tuple[str, str]:
+        log.info(f"[iobroker] Anfrage: {text!r}")
         return _handle_text(text, source="iobroker", channel_type="iobroker")
 
     def _on_agent_set_resident(resident_id: str, presence_state: int, resident_type: pb.ResidentType):
@@ -2337,13 +2338,29 @@ def main():
 
     _user_manager.set_mood_pusher(_push_user_mood)
 
+    # Ordnet resident.presence_state (Adapter-Tristate-Int) auf Users Tristate-Feld ab —
+    # alle drei Pull-Handler (arrival/departure/sleep_changed) schreiben unabhängig von
+    # ihrem eigenen Auslöser den vollen, aktuellen Zustand aus resident selbst, statt
+    # jeweils nur ihren eigenen Teilaspekt zu setzen (hannah#309, Nachfolger von #298):
+    # Resident.update() feuert alle drei Events aus derselben atomaren Aktualisierung,
+    # daher konvergieren separat threaded Handler hier immer auf denselben Zielwert,
+    # statt sich (wie zuvor bei zwei unabhängigen Booleans) gegenseitig zu überschreiben.
+    _RESIDENT_PRESENCE_STATE_MAP = {
+        AWAY_PRESENCE_STATE: "away",
+        HOME_PRESENCE_STATE: "home",
+        NIGHT_PRESENCE_STATE: "asleep",
+    }
+
+    def _user_presence_state(resident: Resident) -> str:
+        return _RESIDENT_PRESENCE_STATE_MAP.get(resident.presence_state, "away")
+
     def _on_resident_arrival(resident: Resident):
         if isinstance(resident, Roomie):
             user = _user_manager.get_user_by_linked_account("residents", resident.id)
             if not user:
                 log.info(f"Resident '{resident.roomie_id}' ohne Hannah-User-Link — Arrival ignoriert (#287).")
                 return
-            user.presence = True
+            user.presence_state = _user_presence_state(resident)
             process_announcement("all", "Willkommen zuhause!")
             grpc_servicer.publish_event(make_resident_event(resident.roomie_id, user.display_name, "arrived"))
         elif isinstance(resident, Guest):
@@ -2402,7 +2419,7 @@ def main():
             if not user:
                 log.info(f"Resident '{resident.roomie_id}' ohne Hannah-User-Link — Departure ignoriert (#287).")
                 return
-            user.presence = False
+            user.presence_state = _user_presence_state(resident)
             grpc_servicer.publish_event(make_resident_event(resident.roomie_id, user.display_name, "departed"))
             if not residents.is_home() and _ota_pending:
                 log.info("Alle weg — OTA-Updates freigeben.")
@@ -2416,7 +2433,7 @@ def main():
             if not user:
                 log.info(f"Resident '{resident.roomie_id}' ohne Hannah-User-Link — Sleep-Status ignoriert (#287).")
                 return
-            user.asleep = is_asleep
+            user.presence_state = _user_presence_state(resident)
 
     def _on_resident_mood_changed(resident: Resident, _old_mood: int, mood: int):
         """Pull-Richtung: ioBroker meldet eine Stimmungsänderung -> auf den verlinkten Hannah-User übertragen.

@@ -4,6 +4,16 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.83.0 (2026-09-18)
+### Hannah Core
+
+* Fixed: a request sent via the ioBroker command object was only logged for its outgoing answer, not the incoming request itself — unlike the Telegram and satellite paths, which log both directions (Refs #303)
+* Fixed: a `TurnOff`/`TurnOn` command naming a device that didn't match anything in the target room (e.g. a mishead or unconfigured name) silently fell back to controlling every device in the room instead of reporting "device not found" — the existing fuzzy device-match rejection (#261) only kicked in when a device category word was also spoken; it now applies regardless (Refs #301)
+* Fixed: an arriving/departing/falling-asleep/waking-up resident could race internally — presence and sleep status were tracked as two independent flags updated by separately dispatched events, instead of one consistent state (Refs #309)
+* Changed: a presence push to ioBroker (arrival/departure via WLAN/BLE, or an explicit "gute Nacht"/"guten Morgen") now tells the adapter which single presence flag to set, instead of always overwriting the combined presence value — avoids one push accidentally clobbering information a different, unrelated push had just set (root cause of the #299 fix). Requires an adapter update to take effect; older adapters keep working unchanged (Refs #309)
+* Chore: documented the presence-fusion sleep-status guard (added for #299) as a permanent safety net rather than a temporary workaround — it still protects against a not-yet-updated ioBroker adapter, so it stays even though an updated adapter no longer needs it. No functional change (Refs #309)
+
 ## 0.82.6 (2026-09-18)
 ### Hannah Core
 

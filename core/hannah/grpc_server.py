@@ -1231,12 +1231,19 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 q.put(cmd)
             return len(self._agent_queues) > 0
 
-    def agent_set_resident(self, resident_id: str, presence_state: int, resident_type: pb.ResidentType) -> bool:
-        """Push SetResident command to all connected adapters."""
+    def agent_set_resident(
+        self, resident_id: str, presence_state: int, resident_type: pb.ResidentType,
+        action: int = pb.RESIDENT_PRESENCE_ACTION_UNSPECIFIED,
+    ) -> bool:
+        """Push SetResident command to all connected adapters.
+        action (hannah-proto#7/hannah#309): preferred single-flag write; presence_state
+        stays populated as the legacy absolute-value fallback for adapters older than
+        compat_version 2, which don't understand action and ignore it entirely."""
         cmd = pb.AgentCommand(set_resident=pb.AgentSetResident(
             resident_id=resident_id,
             presence_state=presence_state,
             type=resident_type,
+            action=action,
         ))
         with self._agent_lock:
             for q in self._agent_queues:
