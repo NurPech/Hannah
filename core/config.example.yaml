@@ -47,12 +47,10 @@ grpc:
   enforce_protocol_version: false  # #60: Mismatch/fehlende x-proto-version-Metadata ablehnen statt nur loggen — erst aktivieren, wenn ALLE Clients umgestellt sind
   enforce_compat_version: false    # #217: wie oben, aber pro Message (x-compat-version) statt global — erst aktivieren, wenn ALLE Clients umgestellt sind
 
-asset_server:
-  url: "https://hannah-asset.example.com"
-  token: "IHR_ASSET_TOKEN"
-
 user_registry:
-  sync_interval: 60            # Sekunden zwischen ioBroker-Abfragen
+  hannah_roomie: "hannah"   # Roomie-ID, unter der Hannah sich selbst als Resident registriert
+                            # (eigener Zweck/Schlüssel als residents.hannah_roomie unten — beide
+                            # Defaults sind zufällig identisch, nicht dieselbe Einstellung)
 
 satellite_manager:
   seed_ttl_days: 7              # Provisionierte, aber nie gepairte Satelliten-Seeds nach X Tagen löschen
@@ -141,6 +139,10 @@ audio:
   # "auto" versucht WAV-Header zu erkennen, fällt auf raw_pcm zurück
   format: "auto"
 
+# WAV-Datei für den "Plink"-Ton beim geführten Wakeword-Training (TriggerPlink).
+# Leer oder nicht ladbar = generierter Ersatzton (kein Fehler).
+# plink_wav_path: "/home/pi/plink.wav"
+
 # NLU-Wortlisten (turn_on_words, turn_off_words, category_words, query_words,
 # temperature_units, percentage_units) liegen komplett in den DB-Settings (Kategorie
 # "nlu"), nicht mehr hier. Wird bei leerer DB automatisch mit generischen Defaults
@@ -155,6 +157,12 @@ llm:
   model: "llama3.2"       # Ollama-Modell, Cloud-Modell-ID, oder custom Modelfile-Name
   timeout: 60             # Sekunden bis LLM-Timeout
   max_tokens: 2048
+
+  context_ttl: 120.0      # Sekunden bis der Konversations-Kontext (Multi-Turn) verfällt
+  history_turns: 3        # Wie viele vergangene Turns maximal in den Kontext einfließen
+
+  # Antwort, wenn llm.enabled: false ist (DummyLLM) — kein Modell-Aufruf, fester Text.
+  fallback_response: "Das kann ich leider nicht beantworten."
 
   # Persönlichkeit (optional) — weglassen wenn die Persönlichkeit im Modell eingebaut ist.
   #

@@ -316,13 +316,8 @@ def main():
     weather = WeatherCache()
 
     # Auto-Tracker: cars-Tabelle (CarRegistry, #115) mit Owner-User-IDs → Roomie-IDs
-    # übersetzt (car_tracker.py kennt nur Roomie-IDs); cfg["cars"]/cfg["car"] bleiben
-    # Fallback für Installationen, die noch nie migriert wurden.
-    _car_cfgs = (
-        car_registry.get_tracker_configs(_resolve_roomie_id)
-        or cfg.get("cars")
-        or ([cfg["car"]] if cfg.get("car") else [{}])
-    )
+    # übersetzt (car_tracker.py kennt nur Roomie-IDs).
+    _car_cfgs = car_registry.get_tracker_configs(_resolve_roomie_id) or [{}]
     car_manager = CarManager([CarTracker(c) for c in _car_cfgs])
 
     audio_cfg = cfg.get("audio", {})
@@ -1504,11 +1499,8 @@ def main():
     mqtt_handler.set_dnd_handler(_on_dnd)
 
     # BLE-Lokalisierung: Tags kommen aus der ble_tags-Tabelle (BleTagManager, #115) mit
-    # user_id bereits aufgelöst — Fallback auf cfg["ble"]["tags"] für un-migrierte Installs.
-    ble_cfg = {**cfg.get("ble", {})}
-    _ble_tag_records = ble_tag_manager.get_tag_records()
-    if _ble_tag_records:
-        ble_cfg["tags"] = _ble_tag_records
+    # user_id bereits aufgelöst.
+    ble_cfg = {**cfg.get("ble", {}), "tags": ble_tag_manager.get_tag_records()}
 
     def _get_satellite_room(device: str) -> Optional[str]:
         all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}

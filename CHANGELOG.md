@@ -4,6 +4,14 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.83.2 (2026-09-19)
+### Hannah Core
+
+* Fixed: `config.example.yaml` documented `asset_server.url`/`asset_server.token` and `user_registry.sync_interval`, but nothing in Core actually reads them — removed both (Refs #314)
+* Fixed: `config.example.yaml` was missing several `config.yaml` keys Core genuinely reads (`llm.context_ttl`, `llm.history_turns`, `llm.fallback_response`, `user_registry.hannah_roomie`, `plink_wav_path`) — added with explanatory comments (Refs #315)
+* Fixed: car-tracker and BLE-tag setup still silently fell back to legacy `config.yaml` keys (`cars`/`car`, `ble.tags`) for installs that were never migrated to their dedicated DB tables (#115) — the DB tables are now the only source, matching what `config.example.yaml` already documented (Refs #316)
+
 ## 0.83.1 (2026-09-18)
 ### Telegram
 
