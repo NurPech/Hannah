@@ -5,6 +5,16 @@
 -->
 
 
+## 0.83.3 (2026-09-19)
+### Hannah Core
+
+* Chore: removed the ioBroker device-grouping/state-role fallback for adapters older than hannah-proto 3.8.0 (`virtual_device_prefix` config option, path-depth guessing) — no such adapter can connect anymore since `enforce_protocol_version` requires hannah-proto>=4.0.0 on every gRPC call (Refs #321)
+* Chore: bumped `hannah-proto` floor to >=4.2.1 — fixes a `grpcio-tools` build-floor mismatch in the published package, no proto schema changes
+
+### Telegram
+
+* Chore: bumped `hannah-proto`/`grpcio` floors to >=4.2.1/>=1.84.0 to match Core, fixing the same build-floor mismatch
+
 ## 0.83.2 (2026-09-19)
 ### Hannah Core
 

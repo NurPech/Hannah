@@ -14,8 +14,8 @@ has run at least once - they're created by Hannah Core's normal startup), includ
 to a Hannah users.id).
 
 Everything else in config.yaml (udp, web_ui, grpc, audio, mqtt/asset_server
-connection data, stt/tts backend & credentials, ble.stale_timeout, iobroker.
-virtual_device_prefix/feedback_timeout) stays static YAML config and is not touched.
+connection data, stt/tts backend & credentials, ble.stale_timeout,
+iobroker.feedback_timeout) stays static YAML config and is not touched.
 
 Usage:
     python migrate_config_settings.py [--config config.yaml] [--hannah-db hannah.db]

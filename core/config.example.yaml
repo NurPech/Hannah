@@ -64,8 +64,6 @@ residents:
   state_away: 0   # ⏸️ Abwesend
 
 iobroker:
-  # Pfad-Prefix der virtualDevice-Geräte in ioBroker
-  virtual_device_prefix: "javascript.0.virtualDevice"
   feedback_timeout: 3.0   # Sekunden bis "Gerät antwortet nicht"
   # State-Namen der Geräte liegen in den DB-Settings (Kategorie "iobroker", Setting
   # "state_names"), nicht mehr hier. Wird bei leerer DB automatisch mit generischen

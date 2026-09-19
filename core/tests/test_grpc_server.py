@@ -81,6 +81,8 @@ def test_device_snapshot_dispatched():
     devices = [
         AgentDevice(
             state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on",
+            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
+            canonical_key="on",
             room="wohnzimmer",
             device="Decke",
             functions=["Licht"],
@@ -100,6 +102,8 @@ def test_get_devices_includes_state_types_and_enum_values():
     devices = [
         AgentDevice(
             state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on",
+            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
+            canonical_key="on",
             room="wohnzimmer",
             device="Decke",
             device_type="light",
@@ -109,6 +113,8 @@ def test_get_devices_includes_state_types_and_enum_values():
         ),
         AgentDevice(
             state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.mode",
+            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
+            canonical_key="mode",
             room="wohnzimmer",
             device="Decke",
             device_type="light",
@@ -138,6 +144,8 @@ def test_get_devices_includes_state_writable():
     devices = [
         AgentDevice(
             state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on",
+            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
+            canonical_key="on",
             room="wohnzimmer",
             device="Decke",
             device_type="light",
@@ -147,6 +155,8 @@ def test_get_devices_includes_state_writable():
         ),
         AgentDevice(
             state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.power",
+            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
+            canonical_key="power",
             room="wohnzimmer",
             device="Decke",
             device_type="light",
