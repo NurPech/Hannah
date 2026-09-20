@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 import shutil
 from contextlib import asynccontextmanager
@@ -10,11 +11,57 @@ from fastapi import APIRouter, FastAPI, Request, Header
 import uvicorn
 
 
+_ENV_PREFIX = "HANNAH_VOICEID_"
+
+
 def _load_config(path: str) -> dict:
     if path and os.path.exists(path):
         with open(path) as f:
-            return yaml.safe_load(f) or {}
-    return {}
+            parsed = yaml.safe_load(f) or {}
+    else:
+        parsed = {}
+    return _apply_env_overrides(parsed)
+
+
+def _apply_env_overrides(cfg: dict) -> dict:
+    """Jeder Config-Pfad ist per Env überschreibbar, ohne Allowlist. Namensschema:
+    HANNAH_VOICEID_<PATH> — komponentenspezifisches Präfix (nicht bloß "HANNAH_"), sonst
+    Kollision mit anderen, unabhängigen HANNAH_*-Variablen im Projekt (siehe Core, #327).
+    "." zwischen Verschachtelungsebenen wird IMMER zu "__" (auch ohne Not), einfache "_"
+    innerhalb eines Key-Namens bleiben erhalten (recognition.unknown_threshold ->
+    HANNAH_VOICEID_RECOGNITION__UNKNOWN_THRESHOLD)."""
+    result = copy.deepcopy(cfg)
+    for env_key, raw_value in os.environ.items():
+        if not env_key.startswith(_ENV_PREFIX):
+            continue
+        path = [segment.lower() for segment in env_key[len(_ENV_PREFIX):].split("__")]
+        if not path or not all(path):
+            continue
+        node = result
+        for segment in path[:-1]:
+            child = node.get(segment)
+            if not isinstance(child, dict):
+                child = {}
+                node[segment] = child
+            node = child
+        node[path[-1]] = _coerce(raw_value)
+    return result
+
+
+def _coerce(value: str):
+    """Env-Werte sind immer Strings — ohne Schema die beste Annäherung an den Typ,
+    den derselbe Wert in YAML hätte (int/float/bool vor String-Fallback)."""
+    if value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
 
 
 def _load_model():

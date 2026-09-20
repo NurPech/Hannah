@@ -4,6 +4,23 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.84.0 (2026-09-20)
+### Hannah Core
+
+* Added: every `config.yaml` key can now be overridden via environment variable (`HANNAH_CORE_<PATH>`, with `__` separating nesting levels), and `config.yaml` itself is now optional — Core starts fine with an empty/missing file as long as enough values arrive via environment variables (Refs #327)
+* Fixed: on a native (systemd) install, the first-run admin account/password notice could appear delayed or not at all in `journalctl` — stdout wasn't unbuffered outside a real terminal, unlike the Docker image which already had this set (Refs #331)
+
+### Telegram
+
+* Added: every `config.yaml` key can now be overridden via environment variable (`HANNAH_TELEGRAM_<PATH>`, with `__` separating nesting levels), and `config.yaml` itself is now optional — hannah-telegram starts fine with an empty/missing file as long as enough values arrive via environment variables (Refs #328)
+
+### VoiceID
+
+* Added: every `config.yaml` key can now be overridden via environment variable (`HANNAH_VOICEID_<PATH>`, with `__` separating nesting levels) (Refs #330)
+
+### Hannah Proxy
+
+* Added: every `config.yaml` key can now be overridden via environment variable (`HANNAH_PROXY_<PATH>`, with `__` separating nesting levels), and `config.yaml` itself is now optional — hannah-proxy starts fine with an empty/missing file as long as enough values arrive via environment variables (Refs #329)
 
 ## 0.83.6 (2026-09-20)
 ### Hannah Core

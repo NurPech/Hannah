@@ -13,6 +13,9 @@ User=hannah
 WorkingDirectory=/opt/hannah/core
 ExecStart=/opt/hannah/core/venv/bin/python main.py -c /etc/hannah/config.yaml
 Environment=HOME=/opt/hannah/core
+# Ohne echtes Terminal puffert Python stdout sonst blockweise statt zeilenweise —
+# journalctl würde z.B. die First-Run-Admin-Passwort-Meldung verzögert anzeigen
+Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=10
 
