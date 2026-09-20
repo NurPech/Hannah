@@ -136,7 +136,7 @@ def main():
 
     try:
         cfg = config_mod.load(args.config)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         log.error(str(e))
         sys.exit(1)
 

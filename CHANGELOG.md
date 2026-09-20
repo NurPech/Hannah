@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.83.5 (2026-09-20)
+### Hannah Core
+
+* Fixed: an invalid `config.yaml` (e.g. one that isn't a YAML mapping at all) crashed with a cryptic `AttributeError` deep inside startup instead of a clear error message (Refs #324)
+* Fixed: a `config.yaml` saved with a non-UTF-8 encoding crashed with a raw `UnicodeDecodeError` instead of a clear error message (Refs #325)
 
 ## 0.83.4 (2026-09-20)
 ### Hannah Core
