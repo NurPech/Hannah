@@ -246,7 +246,11 @@ class MQTTHandler:
         host = self._cfg.get("host", "localhost")
         port = self._cfg.get("port", 1883)
         log.info(f"Verbinde mit MQTT-Broker {host}:{port} ...")
-        self._client.connect(host, port, keepalive=60)
+        # connect_async() statt connect(): blockiert nicht und wirft bei nicht erreichbarem
+        # Broker keine Exception — paho übernimmt Verbindungsaufbau + automatisches Reconnect
+        # mit Backoff im loop_start()-Hintergrund-Thread (#326, sonst crasht Core beim Start
+        # bei jedem Startup-Race oder fehlendem Broker).
+        self._client.connect_async(host, port, keepalive=60)
         self._client.loop_start()
 
     def disconnect(self):

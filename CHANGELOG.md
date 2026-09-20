@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.83.6 (2026-09-20)
+### Hannah Core
+
+* Fixed: Core crashed on startup if the MQTT broker was unreachable (missing, or not yet up in a Docker Compose startup race) — connects asynchronously now, with paho's built-in background reconnect, instead of failing hard (Refs #326)
+
 ## 0.83.5 (2026-09-20)
 ### Hannah Core
 

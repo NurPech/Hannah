@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from hannah.mqtt_handler import MQTTHandler
 
@@ -179,3 +180,22 @@ class TestPlaybackBusy:
         handler = MQTTHandler({}, {})
         handler.clear_busy("wz-sat")
         assert handler.is_busy("wz-sat") is False
+
+
+class TestConnect:
+    """#326: connect() must not crash Core when the broker is unreachable at startup."""
+
+    def test_uses_async_connect_and_does_not_raise_when_broker_unreachable(self):
+        handler = MQTTHandler({"host": "127.0.0.1", "port": 1}, {})
+
+        def _raise(*args, **kwargs):
+            raise ConnectionRefusedError("refused")
+
+        handler._client.connect = _raise  # the blocking call must never be used
+        handler._client.connect_async = MagicMock()
+        handler._client.loop_start = MagicMock()
+
+        handler.connect()  # must not raise
+
+        handler._client.connect_async.assert_called_once_with("127.0.0.1", 1, keepalive=60)
+        handler._client.loop_start.assert_called_once()
