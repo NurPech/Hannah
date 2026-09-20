@@ -5,6 +5,13 @@
 -->
 
 
+## 0.83.4 (2026-09-20)
+### Hannah Core
+
+* Fixed: a failed resident presence/mood push to ioBroker (no adapter connected via `AgentConnect`) was logged as a success — now logs a warning instead (Refs #322)
+* Fixed: the trigger reload logged an INFO line every minute regardless of whether anything changed — now only on an actual change, otherwise DEBUG (Refs #319)
+* Fixed: BLE room-location updates logged on INFO for every satellite flicker, not just real room changes — downgraded to DEBUG (Refs #323)
+
 ## 0.83.3 (2026-09-19)
 ### Hannah Core
 

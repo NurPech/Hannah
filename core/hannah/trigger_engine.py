@@ -801,8 +801,12 @@ class TriggerEngine:
                 d["actions"] = d.get("actions") or []
                 triggers.append(d)
             with self._lock:
+                changed = triggers != self._triggers
                 self._triggers = triggers
-            log.info(f"TriggerEngine: {len(triggers)} Trigger aus der Datenbank geladen")
+            if changed:
+                log.info(f"TriggerEngine: {len(triggers)} Trigger aus der Datenbank geladen")
+            else:
+                log.debug(f"TriggerEngine: {len(triggers)} Trigger aus der Datenbank geladen (unverändert)")
         except Exception as e:
             log.error(f"TriggerEngine: Fehler beim Laden der Trigger aus der Datenbank: {e}")
 

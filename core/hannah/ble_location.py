@@ -128,7 +128,7 @@ class BleLocationEngine:
         self._last_sat[mac] = best_sat
         room = self._get_room(best_sat) if best_sat else None
         tag = self._tags[mac]
-        log.info(f"BLE: {tag.label} ({mac}) → {room!r} via {best_sat!r} (RSSI {best_rssi})")
+        log.debug(f"BLE: {tag.label} ({mac}) → {room!r} via {best_sat!r} (RSSI {best_rssi})")
         if self._on_change:
             try:
                 self._on_change(tag, room, best_sat, best_rssi)

@@ -135,8 +135,14 @@ class ResidentsClient:
         state_value bleibt der Legacy-Absolut-Wert (kombinierter presence.state-Write,
         Adapter < hannah-proto compat_version 2) — action ist die bevorzugte Einzel-Flag-
         Variante (hannah-proto#7, hannah#309, Root-Cause-Fix für #299)."""
-        self._setter(roomie, state_value, resident_type, action)
-        log.info(f"Residents: {roomie} → {state_value!r} ({resident_type}), action={action}")
+        delivered = self._setter(roomie, state_value, resident_type, action)
+        if delivered:
+            log.info(f"Residents: {roomie} → {state_value!r} ({resident_type}), action={action}")
+        else:
+            log.warning(
+                f"Residents: {roomie} → {state_value!r} ({resident_type}), action={action} "
+                "NICHT zugestellt — kein Adapter über AgentConnect verbunden."
+            )
 
     def set_user_home(self, roomie: str):
         self.set_presence(roomie, self._state_home, pb.ResidentType.ROOMIE, pb.HOME)
@@ -166,8 +172,14 @@ class ResidentsClient:
 
     def set_mood(self, roomie: str, mood: int, resident_type: "pb.ResidentType" = pb.ResidentType.ROOMIE):
         """Pusht eine Stimmungsänderung an den Residents-Adapter, unabhängig vom Presence-Status."""
-        self._mood_setter(roomie, mood, resident_type)
-        log.info(f"Residents: {roomie} → mood {mood!r} ({resident_type})")
+        delivered = self._mood_setter(roomie, mood, resident_type)
+        if delivered:
+            log.info(f"Residents: {roomie} → mood {mood!r} ({resident_type})")
+        else:
+            log.warning(
+                f"Residents: {roomie} → mood {mood!r} ({resident_type}) "
+                "NICHT zugestellt — kein Adapter über AgentConnect verbunden."
+            )
 
     # ------------------------------------------------------------------
     # Cache lesen
