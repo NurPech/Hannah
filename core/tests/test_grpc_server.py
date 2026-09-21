@@ -1223,7 +1223,42 @@ def test_link_account_with_json_provider_payload_round_trips_as_dict(tmp_path):
     assert isinstance(la.provider_payload, dict)
     assert la.provider_payload["roomie_id"] == "leonie"
 
-    assert user_manager._resident_link(fresh) == ("leonie", "roomie")
+def test_link_account_accepts_chat_provider(tmp_path):
+    """hannah-chat's /login self-links the roomie to provider "chat" with their own
+    user_id as account_id (gessinger/voice/hannah#332) — must not be rejected as an
+    unknown provider like an arbitrary made-up service name would be."""
+    user_manager, _get_db = _make_user_manager_with_leonie(tmp_path)
+    user = user_manager.get_user_by_username("leonie")
+    servicer = _make_server(user_manager=user_manager)
+
+    request = LinkAccountRequest(user_id=user.id, service="chat", account_id=str(user.id))
+    response = servicer.LinkAccount(request, MagicMock())
+
+    assert response.ok is True
+
+def test_link_account_relinking_same_user_and_provider_replaces_old_link(tmp_path):
+    """Regression (#332): linked_accounts has UNIQUE(user_id, provider), but LinkAccount
+    only guarded against a conflict with a *different* user and then always INSERTed —
+    relinking the same user to the same provider a second time (e.g. every hannah-chat
+    /login, or running Telegram's /link flow twice) raised an unhandled IntegrityError.
+    LinkAccount must upsert instead of crashing, and the new account_id must win."""
+    user_manager, get_db = _make_user_manager_with_leonie(tmp_path)
+    user = user_manager.get_user_by_username("leonie")
+    servicer = _make_server(user_manager=user_manager)
+
+    first = servicer.LinkAccount(
+        LinkAccountRequest(user_id=user.id, service="telegram", account_id="111"), MagicMock()
+    )
+    assert first.ok is True
+
+    second = servicer.LinkAccount(
+        LinkAccountRequest(user_id=user.id, service="telegram", account_id="222"), MagicMock()
+    )
+    assert second.ok is True
+
+    fresh = User.get(get_db(), id=user.id)
+    la = fresh.get_linked_account("telegram")
+    assert la.external_id == "222"
 
 def test_resident_link_self_heals_malformed_string_provider_payload(tmp_path):
     """A legacy/corrupted provider_payload (from the double-encoding bug above, before it

@@ -4,6 +4,25 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.84.1 (2026-09-21)
+### Hannah Core
+
+* Added: `"chat"` recognized as a `LinkAccount` provider, for the upcoming hannah-chat `/login` command to self-link a roomie's own user ID (Refs #332)
+* Fixed: `LinkAccount` crashed with an unhandled error when linking the same user to the same provider a second time — `linked_accounts` enforces one row per (user, provider), but the RPC handler always inserted instead of replacing an existing link (Refs #332)
+* Chore: bumped the `python:3.14-slim` Docker base image digest
+
+### Hannah Proxy
+
+* Chore: updated `hannah-proto-go` dependency to v4.2.1
+
+### Telegram
+
+* Chore: bumped the `python:3.14-slim` Docker base image digest
+
+### VoiceID
+
+* Chore: bumped the `python:3.14-slim` Docker base image digest
+
 ## 0.84.0 (2026-09-20)
 ### Hannah Core
 
