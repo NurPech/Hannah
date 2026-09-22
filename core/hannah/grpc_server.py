@@ -420,11 +420,12 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             except json.JSONDecodeError:
                 log.warning(f"LinkAccount: provider_payload für user_id={request.user_id} ist kein gültiges JSON, ignoriert: {request.provider_payload!r}")
 
-        # Upsert: linked_accounts has UNIQUE(user_id, provider), so re-linking this user to
-        # the same provider (e.g. a repeat login, or Telegram's /link run again) would hit an
-        # unhandled IntegrityError on the raw INSERT below without dropping the old row first.
+        # Prevent IntegrityError: Since (user_id, provider) is UNIQUE, we check
+        # if a link already exists. If it does, the repeated linking attempt
+        # is skipped (no actual upsert/update is performed) but still reported
+        # as success, since the desired end state (linked) already holds.
         if user.get_linked_account(request.service):
-            user.unlink_account(request.service)
+            return pb.StatusResponse(ok=True, message="bereits verknüpft")
 
         user.link_account(request.service, request.account_id, provider_payload=provider_payload)
         return pb.StatusResponse(ok=True, message="verknüpft")

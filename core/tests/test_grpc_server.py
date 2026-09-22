@@ -1236,12 +1236,14 @@ def test_link_account_accepts_chat_provider(tmp_path):
 
     assert response.ok is True
 
-def test_link_account_relinking_same_user_and_provider_replaces_old_link(tmp_path):
-    """Regression (#332): linked_accounts has UNIQUE(user_id, provider), but LinkAccount
-    only guarded against a conflict with a *different* user and then always INSERTed —
-    relinking the same user to the same provider a second time (e.g. every hannah-chat
-    /login, or running Telegram's /link flow twice) raised an unhandled IntegrityError.
-    LinkAccount must upsert instead of crashing, and the new account_id must win."""
+def test_link_account_relinking_same_user_and_provider_is_skipped(tmp_path):
+    """Regression (#332, revised #333): linked_accounts has UNIQUE(user_id, provider), but
+    LinkAccount only guarded against a conflict with a *different* user and then always
+    INSERTed — relinking the same user to the same provider a second time (e.g. every
+    hannah-chat /login, or running Telegram's /link flow twice) raised an unhandled
+    IntegrityError. LinkAccount must skip the repeated link instead of crashing, reporting
+    success since the desired end state already holds — and the original account_id must
+    be left untouched (no upsert)."""
     user_manager, get_db = _make_user_manager_with_leonie(tmp_path)
     user = user_manager.get_user_by_username("leonie")
     servicer = _make_server(user_manager=user_manager)
@@ -1257,8 +1259,7 @@ def test_link_account_relinking_same_user_and_provider_replaces_old_link(tmp_pat
     assert second.ok is True
 
     fresh = User.get(get_db(), id=user.id)
-    la = fresh.get_linked_account("telegram")
-    assert la.external_id == "222"
+    assert fresh.get_linked_account("telegram").external_id == "111"
 
 def test_resident_link_self_heals_malformed_string_provider_payload(tmp_path):
     """A legacy/corrupted provider_payload (from the double-encoding bug above, before it

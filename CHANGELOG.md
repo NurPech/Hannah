@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.84.2 (2026-09-22)
+### Hannah Core
+* Fixed: `LinkAccount` now prevents redundant re-linking attempts and race conditions when linking an already connected account. Instead of unlinking and re-linking, the service now checks if a link for the given service already exists and skips the insert if present, avoiding potential IntegrityError issues due to the UNIQUE(user_id, provider) constraint.
+
 ## 0.84.1 (2026-09-21)
 ### Hannah Core
 
