@@ -37,7 +37,7 @@ DEFAULT_NLU_SETTINGS: dict = {
         "temperatur": "temperature_sensor", "temperaturen": "temperature_sensor", "warm": "temperature_sensor",
         "fenster": "window",
         "tuer": "door", "tueren": "door",
-        "rollladen": "blind",
+        "rollladen": "blind", "rolladen": "blind", "rolllaeden": "blind", "rollaeden": "blind",
         "luftqualitaet": "air_quality_sensor", "iaq": "air_quality_sensor", "co2": "air_quality_sensor",
         "voc": "air_quality_sensor", "luftguete": "air_quality_sensor", "luft": "air_quality_sensor",
         "raumluft": "air_quality_sensor",
@@ -197,6 +197,35 @@ class SettingsManager:
             for name, value in DEFAULT_PRESENCE_SETTINGS.items():
                 self.create_setting(cat, name, value)
 
+    def run_data_migrations(self) -> None:
+        """Zieht neue Default-Werte einmalig in bestehende Installationen nach — seed_defaults()
+        greift nur bei einer leeren Kategorie. Jede Migration läuft genau einmal (Marker in
+        applied_migrations), damit ein Wert, den der Nutzer danach bewusst wieder entfernt,
+        nicht bei jedem Start zurückkommt. Nach seed_defaults() aufrufen: auf einer frischen
+        DB sind die Werte dann schon da, die Migration setzt nur noch ihren Marker."""
+        db = self._db()
+        applied = {r[0] for r in db.execute('SELECT "name" FROM "applied_migrations"').fetchall()}
+        for name, migration in _DATA_MIGRATIONS:
+            if name in applied:
+                continue
+            migration(self)
+            db.execute('INSERT INTO "applied_migrations" ("name") VALUES (?)', (name,))
+            db.commit()
+
+    def _add_missing_category_words(self, words: dict[str, str]) -> None:
+        """Ergänzt fehlende Schlüssel in nlu.category_words — vorhandene Einträge (auch
+        abweichend gemappte) bleiben unangetastet. Ohne gespeicherte category_words
+        greift ohnehin der Fallback in hannah.nlu, dann gibt es nichts zu ergänzen."""
+        cat_id = self.get_category_id("nlu")
+        if cat_id is None:
+            return
+        setting = Setting.get(self._db(), category=cat_id, name="category_words")
+        if not setting or not isinstance(setting.value, dict):
+            return
+        missing = {k: v for k, v in words.items() if k not in setting.value}
+        if missing:
+            setting.update(value={**setting.value, **missing})
+
     def cleanup_legacy_settings(self) -> None:
         """Entfernt Settings-Categories, die in einer früheren Version noch aus
         config.yaml in die DB migriert wurden, inzwischen aber nicht mehr gelesen
@@ -211,3 +240,13 @@ class SettingsManager:
         cat = SettingsCategory.get(self._db(), name="iobroker")
         if cat:
             cat.delete()  # ON DELETE CASCADE räumt zugehörige "settings"-Zeilen mit auf
+
+
+# Einmalige Datenmigrationen, in Ausführungsreihenfolge — Name ist der Marker in
+# applied_migrations und darf nach dem Release nie mehr geändert werden.
+_DATA_MIGRATIONS: list[tuple[str, Callable[[SettingsManager], None]]] = [
+    # #317: umgangssprachliche Zweifach-L-Schreibweise + Plural für Rollläden
+    ("317_blind_category_words", lambda m: m._add_missing_category_words({
+        "rolladen": "blind", "rolllaeden": "blind", "rollaeden": "blind",
+    })),
+]

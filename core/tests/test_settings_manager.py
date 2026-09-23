@@ -139,6 +139,58 @@ class TestSeedDefaults:
         )
 
 
+class TestRunDataMigrations:
+    """#317: seed_defaults() only fills an empty category, so new default words never
+    reach existing installs. run_data_migrations() adds them once — the marker in
+    applied_migrations keeps a word the user deliberately removed afterwards from
+    coming back on every start."""
+
+    _NEW_BLIND_WORDS = {"rolladen": "blind", "rolllaeden": "blind", "rollaeden": "blind"}
+
+    def _seed_custom_category_words(self, manager, words):
+        cat_id = manager.ensure_category("nlu")
+        manager.create_setting(cat_id, "category_words", words)
+
+    def test_adds_missing_blind_words_to_existing_install(self, manager):
+        self._seed_custom_category_words(manager, {"rollladen": "blind", "lampe": "light"})
+
+        manager.run_data_migrations()
+
+        words = manager.get_settings_dict("nlu")["category_words"]
+        assert words == {"rollladen": "blind", "lampe": "light", **self._NEW_BLIND_WORDS}
+
+    def test_does_not_overwrite_differently_mapped_word(self, manager):
+        self._seed_custom_category_words(manager, {"rolladen": "light"})
+
+        manager.run_data_migrations()
+
+        assert manager.get_settings_dict("nlu")["category_words"]["rolladen"] == "light"
+
+    def test_removed_word_does_not_come_back(self, manager):
+        self._seed_custom_category_words(manager, {"rollladen": "blind"})
+        manager.run_data_migrations()
+        setting = next(s for s in manager.get_settings() if s["name"] == "category_words")
+        manager.update_setting_value(setting["id"], {"rollladen": "blind"})
+
+        manager.run_data_migrations()
+
+        assert manager.get_settings_dict("nlu")["category_words"] == {"rollladen": "blind"}
+
+    def test_fresh_install_keeps_seeded_defaults(self, manager):
+        manager.seed_defaults()
+
+        manager.run_data_migrations()
+
+        assert manager.get_settings_dict("nlu") == DEFAULT_NLU_SETTINGS
+
+    def test_without_stored_category_words_only_sets_marker(self, manager):
+        manager.run_data_migrations()
+
+        assert manager.get_settings_dict("nlu") == {}
+        applied = {r[0] for r in db_module.get_db().execute('SELECT "name" FROM "applied_migrations"').fetchall()}
+        assert "317_blind_category_words" in applied
+
+
 class TestCleanupLegacySettings:
     """#257: iobroker.state_names used to be migrated into the DB (deploy/
     migrate_config_settings.py) but is a hardcoded, non-editable fallback in

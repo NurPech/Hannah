@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.84.3 (2026-09-23)
+### Hannah Core
+
+* Fixed: while smalltalk mode is active, a failed or empty LLM classifier response now falls back to regular command handling (NLU) instead of smalltalk — device status questions no longer end in "Das kann ich leider nicht beantworten." just because the LLM was briefly unreachable (Refs #318)
+* Fixed: "Rolladen", "Rollläden" and "Rolläden" are now recognized as blinds, not just "Rollladen" — existing installs get the new words added once on startup; words you've removed yourself afterwards stay removed (Refs #317)
+* Changed: the `LinkAccount` provider `"microsoft"` has been renamed to `"entra"` in preparation for an upcoming Entra ID integration — no existing component links accounts under this provider yet
+
 ## 0.84.2 (2026-09-22)
 ### Hannah Core
 * Fixed: `LinkAccount` now prevents redundant re-linking attempts and race conditions when linking an already connected account. Instead of unlinking and re-linking, the service now checks if a link for the given service already exists and skips the insert if present, avoiding potential IntegrityError issues due to the UNIQUE(user_id, provider) constraint.

@@ -63,13 +63,20 @@ class TestClassify:
 
         assert llm.last_history is None
 
-    def test_failed_chat_defaults_to_smalltalk(self):
-        """#215 — chat() signalisiert einen Fehlschlag mit None; classify() darf
-        dabei nicht crashen (.upper() auf None) und muss auf SMALLTALK zurückfallen,
-        wie schon bei jeder anderen nicht auswertbaren Antwort."""
+    def test_failed_chat_defaults_to_command(self):
+        """#215/#318 — chat() signalisiert einen Fehlschlag mit None; classify() darf
+        dabei nicht crashen (.upper() auf None) und muss auf COMMAND zurückfallen —
+        NLU funktioniert ohne LLM, SMALLTALK würde nur in einen zweiten, ebenso
+        scheiternden chat()-Call laufen."""
         llm = _StubLLM(None)
 
-        assert llm.classify("...") == "SMALLTALK"
+        assert llm.classify("...") == "COMMAND"
+
+    def test_empty_chat_response_defaults_to_command(self):
+        """#318 — leere Antwort wie Fehlschlag behandeln."""
+        llm = _StubLLM("")
+
+        assert llm.classify("...") == "COMMAND"
 
 
 class TestMatch:

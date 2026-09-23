@@ -100,7 +100,7 @@ ESP-IDF (C), FreeRTOS, **ESP32-S3** (AI-Beschleuniger + mehr RAM benötigt).
 
 | Komponente | Funktion |
 |---|---|
-| `hannah_net` | WiFi STA, MQTT-Discovery via `hannah/server` (retained), UDP-Registrierung + Heartbeat (30s) |
+| `hannah_net` | WiFi STA, MQTT-Discovery via `hannah/server` (retained), UDP-Registrierung + Heartbeat (10s, `CONFIG_HANNAH_HEARTBEAT_INTERVAL_S`) |
 | `hannah_audio` | I2S0 PDM-Mic (SPH0641 ×2), I2S1 (MAX98357A). PTT: halten → streamen, loslassen → audio_end. VAD (WebRTC/libfvad, AudioLib) für Silence-Erkennung im Stream |
 | `hannah_led` | WS2812B, 7 Zustände: BOOT / IDLE / WAKE / STREAM / SPEAK / MUTE / ERROR |
 | `hannah_sensors` | BME680 + BSEC2 (IAQ, Static IAQ, CO₂eq, VOCeq, Accuracy), I2C |

@@ -204,6 +204,16 @@ CREATE TABLE IF NOT EXISTS "messages" (
 	FOREIGN KEY("sender_user_id") REFERENCES "users"("id") ON DELETE SET NULL,
 	FOREIGN KEY("reply_to_id") REFERENCES "messages"("id") ON DELETE SET NULL
 );
+
+-- Einmalige Datenmigrationen (z.B. neue Default-Wörter in bestehende Settings nachziehen,
+-- #317): anders als die Schema-Migrationen in init_db() lässt sich ihr Zustand nicht aus
+-- den Daten selbst ablesen — ein fehlendes Wort kann "nie ergänzt" oder "vom Nutzer
+-- gelöscht" heißen. Siehe SettingsManager.run_data_migrations().
+CREATE TABLE IF NOT EXISTS "applied_migrations" (
+	"name"	TEXT NOT NULL,
+	"applied_at"	TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY("name")
+);
 """
 
 

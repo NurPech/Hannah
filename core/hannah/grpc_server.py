@@ -28,7 +28,7 @@ from hannah_proto.interceptor.compat_interceptor import CompatVersionInterceptor
 
 log = logging.getLogger(__name__)
 
-_KNOWN_PROVIDERS = {"residents", "telegram", "microsoft", "chat"}
+_KNOWN_PROVIDERS = {"residents", "telegram", "entra", "chat"}
 
 # Proxy retries RegisterProxy every 5s (proxy/internal/hannah/client.go) — grace
 # period must exceed that so a quick reconnect doesn't flip UDP/discovery back

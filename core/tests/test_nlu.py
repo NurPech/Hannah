@@ -397,6 +397,12 @@ class TestBlindOpenClose:
         assert intent.value == 0
         assert intent.category_filter == "blind"
 
+    @pytest.mark.parametrize("word", ["Rollladen", "Rolladen", "Rollläden", "Rolläden"])
+    def test_blind_category_word_spellings(self, nlu_rooms, word):
+        """#317: Zweifach-L-Schreibweise und Plural erkennen, nicht nur 'rollladen'."""
+        intent = nlu_rooms.parse(f"welche {word} in der kueche sind offen")
+        assert intent.category_filter == "blind"
+
     def test_open_word_on_non_blind_device_is_not_setlevel(self, nlu_rooms):
         """Regression guard: 'öffne die Tür' darf nicht auf SetLevel abbiegen —
         Türen sind reine Sensoren ohne steuerbaren State."""

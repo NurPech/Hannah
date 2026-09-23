@@ -103,8 +103,14 @@ class LLMClient(ABC):
         """Gibt "COMMAND" (→ NLU), "SMALLTALK" (→ LLM-Chat) oder "NOT_ADDRESSED" (#159 —
         Äußerung erkennbar nicht an Hannah gerichtet, z.B. Fremdgespräch im offenen
         Smalltalk-Follow-up-Mic-Fenster) zurück. history: optionaler Gesprächsverlauf
-        (#159), damit die Entscheidung den bisherigen Dialogkontext einbeziehen kann."""
-        result = (self.chat(text, system_prompt=_CLASSIFY_PROMPT, history=history) or "").upper()
+        (#159), damit die Entscheidung den bisherigen Dialogkontext einbeziehen kann.
+        LLM-Fehlschlag (None/leer) → "COMMAND": NLU funktioniert ohne LLM, SMALLTALK
+        würde nur in einen zweiten, ebenso scheiternden chat()-Call laufen (#318)."""
+        raw = self.chat(text, system_prompt=_CLASSIFY_PROMPT, history=history)
+        if not raw:
+            log.warning("LLM-Classifier ohne Antwort — Fallback auf COMMAND (NLU)")
+            return "COMMAND"
+        result = raw.upper()
         if "NOT_ADDRESSED" in result:
             return "NOT_ADDRESSED"
         if "COMMAND" in result:

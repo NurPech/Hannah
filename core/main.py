@@ -174,6 +174,9 @@ def main():
     # nlu/llm.system_prompt automatisch mit generischen Defaults befüllen, falls die
     # Kategorie noch leer ist (Neuinstallation, #114/#115).
     settings_manager.seed_defaults()
+    # Neue Default-Werte einmalig in bestehende Installationen nachziehen (#317) — nach
+    # seed_defaults(), damit eine frische DB nur den Marker bekommt.
+    settings_manager.run_data_migrations()
     # Karteileichen aus früher migrierten, inzwischen nicht mehr gelesenen Settings
     # entfernen (aktuell: iobroker.state_names, seit #257 hartkodierter Fallback statt
     # DB-Setting) — sonst bleiben sie wirkungslos editierbar in der Admin-UI stehen.
