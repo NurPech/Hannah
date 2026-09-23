@@ -24,6 +24,7 @@ from hannah_proto import hannah_pb2_grpc as pb_grpc
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import ProtocolVersionInterceptor, read_proto_version
+from hannah.link_tokens import LinkTokenStore, LOOKUP_EXPIRED, LOOKUP_OK
 from hannah_proto.interceptor.compat_interceptor import CompatVersionInterceptor
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,31 @@ class _AutomationSub:
         self._queue.put(None)  # sentinel — ends the generator
 
     def get(self, timeout: float = 1.0) -> Optional[pb.AutomationCommand]:
+        try:
+            return self._queue.get(timeout=timeout)
+        except queue.Empty:
+            return queue.Empty  # sentinel-like, caller checks
+
+
+# ------------------------------------------------------------------
+# Channel adapter (one per connected ChannelConnect call, #334)
+
+class _ChannelSub:
+    def __init__(self):
+        # Set once the register message arrives.
+        self.service: Optional[str] = None
+        self.display_name: str = ""
+        self.link_url_template: str = ""  # empty = service cannot link accounts
+        self.connected_since: int = 0
+        self._queue: queue.Queue = queue.Queue()
+
+    def put(self, command: pb.ChannelCommand):
+        self._queue.put(command)
+
+    def close(self):
+        self._queue.put(None)  # sentinel — ends the generator
+
+    def get(self, timeout: float = 1.0) -> Optional[pb.ChannelCommand]:
         try:
             return self._queue.get(timeout=timeout)
         except queue.Empty:
@@ -290,6 +316,11 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._automation_subs: list[_AutomationSub] = []
         self._automation_lock = threading.Lock()
 
+        # Connected channel adapters, one per service — a new registration displaces the old one (#334)
+        self._channels: dict[str, _ChannelSub] = {}
+        self._channel_lock = threading.Lock()
+        self._link_tokens = LinkTokenStore()
+
     # ------------------------------------------------------------------
     # Public: proxy helpers (called from main.py)
 
@@ -401,11 +432,28 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             context.set_details("User nicht gefunden.")
             return pb.StatusResponse(ok=False, message="User nicht gefunden.")
 
-        existing = self._user_manager.get_user_by_linked_account(request.service, request.account_id)
-        if existing and existing.id != request.user_id:
+        outcome = self._link_account(user, request.service, request.account_id, request.provider_payload)
+        if outcome == "linked_elsewhere":
             context.set_code(grpc.StatusCode.ALREADY_EXISTS)
             context.set_details("Account bereits mit einem anderen User verknüpft.")
             return pb.StatusResponse(ok=False, message="Account bereits mit einem anderen User verknüpft.")
+
+        # A repeated link for the same (user, provider) is skipped but still reported as
+        # success, since the desired end state (linked) already holds.
+        if outcome == "already_linked":
+            return pb.StatusResponse(ok=True, message="bereits verknüpft")
+        return pb.StatusResponse(ok=True, message="verknüpft")
+
+    def _link_account(self, user: User, service: str, account_id: str, provider_payload_json: str) -> str:
+        """Verknüpft user mit account_id beim Dienst service. Gemeinsam genutzt von
+        LinkAccount und dem Einlösen eines Link-Tokens (#334).
+
+        → "linked" | "already_linked" (User hat schon ein Konto für den Dienst, bleibt
+          unverändert) | "linked_elsewhere" (account_id gehört einem anderen User)
+        """
+        existing = self._user_manager.get_user_by_linked_account(service, account_id)
+        if existing and existing.id != user.id:
+            return "linked_elsewhere"
 
         # provider_payload arrives over the wire as a JSON-encoded string (proto has no
         # open-ended object type here); LinkedAccount.provider_payload is a __json_fields__
@@ -414,21 +462,48 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         # and User Manager's _resident_link() then crashes on `payload.get(...)` at the next
         # boot because the decoded value is still a JSON string, not a dict.
         provider_payload = None
-        if request.provider_payload:
+        if provider_payload_json:
             try:
-                provider_payload = json.loads(request.provider_payload)
+                provider_payload = json.loads(provider_payload_json)
             except json.JSONDecodeError:
-                log.warning(f"LinkAccount: provider_payload für user_id={request.user_id} ist kein gültiges JSON, ignoriert: {request.provider_payload!r}")
+                log.warning(f"LinkAccount: provider_payload für user_id={user.id} ist kein gültiges JSON, ignoriert: {provider_payload_json!r}")
 
-        # Prevent IntegrityError: Since (user_id, provider) is UNIQUE, we check
-        # if a link already exists. If it does, the repeated linking attempt
-        # is skipped (no actual upsert/update is performed) but still reported
-        # as success, since the desired end state (linked) already holds.
-        if user.get_linked_account(request.service):
-            return pb.StatusResponse(ok=True, message="bereits verknüpft")
+        # Prevent IntegrityError: (user_id, provider) is UNIQUE — no upsert/update.
+        if user.get_linked_account(service):
+            return "already_linked"
 
-        user.link_account(request.service, request.account_id, provider_payload=provider_payload)
-        return pb.StatusResponse(ok=True, message="verknüpft")
+        user.link_account(service, account_id, provider_payload=provider_payload)
+        return "linked"
+
+    def CreateLinkToken(self, request, context):
+        if request.service not in _KNOWN_PROVIDERS:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(f"Unbekannter Provider: {request.service}")
+            return pb.CreateLinkTokenResponse(ok=False, message=f"Unbekannter Provider: {request.service}")
+
+        user: User = self._user_manager.get_user_by_id(request.user_id)
+        if not user:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details("User nicht gefunden.")
+            return pb.CreateLinkTokenResponse(ok=False, message="User nicht gefunden.")
+
+        with self._channel_lock:
+            channel = self._channels.get(request.service)
+            template = channel.link_url_template if channel else ""
+        if not template:
+            msg = f"Kein verknüpfbarer Adapter für {request.service} verbunden."
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(msg)
+            return pb.CreateLinkTokenResponse(ok=False, message=msg)
+
+        entry = self._link_tokens.issue(user.id, request.service)
+        return pb.CreateLinkTokenResponse(
+            ok=True,
+            message="ok",
+            token=entry.token,
+            link_url=template.replace("{token}", entry.token),
+            expires_at=int(entry.expires_at),
+        )
 
     def UnlinkAccount(self, request, context):
         user: User = self._user_manager.get_user_by_id(request.user_id)
@@ -1619,6 +1694,123 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 if sub in self._automation_subs:
                     self._automation_subs.remove(sub)
             log.info(f"[grpc] Automation-Service getrennt: {sub.automation!r}")
+
+    # ------------------------------------------------------------------
+    # Channels (#334)
+
+    def ChannelConnect(self, request_iterator, context):
+        """
+        Bidirektionaler Stream: Channel-Adapter → ChannelMessage, Hannah → ChannelCommand.
+
+        Der Adapter meldet sich mit ChannelRegister an und gilt als verfügbar, solange
+        der Stream offen ist. Eine zweite Anmeldung für denselben Dienst verdrängt die
+        erste (wie TimerConnect) — sonst sperrt sich ein Adapter nach einem Netzwerk-
+        Hänger selbst aus, solange Hannah den alten Stream noch nicht als tot erkannt hat.
+        Link-Tokens werden über denselben Stream eingelöst; der Dienst ergibt sich aus
+        der Anmeldung.
+        """
+        sub = _ChannelSub()
+
+        def _drain():
+            try:
+                for msg in request_iterator:
+                    which = msg.WhichOneof("payload")
+                    if which == "register":
+                        self._register_channel(sub, msg.register)
+                    elif which == "redeem":
+                        sub.put(pb.ChannelCommand(redeem_result=self._redeem_link_token(sub.service, msg.redeem)))
+                    else:
+                        log.warning(f"[grpc] Unrecognized ChannelMessage payload: {which}")
+            except Exception as e:
+                log.debug(f"[grpc] Channel drain ended: {e}")
+            finally:
+                sub.close()
+
+        drain_thread = threading.Thread(target=_drain, daemon=True, name="channel-drain")
+        drain_thread.start()
+
+        try:
+            while context.is_active():
+                cmd = sub.get(timeout=1.0)
+                if cmd is None:
+                    break
+                if cmd is queue.Empty:
+                    continue
+                yield cmd
+        finally:
+            drain_thread.join(timeout=2)
+            with self._channel_lock:
+                if sub.service and self._channels.get(sub.service) is sub:
+                    del self._channels[sub.service]
+            log.info(f"[grpc] Channel-Adapter getrennt: {sub.service!r}")
+
+    def _register_channel(self, sub: _ChannelSub, register: pb.ChannelRegister):
+        with self._channel_lock:
+            if sub.service and self._channels.get(sub.service) is sub:
+                del self._channels[sub.service]
+            old = self._channels.get(register.service)
+            if old is not None and old is not sub:
+                log.warning(f"[grpc] Channel-Adapter {register.service!r} neu angemeldet — bestehende Verbindung wird verdrängt")
+                old.close()
+            sub.service = register.service
+            sub.display_name = register.display_name
+            sub.link_url_template = register.link_url_template
+            sub.connected_since = int(time.time())
+            self._channels[register.service] = sub
+        log.info(
+            f"[grpc] Channel-Adapter registriert: {register.service!r}"
+            f" (version={register.version!r}, verknüpfbar={bool(register.link_url_template)})"
+        )
+        sub.put(pb.ChannelCommand(registered=pb.ChannelRegistered()))
+
+    def _redeem_link_token(self, service: Optional[str], redeem: pb.RedeemLinkToken) -> pb.RedeemLinkTokenResult:
+        result = pb.RedeemLinkTokenResult(request_id=redeem.request_id)
+        if not service:
+            log.warning("[grpc] RedeemLinkToken vor ChannelRegister — abgelehnt")
+            result.result = pb.REDEEM_UNKNOWN_TOKEN
+            return result
+
+        status, entry = self._link_tokens.lookup(redeem.token, service)
+        if status != LOOKUP_OK:
+            result.result = pb.REDEEM_EXPIRED if status == LOOKUP_EXPIRED else pb.REDEEM_UNKNOWN_TOKEN
+            return result
+
+        user: User = self._user_manager.get_user_by_id(entry.user_id)
+        if not user:
+            self._link_tokens.consume(redeem.token)
+            result.result = pb.REDEEM_UNKNOWN_TOKEN
+            return result
+
+        outcome = self._link_account(user, service, redeem.account_id, redeem.provider_payload)
+        if outcome == "linked_elsewhere":
+            result.result = pb.REDEEM_ACCOUNT_LINKED_ELSEWHERE
+            return result
+        if outcome == "already_linked":
+            # Same account already linked to this user = desired state holds.
+            la = user.get_linked_account(service)
+            if la is None or la.external_id != redeem.account_id:
+                result.result = pb.REDEEM_ALREADY_LINKED
+                return result
+
+        self._link_tokens.consume(redeem.token)
+        log.info(f"[grpc] Link-Token eingelöst: user_id={user.id} service={service!r}")
+        result.result = pb.REDEEM_OK
+        result.user_id = user.id
+        result.display_name = user.display_name or ""
+        return result
+
+    def GetChannels(self, _request, _context):
+        with self._channel_lock:
+            channels = [
+                pb.ChannelInfo(
+                    service=sub.service,
+                    display_name=sub.display_name,
+                    supports_link=bool(sub.link_url_template),
+                    connected_since=sub.connected_since,
+                )
+                for sub in self._channels.values()
+            ]
+        return pb.GetChannelsResponse(channels=channels)
 
     def TimerConnect(self, request_iterator, context):
         """

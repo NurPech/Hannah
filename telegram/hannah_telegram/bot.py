@@ -13,6 +13,7 @@ full CarState via GetCarState and builds the rich Telegram message/caption.
 Commands
 ────────
 /start  – welcome + link to WebUI for account linking
+/start <code> – redeem a link token from the WebUI deep link (#334)
 /auto   – query current car status on demand
 """
 from __future__ import annotations
@@ -39,9 +40,10 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 
+from hannah_proto import hannah_pb2
+
 if TYPE_CHECKING:
     from hannah_telegram.grpc_client import HannahClient
-    from hannah_proto import hannah_pb2
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +124,22 @@ _WELCOME_TEMPLATE = (
 _UNKNOWN_USER_TEMPLATE = (
     "Ich kenne dich noch nicht. Verknüpfe dein Konto über die Hannah-WebUI:\n{webui_url}"
 )
+
+_REDEEM_ERROR_TEXTS = {
+    hannah_pb2.REDEEM_UNKNOWN_TOKEN: (
+        "Dieser Link ist ungültig oder wurde schon benutzt. Bitte erzeuge in der WebUI einen neuen."
+    ),
+    hannah_pb2.REDEEM_EXPIRED: (
+        "Dieser Link ist abgelaufen. Bitte erzeuge in der WebUI einen neuen."
+    ),
+    hannah_pb2.REDEEM_ACCOUNT_LINKED_ELSEWHERE: (
+        "Dieses Telegram-Konto ist schon mit einem anderen Hannah-Profil verknüpft."
+    ),
+    hannah_pb2.REDEEM_ALREADY_LINKED: (
+        "Dein Hannah-Profil ist schon mit einem anderen Telegram-Konto verknüpft. "
+        "Trenne es zuerst in der WebUI."
+    ),
+}
 
 # Die {0} und {1} sind Platzhalter für Latitude und Longitude
 _MAPS_URL_TEMPLATE = "https://www.google.com/maps/search/?api=1&query={0},{1}"
@@ -302,12 +320,38 @@ class HannahBot:
     # ------------------------------------------------------------------
     # Command handlers
 
-    async def _cmd_start(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _cmd_start(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
+        if ctx.args:
+            await self._redeem_link_token(update, chat_id, ctx.args[0])
+            return
         if await self._is_known_user(chat_id):
             await update.message.reply_text("Hallo! Ich bin Hannah. Was kann ich für dich tun?")
         else:
             await update.message.reply_text(self._welcome)
+
+    async def _redeem_link_token(self, update: Update, chat_id: str, token: str) -> None:
+        """Deep-Link-Verknüpfung (#334): t.me/<bot>?start=<token> kommt als /start <token> an."""
+        if not self._is_private_chat(chat_id):
+            await update.message.reply_text("Verknüpfen geht nur im privaten Chat mit mir.")
+            return
+
+        result = await self._hannah.redeem_link_token(token, chat_id)
+        if result is None:
+            await update.message.reply_text(
+                "Hannah ist gerade nicht erreichbar. Bitte versuche es gleich noch einmal."
+            )
+            return
+        if result.result != hannah_pb2.REDEEM_OK:
+            await update.message.reply_text(
+                _REDEEM_ERROR_TEXTS.get(result.result, "Das Verknüpfen hat nicht geklappt. Bitte versuche es noch einmal.")
+            )
+            return
+
+        await update.message.reply_text(f"Verknüpft, hallo {result.display_name}!")
+        user = await self._get_user(chat_id)
+        if user is not None:
+            await self._set_commands_for_chat(chat_id, user.trust_level)
 
     async def _cmd_auto(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)

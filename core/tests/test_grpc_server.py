@@ -11,7 +11,8 @@ from unittest.mock import MagicMock
 
 from werkzeug.security import generate_password_hash
 
-from hannah.grpc_server import HannahServicer, _user_to_pb
+from hannah.grpc_server import HannahServicer, _ChannelSub, _user_to_pb
+from hannah_proto import hannah_pb2 as pb
 from hannah.user_manager import UserManager
 from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
@@ -1289,6 +1290,166 @@ def test_user_to_pb_with_linked_account(tmp_path):
     pb_user = _user_to_pb(fresh)
 
     assert pb_user.linked_accounts["telegram"] == "99999"
+
+
+# ------------------------------------------------------------------
+# Channels + Link-Tokens (#334)
+
+_TELEGRAM_TEMPLATE = "https://t.me/HannahBot?start={token}"
+
+def _register_channel(servicer, service="telegram", template=_TELEGRAM_TEMPLATE):
+    sub = _ChannelSub()
+    servicer._register_channel(sub, pb.ChannelRegister(
+        service=service, display_name=service.capitalize(), link_url_template=template, version="1.0.0",
+    ))
+    return sub
+
+def _run_channel_stream(servicer, messages):
+    """Runs a ChannelConnect call to completion: the request iterator ends after
+    `messages`, which closes the stream once all queued commands are yielded."""
+    context = MagicMock()
+    context.is_active.return_value = True
+    return list(servicer.ChannelConnect(iter(messages), context))
+
+def _redeem(servicer, token, account_id="99999", service="telegram"):
+    return servicer._redeem_link_token(service, pb.RedeemLinkToken(request_id="r1", token=token, account_id=account_id))
+
+class TestChannels:
+    def test_register_acknowledged_and_listed_until_disconnect(self):
+        servicer = _make_server()
+        context = MagicMock()
+        context.is_active.return_value = True
+        stream = servicer.ChannelConnect(
+            iter([pb.ChannelMessage(register=pb.ChannelRegister(service="telegram", display_name="Telegram", link_url_template=_TELEGRAM_TEMPLATE))]),
+            context,
+        )
+        first = next(stream)
+        assert first.WhichOneof("command") == "registered"
+
+        channels = servicer.GetChannels(pb.Empty(), MagicMock()).channels
+        assert [(c.service, c.display_name, c.supports_link) for c in channels] == [("telegram", "Telegram", True)]
+        assert channels[0].connected_since > 0
+
+        assert list(stream) == []  # request iterator exhausted → stream ends
+        assert servicer.GetChannels(pb.Empty(), MagicMock()).channels == []
+
+    def test_channel_without_template_is_not_linkable(self):
+        servicer = _make_server()
+        _register_channel(servicer, service="teams", template="")
+        channels = servicer.GetChannels(pb.Empty(), MagicMock()).channels
+        assert [(c.service, c.supports_link) for c in channels] == [("teams", False)]
+
+    def test_second_registration_displaces_first(self):
+        servicer = _make_server()
+        first = _register_channel(servicer)
+        second = _register_channel(servicer)
+
+        assert servicer._channels["telegram"] is second
+        assert first.get(timeout=0.1).WhichOneof("command") == "registered"
+        assert first.get(timeout=0.1) is None  # close sentinel → old stream ends
+
+
+class TestCreateLinkToken:
+    def test_rejected_without_connected_adapter(self, tmp_path):
+        user_manager, _ = _make_user_manager_with_leonie(tmp_path)
+        user = user_manager.get_user_by_username("leonie")
+        servicer = _make_server(user_manager=user_manager)
+
+        resp = servicer.CreateLinkToken(pb.CreateLinkTokenRequest(user_id=user.id, service="telegram"), MagicMock())
+        assert resp.ok is False
+
+    def test_rejected_when_adapter_cannot_link(self, tmp_path):
+        user_manager, _ = _make_user_manager_with_leonie(tmp_path)
+        user = user_manager.get_user_by_username("leonie")
+        servicer = _make_server(user_manager=user_manager)
+        _register_channel(servicer, template="")
+
+        resp = servicer.CreateLinkToken(pb.CreateLinkTokenRequest(user_id=user.id, service="telegram"), MagicMock())
+        assert resp.ok is False
+
+    def test_rejected_for_unknown_provider(self, tmp_path):
+        user_manager, _ = _make_user_manager_with_leonie(tmp_path)
+        user = user_manager.get_user_by_username("leonie")
+        servicer = _make_server(user_manager=user_manager)
+
+        resp = servicer.CreateLinkToken(pb.CreateLinkTokenRequest(user_id=user.id, service="myspace"), MagicMock())
+        assert resp.ok is False
+
+    def test_returns_filled_link(self, tmp_path):
+        user_manager, _ = _make_user_manager_with_leonie(tmp_path)
+        user = user_manager.get_user_by_username("leonie")
+        servicer = _make_server(user_manager=user_manager)
+        _register_channel(servicer)
+
+        resp = servicer.CreateLinkToken(pb.CreateLinkTokenRequest(user_id=user.id, service="telegram"), MagicMock())
+        assert resp.ok is True
+        assert resp.link_url == f"https://t.me/HannahBot?start={resp.token}"
+        assert resp.expires_at > time.time()
+
+
+class TestRedeemLinkToken:
+    def _setup(self, tmp_path):
+        user_manager, get_db = _make_user_manager_with_leonie(tmp_path)
+        user = user_manager.get_user_by_username("leonie")
+        servicer = _make_server(user_manager=user_manager)
+        token = servicer._link_tokens.issue(user.id, "telegram").token
+        return servicer, user, get_db, token
+
+    def test_redeem_over_stream_links_account(self, tmp_path):
+        servicer, user, get_db, token = self._setup(tmp_path)
+
+        commands = _run_channel_stream(servicer, [
+            pb.ChannelMessage(register=pb.ChannelRegister(service="telegram", link_url_template=_TELEGRAM_TEMPLATE)),
+            pb.ChannelMessage(redeem=pb.RedeemLinkToken(request_id="abc", token=token, account_id="99999")),
+        ])
+
+        result = commands[1].redeem_result
+        assert result.request_id == "abc"
+        assert result.result == pb.REDEEM_OK
+        assert result.user_id == user.id
+        assert result.display_name == "Leonie"
+        assert User.get(get_db(), id=user.id).get_linked_account("telegram").external_id == "99999"
+
+    def test_token_is_single_use(self, tmp_path):
+        servicer, _user, _get_db, token = self._setup(tmp_path)
+        assert _redeem(servicer, token).result == pb.REDEEM_OK
+        assert _redeem(servicer, token).result == pb.REDEEM_UNKNOWN_TOKEN
+
+    def test_redeem_before_register_is_rejected(self, tmp_path):
+        servicer, _user, _get_db, token = self._setup(tmp_path)
+        assert _redeem(servicer, token, service=None).result == pb.REDEEM_UNKNOWN_TOKEN
+
+    def test_expired_token(self, tmp_path):
+        servicer, user, _get_db, _token = self._setup(tmp_path)
+        servicer._link_tokens._clock = lambda: 0.0
+        token = servicer._link_tokens.issue(user.id, "telegram").token
+        servicer._link_tokens._clock = time.time
+        assert _redeem(servicer, token).result == pb.REDEEM_EXPIRED
+
+    def test_user_with_other_telegram_account_is_rejected_and_token_stays_valid(self, tmp_path):
+        servicer, user, get_db, token = self._setup(tmp_path)
+        user.link_account("telegram", "11111")
+
+        assert _redeem(servicer, token, account_id="99999").result == pb.REDEEM_ALREADY_LINKED
+        assert User.get(get_db(), id=user.id).get_linked_account("telegram").external_id == "11111"
+        # Not consumed: the user can unlink in the WebUI and retry with the same link.
+        user.unlink_account("telegram")
+        assert _redeem(servicer, token, account_id="99999").result == pb.REDEEM_OK
+
+    def test_same_account_already_linked_counts_as_ok(self, tmp_path):
+        servicer, user, _get_db, token = self._setup(tmp_path)
+        user.link_account("telegram", "99999")
+        assert _redeem(servicer, token, account_id="99999").result == pb.REDEEM_OK
+
+    def test_account_linked_to_other_user_is_rejected(self, tmp_path):
+        servicer, _user, get_db, token = self._setup(tmp_path)
+        other = User.create(
+            get_db(), username="anna", display_name="Anna", email="anna@example.com",
+            password_hash=generate_password_hash("x"), trust_level=5, mood_level=5,
+            system_messages=0, type="roomie", is_active=1,
+        )
+        other.link_account("telegram", "99999")
+        assert _redeem(servicer, token, account_id="99999").result == pb.REDEEM_ACCOUNT_LINKED_ELSEWHERE
 
 def _connect_fake_timer_service(servicer):
     """Simulates a connected Timer Service by directly wiring the internal queue —

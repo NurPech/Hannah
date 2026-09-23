@@ -2,6 +2,7 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from hannah_proto import hannah_pb2
 from hannah_telegram.bot import (
     HannahBot,
     _car_proto_to_message,
@@ -208,6 +209,51 @@ class TestCmdStart:
         await bot._cmd_start(update, ctx)
         text = update.message.reply_text.call_args[0][0]
         assert text != bot._welcome
+
+
+class TestStartWithLinkToken:
+    """/start <token> from the t.me deep link redeems the token (#334)."""
+
+    def _setup(self, result, chat_id=12345):
+        hannah = _make_hannah(known=True, user=_make_user(trust_level=7))
+        hannah.redeem_link_token = AsyncMock(return_value=result)
+        bot = _make_bot(hannah)
+        bot._set_commands_for_chat = AsyncMock()
+        update, ctx = _make_update(chat_id=chat_id, args=["tok123"])
+        return bot, hannah, update, ctx
+
+    @pytest.mark.asyncio
+    async def test_success_greets_and_sets_commands(self):
+        result = hannah_pb2.RedeemLinkTokenResult(result=hannah_pb2.REDEEM_OK, user_id=1, display_name="Leonie")
+        bot, hannah, update, ctx = self._setup(result)
+        await bot._cmd_start(update, ctx)
+
+        hannah.redeem_link_token.assert_awaited_once_with("tok123", "12345")
+        update.message.reply_text.assert_called_once_with("Verknüpft, hallo Leonie!")
+        bot._set_commands_for_chat.assert_awaited_once_with("12345", 7)
+
+    @pytest.mark.asyncio
+    async def test_group_chat_is_rejected(self):
+        bot, hannah, update, ctx = self._setup(None, chat_id=-100)
+        await bot._cmd_start(update, ctx)
+
+        hannah.redeem_link_token.assert_not_called()
+        assert "privaten Chat" in update.message.reply_text.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_expired_token_explains(self):
+        bot, _hannah, update, ctx = self._setup(hannah_pb2.RedeemLinkTokenResult(result=hannah_pb2.REDEEM_EXPIRED))
+        await bot._cmd_start(update, ctx)
+
+        assert "abgelaufen" in update.message.reply_text.call_args[0][0]
+        bot._set_commands_for_chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hannah_unreachable(self):
+        bot, _hannah, update, ctx = self._setup(None)
+        await bot._cmd_start(update, ctx)
+
+        assert "nicht erreichbar" in update.message.reply_text.call_args[0][0]
 
 
 class TestHasTrust:

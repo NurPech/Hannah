@@ -1,7 +1,9 @@
 """Async gRPC client for Hannah."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from typing import Optional
 
 import grpc
@@ -28,6 +30,10 @@ class HannahClient:
         self._address = f"{host}:{port}"
         self._channel: Optional[grpc.aio.Channel] = None
         self._stub: Optional[hannah_pb2_grpc.HannahServiceStub] = None
+        # Open ChannelConnect stream (#334) and its redeem requests awaiting an answer
+        self._channel_call = None
+        self._channel_write_lock = asyncio.Lock()
+        self._pending_redeems: dict[str, asyncio.Future] = {}
 
     async def connect(self) -> None:
         # compat_version (hannah-proto#10/hannah#217) runs additively next
@@ -318,3 +324,72 @@ class HannahClient:
             except asyncio.CancelledError:
                 log.info("Event stream subscription cancelled.")
                 return
+
+    # ------------------------------------------------------------------
+    # Channel registration + link tokens (#334)
+    # ------------------------------------------------------------------
+
+    async def channel_connect(self, register: "hannah_pb2.ChannelRegister") -> None:
+        """
+        Registers this adapter with Hannah and keeps the ChannelConnect stream open,
+        so Hannah knows Telegram is running and can hand out deep links.
+        Reconnects automatically. Runs until the task is cancelled.
+        """
+        assert self._stub, "call connect() first"
+        while True:
+            try:
+                # Explicit metadata, same reason as in subscribe_events().
+                call = self._stub.ChannelConnect(
+                    metadata=(
+                        (PROTO_VERSION_METADATA_KEY, read_proto_version()),
+                        client_compat_version_metadata(
+                            hannah_pb2.DESCRIPTOR.services_by_name["HannahService"], "ChannelConnect"
+                        ),
+                    ),
+                )
+                await call.write(hannah_pb2.ChannelMessage(register=register))
+                self._channel_call = call
+                async for cmd in call:
+                    which = cmd.WhichOneof("command")
+                    if which == "registered":
+                        log.info("Registered with Hannah as channel %r", register.service)
+                    elif which == "redeem_result":
+                        fut = self._pending_redeems.pop(cmd.redeem_result.request_id, None)
+                        if fut and not fut.done():
+                            fut.set_result(cmd.redeem_result)
+                log.warning("Channel stream closed by Hannah – reconnecting in 5s")
+            except grpc.aio.AioRpcError as exc:
+                log.warning("Channel stream disconnected: %s – reconnecting in 5s", exc)
+            except asyncio.CancelledError:
+                log.info("Channel stream cancelled.")
+                return
+            finally:
+                self._channel_call = None
+                for fut in self._pending_redeems.values():
+                    if not fut.done():
+                        fut.set_result(None)
+                self._pending_redeems.clear()
+            await asyncio.sleep(5)
+
+    async def redeem_link_token(
+        self, token: str, account_id: str, timeout: float = 10.0
+    ) -> "Optional[hannah_pb2.RedeemLinkTokenResult]":
+        """Redeems a link token over the ChannelConnect stream.
+        Returns None if Hannah is not reachable or does not answer in time."""
+        call = self._channel_call
+        if call is None:
+            return None
+        request_id = uuid.uuid4().hex
+        fut = asyncio.get_running_loop().create_future()
+        self._pending_redeems[request_id] = fut
+        try:
+            async with self._channel_write_lock:
+                await call.write(hannah_pb2.ChannelMessage(redeem=hannah_pb2.RedeemLinkToken(
+                    request_id=request_id, token=token, account_id=account_id,
+                )))
+            return await asyncio.wait_for(fut, timeout)
+        except (grpc.aio.AioRpcError, asyncio.TimeoutError) as exc:
+            log.error("RedeemLinkToken failed: %s", exc)
+            return None
+        finally:
+            self._pending_redeems.pop(request_id, None)

@@ -4,6 +4,18 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.85.0 (2026-09-23)
+### Hannah Core
+
+* Added: account linking via deep link — channel adapters (starting with Telegram) now register with Hannah over the new `ChannelConnect` stream, `GetChannels` tells clients which services are running and which of them can link accounts, and `CreateLinkToken` issues a one-time link (e.g. `https://t.me/<bot>?start=<code>`, valid for 10 minutes) that the adapter redeems for the user. Lets the WebUI offer Telegram linking without a BotFather domain, HTTPS or any Telegram settings of its own. If the user already has a different account linked for the service, redeeming is refused, same as `LinkAccount` (Refs #334)
+* Chore: updated `hannah-proto` dependency to v4.3.0
+
+### Telegram
+
+* Added: the bot registers itself with Hannah on startup, so Hannah knows Telegram is available for account linking. Opening a linking link from the WebUI and pressing "Start" links your Telegram account right away, with a clear message if the link has expired or was already used (Refs #334)
+* Chore: updated `hannah-proto` dependency to v4.3.0
+
 ## 0.84.3 (2026-09-23)
 ### Hannah Core
 

@@ -10,7 +10,7 @@ protobuf>=7.35.0
 # handled by matching grpcio-tools' version locally. Core enforces an exact
 # x-proto-version match, so this MUST move in lockstep with core/requirements.txt.
 # >=4.2.1 fixes a grpcio-tools floor mismatch in the published gencode
-hannah-proto>=4.2.1
+hannah-proto>=4.3.0
 
 # Config
 pyyaml>=6.0

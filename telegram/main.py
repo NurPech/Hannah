@@ -23,6 +23,7 @@ import sys
 from hannah_telegram.bot import HannahBot
 from hannah_telegram.config import load as load_config
 from hannah_telegram.grpc_client import HannahClient
+from hannah_proto import hannah_pb2
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,8 +82,20 @@ async def main(config_path: str) -> None:
 
     log.info("hannah-telegram starting (gRPC=%s:%d)", cfg.grpc.host, cfg.grpc.port)
 
+    channel_task = None
     try:
         await app.initialize()
+        # Register with Hannah so it knows Telegram is running and can hand out
+        # deep links (t.me/<bot>?start=<token>) for account linking (#334).
+        # app.bot.username is resolved via getMe() during initialize().
+        channel_task = asyncio.create_task(
+            hannah.channel_connect(hannah_pb2.ChannelRegister(
+                service="telegram",
+                display_name="Telegram",
+                link_url_template=f"https://t.me/{app.bot.username}?start={{token}}",
+            )),
+            name="channel_stream",
+        )
         await app.start()
         await bot.init_commands()
         await app.updater.start_polling(drop_pending_updates=True)
@@ -92,11 +105,14 @@ async def main(config_path: str) -> None:
         pass
     finally:
         log.info("Shutting down…")
-        event_task.cancel()
-        try:
-            await event_task
-        except asyncio.CancelledError:
-            pass
+        for task in (event_task, channel_task):
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
