@@ -11,7 +11,8 @@ from unittest.mock import MagicMock
 
 from werkzeug.security import generate_password_hash
 
-from hannah.grpc_server import HannahServicer, _ChannelSub, _user_to_pb
+from hannah.grpc_server import HannahServicer, _ChannelSub, _LogCollectorSub, _peer_host, _user_to_pb
+from hannah.component_registry import KIND_CHANNEL, KIND_LOG_COLLECTOR
 from hannah_proto import hannah_pb2 as pb
 from hannah.user_manager import UserManager
 from hannah.models.user import User
@@ -1344,9 +1345,119 @@ class TestChannels:
         first = _register_channel(servicer)
         second = _register_channel(servicer)
 
-        assert servicer._channels["telegram"] is second
+        assert servicer._registry.get(KIND_CHANNEL, "telegram") is second
         assert first.get(timeout=0.1).WhichOneof("command") == "registered"
         assert first.get(timeout=0.1) is None  # close sentinel → old stream ends
+
+
+# ------------------------------------------------------------------
+# Infrastructure: LogCollectorConnect + SubscribeInfrastructure (#335)
+
+def _register_log_collector(servicer, instance="main", host="10.0.0.5", port=50060, peer="ipv4:10.0.0.9:41234"):
+    sub = _LogCollectorSub()
+    servicer._register_log_collector(sub, pb.LogCollectorRegister(
+        instance=instance, host=host, port=port, version="0.1.0",
+    ), peer)
+    return sub
+
+def _subscribe_infrastructure(servicer, kinds=()):
+    context = MagicMock()
+    context.is_active.return_value = True
+    return servicer.SubscribeInfrastructure(pb.InfrastructureFilter(kinds=list(kinds)), context)
+
+def _endpoints(msg):
+    return [(s.kind, s.instance, s.host, s.port) for s in msg.snapshot.services]
+
+class TestInfrastructure:
+    def test_log_collector_register_acknowledged_and_unregistered_on_disconnect(self):
+        servicer = _make_server()
+        context = MagicMock()
+        context.is_active.return_value = True
+        context.peer.return_value = "ipv4:10.0.0.9:41234"
+        stream = servicer.LogCollectorConnect(
+            iter([pb.LogCollectorMessage(register=pb.LogCollectorRegister(instance="main", host="10.0.0.5", port=50060))]),
+            context,
+        )
+        assert next(stream).WhichOneof("command") == "registered"
+        assert servicer._registry.get(KIND_LOG_COLLECTOR, "main") is not None
+
+        assert list(stream) == []  # request iterator exhausted → stream ends
+        assert servicer._registry.get(KIND_LOG_COLLECTOR, "main") is None
+
+    def test_empty_host_falls_back_to_peer_address(self):
+        servicer = _make_server()
+        _register_log_collector(servicer, host="", peer="ipv4:10.0.0.9:41234")
+        stream = _subscribe_infrastructure(servicer)
+        assert _endpoints(next(stream)) == [(pb.SERVICE_KIND_LOG_COLLECTOR, "main", "10.0.0.9", 50060)]
+
+    def test_peer_host_parsing(self):
+        assert _peer_host("ipv4:10.0.0.9:41234") == "10.0.0.9"
+        assert _peer_host("ipv6:[::1]:41234") == "::1"
+        assert _peer_host("unix:/tmp/sock") == ""
+        assert _peer_host("") == ""
+
+    def test_late_subscriber_gets_collector_in_snapshot(self):
+        servicer = _make_server()
+        _register_log_collector(servicer)
+        stream = _subscribe_infrastructure(servicer)
+
+        first = next(stream)
+        assert first.WhichOneof("payload") == "snapshot"
+        assert _endpoints(first) == [(pb.SERVICE_KIND_LOG_COLLECTOR, "main", "10.0.0.5", 50060)]
+
+    def test_subscriber_gets_available_and_unavailable_deltas(self):
+        servicer = _make_server()
+        stream = _subscribe_infrastructure(servicer)
+        assert _endpoints(next(stream)) == []
+
+        sub = _register_log_collector(servicer)
+        available = next(stream)
+        assert available.WhichOneof("payload") == "available"
+        assert available.available.service.host == "10.0.0.5"
+
+        servicer._registry.unregister(KIND_LOG_COLLECTOR, "main", sub)
+        unavailable = next(stream)
+        assert unavailable.WhichOneof("payload") == "unavailable"
+        assert (unavailable.unavailable.kind, unavailable.unavailable.instance) == (pb.SERVICE_KIND_LOG_COLLECTOR, "main")
+
+    def test_displacement_sends_new_endpoint_and_no_unavailable(self):
+        servicer = _make_server()
+        first = _register_log_collector(servicer, host="10.0.0.5")
+        stream = _subscribe_infrastructure(servicer)
+        next(stream)  # snapshot
+
+        _register_log_collector(servicer, host="10.0.0.6")
+        assert next(stream).available.service.host == "10.0.0.6"
+        assert first.get(timeout=0.1).WhichOneof("command") == "registered"
+        assert first.get(timeout=0.1) is None  # close sentinel → old stream ends
+
+        # The displaced stream ending late must not announce the successor as gone
+        assert servicer._registry.unregister(KIND_LOG_COLLECTOR, "main", first) is False
+        late = _subscribe_infrastructure(servicer)
+        assert _endpoints(next(late)) == [(pb.SERVICE_KIND_LOG_COLLECTOR, "main", "10.0.0.6", 50060)]
+
+    def test_channels_are_not_announced(self):
+        servicer = _make_server()
+        _register_channel(servicer)
+        stream = _subscribe_infrastructure(servicer)
+        assert _endpoints(next(stream)) == []
+
+    def test_kind_filter(self):
+        servicer = _make_server()
+        _register_log_collector(servicer)
+
+        matching = _subscribe_infrastructure(servicer, kinds=[pb.SERVICE_KIND_LOG_COLLECTOR])
+        assert len(_endpoints(next(matching))) == 1
+
+        other = _subscribe_infrastructure(servicer, kinds=[pb.SERVICE_KIND_UNSPECIFIED])
+        assert _endpoints(next(other)) == []
+
+    def test_closed_subscription_stops_listening(self):
+        servicer = _make_server()
+        stream = _subscribe_infrastructure(servicer)
+        next(stream)
+        stream.close()  # runs the generator's finally → unsubscribe
+        assert servicer._registry._listeners == []
 
 
 class TestCreateLinkToken:

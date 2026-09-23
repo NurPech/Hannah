@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.86.0 (2026-09-23)
+### Hannah Core
+
+* Changed: connected channel adapters are now tracked in a shared component registry instead of a Telegram/channel-specific list — groundwork for announcing further services (starting with the upcoming log collector) to all components. No change in behavior (Refs #339)
+* Added: service discovery for Hannah components — the upcoming log collector registers with Hannah over the new `LogCollectorConnect` stream, and components learn where it is via `SubscribeInfrastructure` (current state right after subscribing, then live updates when it comes or goes). If the collector doesn't send its own address, Hannah uses the address it connected from. Nothing changes for installations without a log collector (Refs #335)
+* Chore: updated `hannah-proto` dependency to v4.4.0
 
 ## 0.85.0 (2026-09-23)
 ### Hannah Core

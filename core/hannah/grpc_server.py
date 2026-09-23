@@ -25,6 +25,9 @@ from hannah.models.user import User
 from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import ProtocolVersionInterceptor, read_proto_version
 from hannah.link_tokens import LinkTokenStore, LOOKUP_EXPIRED, LOOKUP_OK
+from hannah.component_registry import (
+    ComponentRegistry, KIND_CHANNEL, KIND_LOG_COLLECTOR, EVENT_REGISTERED,
+)
 from hannah_proto.interceptor.compat_interceptor import CompatVersionInterceptor
 
 log = logging.getLogger(__name__)
@@ -104,6 +107,57 @@ class _ChannelSub:
             return self._queue.get(timeout=timeout)
         except queue.Empty:
             return queue.Empty  # sentinel-like, caller checks
+
+
+# ------------------------------------------------------------------
+# Log collector (one per connected LogCollectorConnect call, #335)
+
+class _LogCollectorSub:
+    def __init__(self):
+        # Set once the register message arrives (an empty instance name is valid).
+        self.instance: Optional[str] = None
+        self.host: str = ""
+        self.port: int = 0
+        self.version: str = ""
+        self._queue: queue.Queue = queue.Queue()
+
+    def put(self, command: pb.LogCollectorCommand):
+        self._queue.put(command)
+
+    def close(self):
+        self._queue.put(None)  # sentinel — ends the generator
+
+    def get(self, timeout: float = 1.0) -> Optional[pb.LogCollectorCommand]:
+        try:
+            return self._queue.get(timeout=timeout)
+        except queue.Empty:
+            return queue.Empty  # sentinel-like, caller checks
+
+
+# Registry kinds announced over SubscribeInfrastructure
+_INFRASTRUCTURE_KINDS = {
+    KIND_LOG_COLLECTOR: pb.SERVICE_KIND_LOG_COLLECTOR,
+}
+
+
+def _peer_host(peer: str) -> str:
+    """Host part of a gRPC peer string ("ipv4:1.2.3.4:5678", "ipv6:[::1]:5678"), else ""."""
+    scheme, _, address = peer.partition(":")
+    if scheme == "ipv4":
+        return address.rpartition(":")[0]
+    if scheme == "ipv6":
+        return address.rpartition(":")[0].strip("[]")
+    return ""
+
+
+def _to_endpoint(kind: str, handle: _LogCollectorSub) -> pb.ServiceEndpoint:
+    return pb.ServiceEndpoint(
+        kind=_INFRASTRUCTURE_KINDS[kind],
+        instance=handle.instance,
+        host=handle.host,
+        port=handle.port,
+        version=handle.version,
+    )
 
 
 # ------------------------------------------------------------------
@@ -316,9 +370,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._automation_subs: list[_AutomationSub] = []
         self._automation_lock = threading.Lock()
 
-        # Connected channel adapters, one per service — a new registration displaces the old one (#334)
-        self._channels: dict[str, _ChannelSub] = {}
-        self._channel_lock = threading.Lock()
+        # Connected components (channel adapters, #334), one per (kind, name) — a new
+        # registration displaces the old one
+        self._registry = ComponentRegistry()
         self._link_tokens = LinkTokenStore()
 
     # ------------------------------------------------------------------
@@ -487,9 +541,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             context.set_details("User nicht gefunden.")
             return pb.CreateLinkTokenResponse(ok=False, message="User nicht gefunden.")
 
-        with self._channel_lock:
-            channel = self._channels.get(request.service)
-            template = channel.link_url_template if channel else ""
+        channel = self._registry.get(KIND_CHANNEL, request.service)
+        template = channel.link_url_template if channel else ""
         if not template:
             msg = f"Kein verknüpfbarer Adapter für {request.service} verbunden."
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -1739,24 +1792,22 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                 yield cmd
         finally:
             drain_thread.join(timeout=2)
-            with self._channel_lock:
-                if sub.service and self._channels.get(sub.service) is sub:
-                    del self._channels[sub.service]
+            if sub.service:
+                self._registry.unregister(KIND_CHANNEL, sub.service, sub)
             log.info(f"[grpc] Channel-Adapter getrennt: {sub.service!r}")
 
     def _register_channel(self, sub: _ChannelSub, register: pb.ChannelRegister):
-        with self._channel_lock:
-            if sub.service and self._channels.get(sub.service) is sub:
-                del self._channels[sub.service]
-            old = self._channels.get(register.service)
-            if old is not None and old is not sub:
-                log.warning(f"[grpc] Channel-Adapter {register.service!r} neu angemeldet — bestehende Verbindung wird verdrängt")
-                old.close()
-            sub.service = register.service
-            sub.display_name = register.display_name
-            sub.link_url_template = register.link_url_template
-            sub.connected_since = int(time.time())
-            self._channels[register.service] = sub
+        if sub.service:
+            self._registry.unregister(KIND_CHANNEL, sub.service, sub)
+        # Fill in the fields before registering, so GetChannels never sees a half-filled entry
+        sub.service = register.service
+        sub.display_name = register.display_name
+        sub.link_url_template = register.link_url_template
+        sub.connected_since = int(time.time())
+        old = self._registry.register(KIND_CHANNEL, register.service, sub)
+        if old is not None:
+            log.warning(f"[grpc] Channel-Adapter {register.service!r} neu angemeldet — bestehende Verbindung wird verdrängt")
+            old.close()
         log.info(
             f"[grpc] Channel-Adapter registriert: {register.service!r}"
             f" (version={register.version!r}, verknüpfbar={bool(register.link_url_template)})"
@@ -1800,17 +1851,118 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         return result
 
     def GetChannels(self, _request, _context):
-        with self._channel_lock:
-            channels = [
-                pb.ChannelInfo(
-                    service=sub.service,
-                    display_name=sub.display_name,
-                    supports_link=bool(sub.link_url_template),
-                    connected_since=sub.connected_since,
-                )
-                for sub in self._channels.values()
-            ]
+        channels = [
+            pb.ChannelInfo(
+                service=sub.service,
+                display_name=sub.display_name,
+                supports_link=bool(sub.link_url_template),
+                connected_since=sub.connected_since,
+            )
+            for sub in self._registry.entries(KIND_CHANNEL)
+        ]
         return pb.GetChannelsResponse(channels=channels)
+
+    # ------------------------------------------------------------------
+    # Infrastructure (#335)
+
+    def LogCollectorConnect(self, request_iterator, context):
+        """
+        Bidirektionaler Stream: Log-Collector → LogCollectorMessage, Hannah → LogCollectorCommand.
+
+        Gleiche Semantik wie ChannelConnect: Der Collector meldet sich mit
+        LogCollectorRegister an und gilt als verfügbar, solange der Stream offen ist;
+        eine zweite Anmeldung für dieselbe Instanz verdrängt die erste. An- und Abmeldung
+        werden über SubscribeInfrastructure an alle Komponenten verteilt.
+        Nicht zu verwechseln mit CollectorConnect (Wakeword-Aufnahmen).
+        """
+        sub = _LogCollectorSub()
+        peer = context.peer() or ""
+
+        def _drain():
+            try:
+                for msg in request_iterator:
+                    which = msg.WhichOneof("payload")
+                    if which == "register":
+                        self._register_log_collector(sub, msg.register, peer)
+                    else:
+                        log.warning(f"[grpc] Unrecognized LogCollectorMessage payload: {which}")
+            except Exception as e:
+                log.debug(f"[grpc] Log collector drain ended: {e}")
+            finally:
+                sub.close()
+
+        drain_thread = threading.Thread(target=_drain, daemon=True, name="log-collector-drain")
+        drain_thread.start()
+
+        try:
+            while context.is_active():
+                cmd = sub.get(timeout=1.0)
+                if cmd is None:
+                    break
+                if cmd is queue.Empty:
+                    continue
+                yield cmd
+        finally:
+            drain_thread.join(timeout=2)
+            if sub.instance is not None:
+                self._registry.unregister(KIND_LOG_COLLECTOR, sub.instance, sub)
+            log.info(f"[grpc] Log-Collector getrennt: {sub.instance!r}")
+
+    def _register_log_collector(self, sub: _LogCollectorSub, register: pb.LogCollectorRegister, peer: str):
+        if sub.instance is not None:
+            self._registry.unregister(KIND_LOG_COLLECTOR, sub.instance, sub)
+        # Fill in the fields before registering, so subscribers never see a half-filled endpoint
+        sub.instance = register.instance
+        sub.host = register.host or _peer_host(peer)
+        sub.port = register.port
+        sub.version = register.version
+        old = self._registry.register(KIND_LOG_COLLECTOR, register.instance, sub)
+        if old is not None:
+            log.warning(f"[grpc] Log-Collector {register.instance!r} neu angemeldet — bestehende Verbindung wird verdrängt")
+            old.close()
+        log.info(
+            f"[grpc] Log-Collector registriert: {register.instance!r}"
+            f" ({sub.host}:{sub.port}, version={register.version!r})"
+        )
+        sub.put(pb.LogCollectorCommand(registered=pb.LogCollectorRegistered()))
+
+    def SubscribeInfrastructure(self, request, context):
+        """
+        Server-Stream: zuerst ein InfrastructureSnapshot aller aktuell verfügbaren
+        Infrastruktur-Dienste, danach ServiceAvailable/ServiceUnavailable-Deltas.
+        request.kinds filtert nach ServiceKind (leer = alle).
+        """
+        kinds = set(request.kinds)
+        q: queue.Queue = queue.Queue()
+
+        def _wanted(kind: str) -> bool:
+            return kind in _INFRASTRUCTURE_KINDS and (not kinds or _INFRASTRUCTURE_KINDS[kind] in kinds)
+
+        def _on_change(event, kind, name, handle):
+            if not _wanted(kind):
+                return
+            if event == EVENT_REGISTERED:
+                q.put(pb.InfrastructureMessage(available=pb.ServiceAvailable(service=_to_endpoint(kind, handle))))
+            else:
+                q.put(pb.InfrastructureMessage(unavailable=pb.ServiceUnavailable(
+                    kind=_INFRASTRUCTURE_KINDS[kind], instance=name,
+                )))
+
+        current = self._registry.subscribe(_on_change)
+        log.info(f"[grpc] Neuer Infrastructure-Subscriber (filter={sorted(kinds) or 'alle'})")
+        try:
+            yield pb.InfrastructureMessage(snapshot=pb.InfrastructureSnapshot(
+                services=[_to_endpoint(kind, handle) for kind, _, handle in current if _wanted(kind)],
+            ))
+            while context.is_active():
+                try:
+                    msg = q.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                yield msg
+        finally:
+            self._registry.unsubscribe(_on_change)
+            log.info("[grpc] Infrastructure-Subscriber getrennt")
 
     def TimerConnect(self, request_iterator, context):
         """
