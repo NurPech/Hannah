@@ -4,6 +4,16 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.87.5 (2026-09-24)
+### AutoDeploy
+
+* Added: AutoDeploy can send its logs to the log collector as well. Set `hannah.address` (Hannah Core's gRPC address) in `autodeploy.yaml` and AutoDeploy ships its logs as soon as Hannah reports a log collector. The update-server token is masked. The usual log output stays as it is, and without the setting nothing changes. If the logging library is missing (for example right after a self-update), AutoDeploy keeps running without it (Refs #349)
+
+### Hannah Proxy
+
+* Added: the proxy sends its logs to the log collector as well, as soon as Hannah reports one. The usual log output stays as it is, and without a log collector nothing changes. Logs from startup on are kept in memory until the collector is reachable. What users said and Hannah's answers are marked as a transcript, so a log export can leave them out (Refs #348)
+* Changed: the proxy's log lines now use the standard `time=… level=… msg=…` format
+* Chore: updated `hannah-proto-go` dependency to v4.5.0
 
 ## 0.87.4 (2026-09-24)
 ### VoiceID

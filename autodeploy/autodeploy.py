@@ -45,6 +45,30 @@ def get_version() -> str:
 # Update-Server API
 # ---------------------------------------------------------------------------
 
+def install_log_shipping(config: dict):
+    """Ships the logs to the Hannah log collector once Hannah (`hannah.address`) announces
+    one; without that key they're only buffered. The token is masked.
+
+    The import is optional on purpose: after a self-update the new autodeploy.py is in
+    place before post_install has installed its requirements. A missing library must not
+    keep the updater from starting — it would never get the chance to repair itself."""
+    try:
+        import hannah_logging
+    except ImportError:
+        log.warning("hannah-logging not installed — log shipping disabled")
+        return None
+
+    hannah = config.get("hannah")
+    address = str(hannah.get("address") or "").strip() if isinstance(hannah, dict) else ""
+    token = config.get("token") or ""
+    return hannah_logging.install(
+        "autodeploy",
+        version=get_version(),
+        hannah_address=address or None,
+        secrets=[token] if token else [],
+    )
+
+
 def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
@@ -235,6 +259,8 @@ def main() -> None:
     except FileNotFoundError:
         log.error("Config not found: %s", config_path)
         sys.exit(1)
+
+    install_log_shipping(config)
 
     base_url: str = config["server_url"].rstrip("/")
     token: str = config.get("token", "")

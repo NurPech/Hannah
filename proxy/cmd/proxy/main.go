@@ -18,7 +18,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
+
+	hannahlog "gitlab.com/gessinger/hannah-logging-libs/go"
 
 	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/config"
 	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/hannah"
@@ -32,11 +36,16 @@ func main() {
 	cfgPath := flag.String("config", "config.yaml", "path to config.yaml")
 	flag.Parse()
 
+	// Buffers every record from here on; ships once Hannah announces the log collector.
+	shipping := setupLogging()
+	defer shipping.Close(2 * time.Second)
+
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		slog.Error("failed to load config", "path", *cfgPath, "err", err)
 		os.Exit(1)
 	}
+	shipping.Connect(cfg.Hannah.Address, "")
 
 	// Parse UDP port from listen address for the heartbeat advertise fields.
 	_, portStr, err := net.SplitHostPort(cfg.UDP.ListenAddr)
@@ -94,6 +103,7 @@ func main() {
 			"intent", resp.IntentName,
 			"answer", resp.Answer,
 			"tts_bytes", len(resp.AudioPcm),
+			hannahlog.CategoryKey, hannahlog.Transcript,
 		)
 
 		if len(resp.AudioPcm) > 0 {
@@ -164,4 +174,19 @@ func main() {
 	slog.Info("proxy running — Ctrl+C to stop")
 	<-ctx.Done()
 	slog.Info("shutting down")
+}
+
+// setupLogging installs a text handler on stderr, wrapped so that every record is also
+// buffered for the Hannah log collector.
+func setupLogging() *hannahlog.Shipping {
+	shipping, err := hannahlog.New(slog.NewTextHandler(os.Stderr, nil), hannahlog.Options{
+		Component: "proxy",
+		Version:   strings.TrimPrefix(version, "v"),
+	})
+	if err != nil {
+		slog.Error("setting up log shipping", "err", err)
+		os.Exit(1)
+	}
+	slog.SetDefault(slog.New(shipping.Handler()))
+	return shipping
 }

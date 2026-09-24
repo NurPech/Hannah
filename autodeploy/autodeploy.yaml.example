@@ -2,6 +2,11 @@ server_url: https://hannah-update.sgessinger.de
 #token: your-bearer-token-here
 poll_interval: 300  # seconds
 
+# Optional: Hannah Core's gRPC address (host:port). AutoDeploy then also sends its logs
+# to the log collector that Hannah announces. Without it nothing changes.
+#hannah:
+#  address: 192.168.1.10:50051
+
 # Name of this agent's own systemd unit — triggers self-restart after self-update.
 self_service: hannah-autodeploy
 

@@ -1,2 +1,5 @@
 requests>=2.31
 pyyaml>=6.0
+
+# Log shipping to the Hannah log collector (#349) — imported optionally, see install_log_shipping()
+hannah-logging>=0.2.1
