@@ -23,6 +23,7 @@ import sys
 from hannah_telegram.bot import HannahBot
 from hannah_telegram.config import load as load_config
 from hannah_telegram.grpc_client import HannahClient
+from hannah_telegram.version import get_version
 from hannah_proto import hannah_pb2
 
 logging.basicConfig(
@@ -80,7 +81,7 @@ async def main(config_path: str) -> None:
         name="event_stream",
     )
 
-    log.info("hannah-telegram starting (gRPC=%s:%d)", cfg.grpc.host, cfg.grpc.port)
+    log.info("hannah-telegram %s starting (gRPC=%s:%d)", get_version(), cfg.grpc.host, cfg.grpc.port)
 
     channel_task = None
     try:

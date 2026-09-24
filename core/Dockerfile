@@ -32,6 +32,10 @@ COPY --from=builder /install /usr/local
 COPY main.py ./
 COPY hannah/ hannah/
 
+# Release version, read by hannah/__version__.py (falls back to "dev" without it)
+ARG VERSION=dev
+RUN echo "${VERSION#v}" > VERSION
+
 # Daten-Verzeichnis (wird als Volume gemountet)
 RUN useradd -r -u 1000 appuser && \
     mkdir -p /app/activity_audio /app/audio_dumps /app/data /etc/hannah /home/appuser && \

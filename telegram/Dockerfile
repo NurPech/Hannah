@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py ./
 COPY hannah_telegram/ hannah_telegram/
 
+# Release version, read by hannah_telegram/version.py (falls back to "dev" without it)
+ARG VERSION=dev
+RUN echo "${VERSION#v}" > VERSION
+
 # Daten-Verzeichnis (wird als Volume gemountet)
 RUN useradd -r -u 1000 appuser && \
     mkdir -p /etc/hannah-telegram /home/appuser && \

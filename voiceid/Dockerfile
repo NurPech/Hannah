@@ -18,6 +18,10 @@ LABEL org.opencontainers.image.description="VoiceID (CPU-only torch build)"
 # App-Code
 COPY app.py ./
 
+# Release version, read by app.py (falls back to "dev" without it)
+ARG VERSION=dev
+RUN echo "${VERSION#v}" > VERSION
+
 # Daten-Verzeichnis (wird als Volume gemountet)
 RUN useradd -r -u 1000 appuser && \
     mkdir -p /etc/hannah-voiceid /home/appuser && \

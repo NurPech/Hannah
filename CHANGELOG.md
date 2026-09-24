@@ -4,6 +4,22 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.87.1 (2026-09-24)
+### Hannah Core
+
+* Fixed: released Hannah Core reports its real version again (at startup and to the log collector) instead of "dev", both in the update-server package and in the container image (Refs #344)
+
+### Telegram
+
+* Fixed: the Telegram service now knows its release version and logs it at startup, both in the update-server package and in the container image (Refs #344)
+
+### VoiceID
+
+* Fixed: VoiceID now knows its release version and logs it at startup, both in the update-server package and in the container image (Refs #344)
+
+### AutoDeploy
+
+* Fixed: AutoDeploy now knows its release version and logs it at startup (Refs #344)
 
 ## 0.87.0 (2026-09-24)
 ### Hannah Core

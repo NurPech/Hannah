@@ -13,6 +13,18 @@ import uvicorn
 
 _ENV_PREFIX = "HANNAH_VOICEID_"
 
+# CI-stamped by the `upload:voiceid` job (tarball) and the Dockerfile (container);
+# absent in a local dev checkout, where get_version() falls back to "dev".
+_VERSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+
+
+def get_version() -> str:
+    try:
+        with open(_VERSION_FILE, encoding="utf-8") as f:
+            return f.read().strip() or "dev"
+    except FileNotFoundError:
+        return "dev"
+
 
 def _load_config(path: str) -> dict:
     if path and os.path.exists(path):
@@ -78,6 +90,7 @@ def _load_model():
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    print(f"Hannah VoiceID {app.version}")
     cfg    = _load_config(getattr(app.state, "config_path", ""))
     _recog = cfg.get("recognition", {})
 
@@ -177,7 +190,7 @@ def create_app(
     uncertain_threshold: float = 0.40,
 ) -> FastAPI:
     """Factory — pass classifier=<mock> in tests to skip model loading."""
-    _app = FastAPI(lifespan=_lifespan)
+    _app = FastAPI(lifespan=_lifespan, version=get_version())
     _app.state.config_path          = config_path
     _app.state.classifier           = classifier
     _app.state.disk_path            = disk_path or os.environ.get(

@@ -30,6 +30,16 @@ DEFAULT_CONFIG = "/etc/hannah/autodeploy.yaml"
 DEFAULT_STATE = "/var/lib/hannah/autodeploy-state.json"
 DEFAULT_DEVICE_ID_FILE = "/var/lib/hannah/autodeploy-device-id"
 
+# CI-stamped by the `upload:autodeploy` job; absent in a local dev checkout.
+VERSION_FILE = Path(__file__).resolve().parent / "VERSION"
+
+
+def get_version() -> str:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or "dev"
+    except FileNotFoundError:
+        return "dev"
+
 
 # ---------------------------------------------------------------------------
 # Update-Server API
@@ -232,7 +242,8 @@ def main() -> None:
     components: list[dict] = config["components"]
     device_id: str = get_or_create_device_id(device_id_path)
 
-    log.info("hannah-autodeploy started. Device ID: %s. Polling every %ds.", device_id, poll_interval)
+    log.info("hannah-autodeploy %s started. Device ID: %s. Polling every %ds.",
+             get_version(), device_id, poll_interval)
 
     while True:
         state = load_state(state_path)
