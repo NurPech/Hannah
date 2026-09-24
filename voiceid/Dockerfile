@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pyt
 LABEL org.opencontainers.image.description="VoiceID (CPU-only torch build)"
 
 # App-Code
-COPY app.py ./
+COPY app.py log_shipping.py ./
 
 # Release version, read by app.py (falls back to "dev" without it)
 ARG VERSION=dev

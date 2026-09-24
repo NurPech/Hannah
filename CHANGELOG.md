@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.87.4 (2026-09-24)
+### VoiceID
+
+* Added: VoiceID can send its logs to the log collector as well. Set `hannah.address` (Hannah Core's gRPC address, env `HANNAH_VOICEID_HANNAH__ADDRESS`) and VoiceID ships its logs as soon as Hannah reports a log collector. The usual log output stays as it is, and without the setting nothing changes. Since VoiceID's logs are about people, they are marked as metadata, so a log export can leave them out (Refs #347)
+* Changed: VoiceID now writes its output through regular logging with timestamp and level instead of plain prints (Refs #347)
+
 ## 0.87.3 (2026-09-24)
 ### Telegram
 

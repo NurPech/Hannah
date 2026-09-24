@@ -2,6 +2,11 @@ server:
   host: "0.0.0.0"
   port: 8080
 
+# Hannah Core (host:port des gRPC-Servers). Nur nötig, damit VoiceID seine Logs an den
+# Log-Collector schickt — Hannah meldet, wo der läuft. Ohne Eintrag bleibt alles wie bisher.
+# hannah:
+#   address: "127.0.0.1:50051"
+
 recognition:
   # Unter diesem Wert gilt der Sprecher als unbekannt
   unknown_threshold: 0.25

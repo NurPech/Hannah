@@ -1,7 +1,9 @@
 import argparse
 import copy
+import logging
 import os
 import shutil
+import sys
 from contextlib import asynccontextmanager
 
 import torch
@@ -10,6 +12,10 @@ import yaml
 from fastapi import APIRouter, FastAPI, Request, Header
 import uvicorn
 
+import log_shipping
+
+
+log = logging.getLogger(log_shipping.LOGGER_NAME)
 
 _ENV_PREFIX = "HANNAH_VOICEID_"
 
@@ -77,20 +83,20 @@ def _coerce(value: str):
 
 
 def _load_model():
-    print("Lade Sprach-Modell (ECAPA-TDNN) auf CPU ...")
+    log.info("Lade Sprach-Modell (ECAPA-TDNN) auf CPU ...")
     from speechbrain.inference.speaker import EncoderClassifier
     model = EncoderClassifier.from_hparams(
         source="speechbrain/spkrec-ecapa-voxceleb",
         run_opts={"device": "cpu"},
     )
     torch.set_num_threads(4)
-    print("✅ Modell bereit.")
+    log.info("✅ Modell bereit.")
     return model
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    print(f"Hannah VoiceID {app.version}")
+    log.info("Hannah VoiceID %s", app.version)
     cfg    = _load_config(getattr(app.state, "config_path", ""))
     _recog = cfg.get("recognition", {})
 
@@ -112,7 +118,7 @@ async def _lifespan(app: FastAPI):
         if file.endswith(".pt"):
             shutil.copy2(os.path.join(disk_path, file), os.path.join(mem_path, file))
             loaded += 1
-    print(f"✅ {loaded} Stimmprofil(e) in RAM-Disk geladen ({mem_path}).")
+    log.info("✅ %d Stimmprofil(e) in RAM-Disk geladen (%s).", loaded, mem_path)
 
     yield
 
@@ -132,7 +138,7 @@ async def enroll(request: Request, x_user_id: str = Header(...)):
     disk_path   = request.app.state.disk_path
     mem_path    = request.app.state.mem_path
 
-    print(f"Enrollment-Probe empfangen für: {x_user_id}")
+    log.info("Enrollment-Probe empfangen für: %s", x_user_id)
     new_emb   = get_embedding(classifier, audio_data)
     filename  = f"{x_user_id}.pt"
     disk_file = os.path.join(disk_path, filename)
@@ -141,10 +147,10 @@ async def enroll(request: Request, x_user_id: str = Header(...)):
     if os.path.exists(disk_file):
         old_emb      = torch.load(disk_file, map_location="cpu").squeeze()
         combined_emb = (old_emb * 0.8) + (new_emb * 0.2)
-        print(f"Update: Bestehendes Profil für {x_user_id} verfeinert.")
+        log.info("Update: Bestehendes Profil für %s verfeinert.", x_user_id)
     else:
         combined_emb = new_emb
-        print(f"Neu: Erstes Profil für {x_user_id} erstellt.")
+        log.info("Neu: Erstes Profil für %s erstellt.", x_user_id)
 
     torch.save(combined_emb, disk_file)
     torch.save(combined_emb, ram_file)
@@ -174,9 +180,9 @@ async def identify(request: Request):
     if max_score < unknown_threshold:
         best_match = "unknown"
     elif max_score < uncertain_threshold:
-        print(f"⚠️  Unsichere Erkennung: {best_match} ({max_score:.4f})")
+        log.warning("Unsichere Erkennung: %s (%.4f)", best_match, max_score)
 
-    print(f"Ergebnis: {best_match} (Score: {max_score:.4f})")
+    log.info("Ergebnis: %s (Score: %.4f)", best_match, max_score)
     return {"user_id": best_match, "confidence": max_score}
 
 
@@ -213,7 +219,15 @@ if __name__ == "__main__":
     _parser.add_argument("--config", default="", help="Pfad zur config.yaml")
     _args = _parser.parse_args()
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
     _cfg    = _load_config(_args.config)
+    # Puffert ab hier; verschickt wird, sobald Hannah (hannah.address) einen Collector meldet.
+    log_shipping.install(get_version(), hannah_address=log_shipping.hannah_address(_cfg), cfg=_cfg)
     _server = _cfg.get("server", {})
     _host   = _server.get("host", "0.0.0.0")
     _port   = int(_server.get("port", 8080))

@@ -4,3 +4,6 @@ PyYAML>=6.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
 speechbrain>=1.0.0
+
+# Log shipping to the Hannah log collector (#341)
+hannah-logging>=0.2.1  # 0.2.1 fixes discovery on Python 3.13

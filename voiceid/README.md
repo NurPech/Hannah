@@ -41,7 +41,12 @@ server:
   host: "0.0.0.0"
   port: 8080
 
+hannah:
+  address: "127.0.0.1:50051" # optional: Hannah Core, damit die Logs an den Log-Collector gehen
+
 recognition:
   unknown_threshold: 0.25    # darunter gilt der Sprecher als unbekannt
   uncertain_threshold: 0.40  # darunter wird die Erkennung nur als unsicher geloggt
 ```
+
+Ist `hannah.address` gesetzt (per Env: `HANNAH_VOICEID_HANNAH__ADDRESS`), schickt VoiceID seine Logs zusätzlich an den Log-Collector, sobald Hannah einen meldet. Die normale Log-Ausgabe bleibt unverändert. Weil sich VoiceID-Logs auf Personen beziehen, sind sie als Metadaten markiert und können beim Export weggelassen werden.
