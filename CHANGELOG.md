@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.86.1 (2026-09-24)
+### Hannah Core
+
+* Fixed: Hannah Core no longer crashes after running for a while with "unable to open database file" / "File descriptor limit reached". Database connections were only closed whenever Python's garbage collector got around to it, so they piled up until the open-file limit was reached — especially on Python 3.14. They are now closed as soon as they are no longer used (Refs #340)
+
 ## 0.86.0 (2026-09-23)
 ### Hannah Core
 

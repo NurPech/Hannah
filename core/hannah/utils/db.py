@@ -1,9 +1,11 @@
 import datetime
 import os
 import secrets
+import sqlite3
 import logging
 from werkzeug.security import generate_password_hash
 from pyorm import Database
+from pyorm.dialects.sqlite import SQLiteDialect
 
 _log = logging.getLogger(__name__)
 
@@ -217,12 +219,41 @@ CREATE TABLE IF NOT EXISTS "applied_migrations" (
 """
 
 
+class _Cursor(sqlite3.Cursor):
+    """Cursor, der seine _ClosingDatabase referenziert — sonst würde z.B.
+    `get_db().execute(...).fetchall()` die Connection schließen, bevor fetchall() läuft."""
+
+
+class _ClosingDatabase(Database):
+    """Schließt die Connection, sobald die letzte Referenz auf die Database weg ist (#340).
+
+    sqlite3.Connection selbst hängt in CPython in einem internen Referenz-Zyklus und wird
+    deshalb nicht per Refcount, sondern erst vom Zyklen-GC freigegeben. Unter Python 3.14
+    (inkrementeller GC) sammeln sich so hunderte offene Connections (+ WAL/SHM-FDs) an, bis
+    das File-Descriptor-Limit erreicht ist. Die Database selbst ist nicht Teil dieses
+    Zyklus — ihr __del__ läuft also deterministisch."""
+
+    def execute(self, sql: str, params=()):
+        cursor = self.connection.cursor(_Cursor)
+        cursor.db = self
+        cursor.execute(self.dialect.translate_params(sql), tuple(params))
+        return cursor
+
+    def __del__(self):
+        try:
+            self.connection.close()
+        except Exception:
+            pass
+
+
 def get_db():
     """Frische Connection pro Aufruf — Hannah Core läuft nicht request-scoped wie Flask,
-    sondern aus gRPC-Handlern/MQTT-Callbacks/Telegram, daher kein g-Caching."""
+    sondern aus gRPC-Handlern/MQTT-Callbacks/Telegram, daher kein g-Caching.
+    Geschlossen wird sie, sobald die Database nicht mehr referenziert wird (#340)."""
     # SQLiteDialect.connect() setzt bereits check_same_thread=False + row_factory=Row,
     # aber keine Pragmas — die bleiben Hannah-spezifisch und werden hier weiterhin explizit gesetzt.
-    db = Database.sqlite(DB_PATH)
+    dialect = SQLiteDialect()
+    db = _ClosingDatabase(dialect.connect(database=DB_PATH), dialect)
     db.connection.execute("PRAGMA journal_mode=WAL")
     db.connection.execute("PRAGMA foreign_keys=ON")
     return db
