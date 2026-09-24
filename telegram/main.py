@@ -20,6 +20,7 @@ import asyncio
 import logging
 import sys
 
+from hannah_telegram import log_shipping
 from hannah_telegram.bot import HannahBot
 from hannah_telegram.config import load as load_config
 from hannah_telegram.grpc_client import HannahClient
@@ -36,6 +37,15 @@ log = logging.getLogger("hannah_telegram")
 
 async def main(config_path: str) -> None:
     cfg = load_config(config_path)
+
+    # Buffer logs as early as possible; start shipping once Hannah announces the log collector.
+    log_shipper = log_shipping.install(
+        get_version(),
+        hannah_address=f"{cfg.grpc.host}:{cfg.grpc.port}",
+        cfg=cfg,
+    )
+    for secret in log_shipping.config_secrets(cfg):
+        log_shipper.add_secret(secret)
 
     if not cfg.telegram_token or cfg.telegram_token == "YOUR_BOT_TOKEN_HERE":
         log.error("telegram_token is not set in %s – aborting", config_path)
