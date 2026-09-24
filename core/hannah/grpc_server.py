@@ -375,6 +375,11 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._registry = ComponentRegistry()
         self._link_tokens = LinkTokenStore()
 
+    @property
+    def registry(self) -> ComponentRegistry:
+        """Connected components — e.g. for main.py to follow the log collector (#341)."""
+        return self._registry
+
     # ------------------------------------------------------------------
     # Public: proxy helpers (called from main.py)
 

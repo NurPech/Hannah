@@ -33,6 +33,8 @@ import wave
 import numpy as np
 import requests
 
+from hannah.log_shipping import TRANSCRIPT
+
 log = logging.getLogger(__name__)
 
 
@@ -75,7 +77,7 @@ class _LocalSTT:
             if seg.no_speech_prob < self._no_speech_threshold:
                 parts.append(seg.text.strip())
         text = " ".join(parts).strip()
-        log.debug(f"STT (lokal): '{text}' (no_speech={max_no_speech:.2f})")
+        log.debug(f"STT (lokal): '{text}' (no_speech={max_no_speech:.2f})", extra=TRANSCRIPT)
         return text, max_no_speech
 
 
@@ -109,7 +111,7 @@ class _AzureSTT:
         if status != "Success":
             raise ValueError(f"Azure STT: RecognitionStatus={status}")
         text = data.get("DisplayText", "").strip()
-        log.debug(f"STT (azure): '{text}'")
+        log.debug(f"STT (azure): '{text}'", extra=TRANSCRIPT)
         return text, 0.0
 
 
@@ -131,7 +133,7 @@ class _RemoteSTT:
         )
         resp.raise_for_status()
         text = resp.json().get("text", "").strip()
-        log.debug(f"STT (remote): '{text}'")
+        log.debug(f"STT (remote): '{text}'", extra=TRANSCRIPT)
         return text, 0.0
 
 

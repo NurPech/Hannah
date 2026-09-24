@@ -296,7 +296,7 @@ Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — al
 Gleiche Grundabmessung wie Rev.4 (88mm rund), passt ins bestehende Gehäuse. Änderungen ggü. Rev.4, GPIO-Belegung siehe `satellite-esp/sdkconfig.defaults.rev5` (von Leonie bestätigt, Issue #160):
 
 - **Chip:** ESP32-S3-**WROOM-1U**-N16R8 (externe Antenne) — Rev.4 nutzte die interne-Antenne-Variante ohne "U"
-- **Mikrofone:** 4× SPH0641LU4H-1 (PDM) → **ADAU7118** (PDM→TDM-Wandler, LFCSP-16 3×3mm) → TDM direkt an ESP32-S3 I2S (Port 0, WS=GPIO12, BCK=GPIO13, DATA=GPIO14) — ermöglicht Beamforming. Ersetzt die 2× PDM-Mics mit gemeinsamer Clock/Data-Leitung von Rev.4
+- **Mikrofone:** 4× SPH0655LM4H-1-8 (PDM) → **ADAU7118** (PDM→TDM-Wandler, LFCSP-16 3×3mm) → TDM direkt an ESP32-S3 I2S (Port 0, WS=GPIO12, BCK=GPIO13, DATA=GPIO14) — ermöglicht Beamforming. Ersetzt die 2× PDM-Mics mit gemeinsamer Clock/Data-Leitung von Rev.4
 - **Tasten neu belegt:** Die TDM-Mikrofonleitungen belegen jetzt GPIO12–14 (vorher PTT/Vol+/Vol− auf Rev.4) → umverdrahtet auf PTT=GPIO40, Vol+=GPIO39, Vol−=GPIO18 (Mute bleibt GPIO11)
 - **Status-LED:** eigener Pin GPIO1 (Rev.4-Default GPIO18 ist jetzt Vol−). Neue zweite, rein passive Power-LED (R12) fest an 3.3V/GND, kein GPIO nötig
 - **LED-Ring:** SK6812MINI-**RV** (Rev.4: SK6812MINI-E) — durch die neuen/umsortierten Komponenten mussten die LEDs neu verkabelt werden; 5V-Trace-Breite platinenweit auf 0,8mm vergrößert

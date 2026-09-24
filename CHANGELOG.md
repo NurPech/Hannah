@@ -5,6 +5,11 @@
 -->
 
 
+## 0.87.0 (2026-09-24)
+### Hannah Core
+
+* Added: Hannah Core sends its logs to the log collector as well, as soon as one is connected. The usual log output (console, journal, syslog) stays exactly as it is, and without a log collector nothing changes. Logs from startup on are kept in memory until the collector is reachable. Passwords and keys from the configuration are masked before a line is sent. What users said is marked as a transcript and presence/person data as metadata, so a log export can leave both out (Refs #341)
+
 ## 0.86.1 (2026-09-24)
 ### Hannah Core
 

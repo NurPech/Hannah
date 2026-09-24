@@ -29,6 +29,8 @@ from hannah.utils.activity_db import init_activity_db
 from hannah.residents import Roomie, Guest, Pet, Resident, AWAY_PRESENCE_STATE, HOME_PRESENCE_STATE, NIGHT_PRESENCE_STATE
 from hannah import audio as audio_mod
 from hannah import config as config_mod
+from hannah import log_shipping
+from hannah.log_shipping import TRANSCRIPT
 from hannah.car_tracker import CarManager, CarTracker
 from hannah.car_registry import CarRegistry
 from hannah.ble_tags import BleTagManager
@@ -131,6 +133,8 @@ def main():
     args = parser.parse_args()
 
     setup_logging(args.log_level)
+    # Buffers from here on; shipping starts once a log collector registers (#341)
+    log_shipper = log_shipping.install(HANNAH_VERSION)
     log = logging.getLogger("hannah.main")
     log.info(f"Hannah Core {HANNAH_VERSION}")
 
@@ -139,6 +143,8 @@ def main():
     except (FileNotFoundError, ValueError) as e:
         log.error(str(e))
         sys.exit(1)
+    for secret in log_shipping.config_secrets(cfg):
+        log_shipper.add_secret(secret)
 
     # User-Registry (SQLite, Hannah-eigene Quelle der Wahrheit statt ioBroker)
     init_db()
@@ -564,7 +570,7 @@ def main():
             _log_pipeline_activity()
             return
 
-        log.info(f"[{device}] Text: '{text}'")
+        log.info(f"[{device}] Text: '{text}'", extra=TRANSCRIPT)
 
         # Phrase-Trigger-Check vor NLU (#139, Nachfolger des alten Routine-Checks)
         phrase_reply = trigger_engine.match_phrase(text, source_device=device)
@@ -1703,7 +1709,7 @@ def main():
             return False
         callback, timer = entry
         timer.cancel()
-        log.info(f"[{device}] Antwort auf offene Frage im Raum '{room}': {transcript!r}")
+        log.info(f"[{device}] Antwort auf offene Frage im Raum '{room}': {transcript!r}", extra=TRANSCRIPT)
         threading.Thread(target=callback, args=(transcript,), daemon=True, name="trigger-answer").start()
         return True
 
@@ -1805,7 +1811,7 @@ def main():
         if not transcript:
             return "", "Ich konnte dich leider nicht verstehen.", "Unknown", b""
 
-        log.info(f"[grpc/voice] Transkript: {transcript!r}")
+        log.info(f"[grpc/voice] Transkript: {transcript!r}", extra=TRANSCRIPT)
         answer, intent_name = _handle_text(
             transcript, speaker_user_id, source=speaker_user_id or "grpc-voice",
             channel_type=channel_type or "grpc_voice", channel_id=channel_id, audio_array=audio_array,
@@ -1891,7 +1897,7 @@ def main():
             return "", "Ich konnte dich leider nicht verstehen.", "Unknown", b"", 0
 
         log.info(f"[{device}] Satellit-Transkript: {transcript!r}"
-                 + (f" (Sprecher: {speaker_user_id})" if speaker_user_id else ""))
+                 + (f" (Sprecher: {speaker_user_id})" if speaker_user_id else ""), extra=TRANSCRIPT)
 
         # Offene Trigger-Frage? Dann Äußerung als Antwort konsumieren statt NLU-Routing.
         room = _get_satellite_room(device) or ""
@@ -1998,7 +2004,7 @@ def main():
             )
 
     def _on_agent_text_command(text: str) -> tuple[str, str]:
-        log.info(f"[iobroker] Anfrage: {text!r}")
+        log.info(f"[iobroker] Anfrage: {text!r}", extra=TRANSCRIPT)
         return _handle_text(text, source="iobroker", channel_type="iobroker")
 
     def _on_agent_set_resident(resident_id: str, presence_state: int, resident_type: pb.ResidentType):
@@ -2667,6 +2673,8 @@ def main():
     # ------------------------------------------------------------------
     # gRPC-Server starten
 
+    # Before the server starts, so no log collector can register unnoticed (#341)
+    log_shipping.follow_registry(log_shipper, grpc_servicer.registry)
     grpc_srv = GrpcServer(cfg.get("grpc", {}), grpc_servicer)
     grpc_srv.start()
 
@@ -2690,6 +2698,7 @@ def main():
     udp_server.stop()
     mqtt_handler.disconnect()
     log.info("Beendet.")
+    log_shipper.close()  # sends what is still buffered
 
 
 if __name__ == "__main__":

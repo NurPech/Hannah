@@ -5,6 +5,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Optional
 
+from hannah.log_shipping import TRANSCRIPT
+
 if TYPE_CHECKING:
     from .iobroker import Device
 
@@ -754,7 +756,7 @@ class NLU:
             intent_name, value, unit = "TurnOff", None, None
         else:
             intent_name, value, unit = "Unknown", None, None
-            log.debug(f"NLU: Kein Intent erkannt für '{raw}'")
+            log.debug(f"NLU: Kein Intent erkannt für '{raw}'", extra=TRANSCRIPT)
 
         _actionable = intent_name in ("TurnOn", "TurnOff", "SetLevel", "SetColor", "SetTemperature", "SetMode", "SetFanSpeed", "Query", "SetVolume")
         intent = Intent(

@@ -102,6 +102,7 @@ import uuid as _uuid
 from datetime import date, datetime
 from typing import Any, Callable, Optional
 
+from hannah.log_shipping import TRANSCRIPT
 from hannah.models.trigger import Trigger
 
 log = logging.getLogger(__name__)
@@ -680,7 +681,7 @@ class TriggerEngine:
 
     def _process_response(self, answer: str, tid: str, room: str, rules: list) -> None:
         """Wertet on_response-Regeln aus und führt die erste passende Aktion aus."""
-        log.info(f"Trigger '{tid}' Antwort erhalten für Raum '{room}': {answer!r}")
+        log.info(f"Trigger '{tid}' Antwort erhalten für Raum '{room}': {answer!r}", extra=TRANSCRIPT)
         fallback: Optional[dict] = None
         for rule in rules:
             condition = rule.get("condition", "").strip()

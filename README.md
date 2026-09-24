@@ -5,6 +5,8 @@
 
 Hannah ist ein **lokal betriebener, deutschsprachiger Sprachassistent** für das Smart Home — ein selbst gehosteter Ersatz für Google Assistant / Amazon Echo, gebaut für [ioBroker](https://www.iobroker.net/). Kein Cloud-Zwang, kein API-Key-Vendor-Lock-in: STT, NLU und (optional) TTS laufen komplett im eigenen Netz. Gesteuert wird per Sprache über eigene ESP32-S3-Satelliten, per Telegram-Sprachnachricht/Text, oder direkt per Text aus ioBroker/Vis.
 
+📖 **Dokumentation:** [hannah-docs.leonie.network](https://hannah-docs.leonie.network) — Installation, Einrichtung und Bedienung.
+
 ---
 
 ## Repository-Struktur
