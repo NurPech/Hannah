@@ -13,7 +13,7 @@ protobuf>=7.35.0
 hannah-proto>=4.3.0
 
 # Log shipping to the Hannah log collector (#341)
-hannah-logging>=0.2.0
+hannah-logging>=0.2.1  # 0.2.1 fixes discovery on Python 3.13
 
 # Config
 pyyaml>=6.0

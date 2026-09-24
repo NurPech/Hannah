@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.87.3 (2026-09-24)
+### Telegram
+
+* Fixed: on Python 3.13, logs never reached the log collector. Finding the collector through Hannah failed with "'_thread._ThreadHandle' object is not callable" (Refs #345)
+* Chore: updated `hannah-logging` dependency to v0.2.1
+
 ## 0.87.2 (2026-09-24)
 ### Telegram
 
