@@ -160,3 +160,53 @@ class TestRegisterRoomCheck:
         callback.assert_called_once()
         snapshot = callback.call_args[0][0]
         assert snapshot.get("wz-sat") == "wohnzimmer"
+
+
+class TestTtsAddrBehindNat:
+    """#351 — hinter einer NAT ist die gesehene Adresse Gateway + NAT-Port; TTS muss
+    dorthin, nicht an Gateway-IP + gemeldeten listen_port."""
+
+    def test_register_uses_source_address_not_listen_port(self):
+        server = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+        nat_addr = ("172.21.0.1", 44000)
+        payload = json.dumps({"type": "register", "device": "nb", "listen_port": 7776}).encode("utf-8")
+
+        server._handle_control(payload, nat_addr)
+
+        with server._lock:
+            assert server._satellites["nb"]["tts_addr"] == nat_addr
+
+    def test_heartbeat_follows_nat_remapping(self):
+        server = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+        _register(server, "nb", addr=("172.21.0.1", 44000))
+
+        _heartbeat(server, "nb", addr=("172.21.0.1", 45123))
+
+        with server._lock:
+            assert server._satellites["nb"]["tts_addr"] == ("172.21.0.1", 45123)
+
+
+class TestFindDeviceByAddr:
+    """#351 — hinter derselben NAT teilen sich alle Satelliten die Gateway-IP."""
+
+    def _server_with(self, sats: dict):
+        server = _make_server()
+        with server._lock:
+            for device, addr in sats.items():
+                server._satellites[device] = {
+                    "addr": addr, "tts_addr": addr, "room": "wohnzimmer",
+                    "last_heartbeat": time.monotonic(),
+                }
+        return server
+
+    def test_distinguishes_satellites_behind_same_nat(self):
+        server = self._server_with({"a": ("172.21.0.1", 44000), "b": ("172.21.0.1", 44001)})
+
+        assert server._find_device_by_addr(("172.21.0.1", 44000)) == "a"
+        assert server._find_device_by_addr(("172.21.0.1", 44001)) == "b"
+        assert server._find_device_by_addr(("172.21.0.1", 45000)) is None
+
+    def test_falls_back_to_unambiguous_ip(self):
+        server = self._server_with({"a": ("192.168.1.100", 7776)})
+
+        assert server._find_device_by_addr(("192.168.1.100", 50000)) == "a"

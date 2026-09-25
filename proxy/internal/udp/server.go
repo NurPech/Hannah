@@ -61,7 +61,7 @@ const heartbeatTimeout = 30 * time.Second // 3 × 10s heartbeat interval
 
 type satellite struct {
 	audioAddr     *net.UDPAddr // source address of audio packets
-	ttsAddr       *net.UDPAddr // destination for TTS + control (may differ from audioAddr port)
+	ttsAddr       *net.UDPAddr // destination for TTS + control (observed source address, NAT-safe)
 	lastHeartbeat time.Time
 }
 
@@ -330,7 +330,7 @@ func (s *Server) routingDevice(pkt []byte, addr *net.UDPAddr) string {
 	case typeAudio:
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.findDeviceByIP(addr.IP.String())
+		return s.findDeviceByAddr(addr)
 	default:
 		return ""
 	}
@@ -380,16 +380,20 @@ func (s *Server) handleControl(payload []byte, addr *net.UDPAddr) {
 	switch t {
 	case "register":
 		seed, _ := msg["seed"].(string)
-		listenPort := addr.Port
-		if lp, ok := msg["listen_port"].(float64); ok {
-			listenPort = int(lp)
+		// TTS goes back to the observed source address (IP + port), not to
+		// source IP + reported listen_port: behind a NAT (e.g. Docker bridge on
+		// Synology) the observed IP is the NAT gateway, and only the NAT-assigned
+		// port leads back to the satellite (Refs #351). All satellites send from
+		// their listen socket, so without NAT both are identical anyway.
+		if lp, ok := msg["listen_port"].(float64); ok && int(lp) != addr.Port {
+			slog.Info("satellite source port differs from listen_port (NAT?) — replying to source address",
+				"device", device, "source", addr, "listen_port", int(lp))
 		}
-		ttsAddr := &net.UDPAddr{IP: addr.IP, Port: listenPort}
 		s.mu.Lock()
-		s.satellites[device] = &satellite{audioAddr: addr, ttsAddr: ttsAddr, lastHeartbeat: time.Now()}
+		s.satellites[device] = &satellite{audioAddr: addr, ttsAddr: addr, lastHeartbeat: time.Now()}
 		delete(s.sessions, device) // verwaiste Session verwerfen (z.B. nach ESP-Neustart ohne audio_end)
 		s.mu.Unlock()
-		slog.Info("satellite registered", "device", device, "audio_from", addr, "tts_to_port", listenPort)
+		slog.Info("satellite registered", "device", device, "addr", addr)
 		s.sendControl(map[string]any{"type": "registered", "ok": true}, addr)
 		if s.onSatelliteChange != nil {
 			go s.onSatelliteChange(device, addr.IP.String(), seed, true)
@@ -415,6 +419,7 @@ func (s *Server) handleControl(payload []byte, addr *net.UDPAddr) {
 		sat, registered := s.satellites[device]
 		if registered {
 			sat.audioAddr = addr
+			sat.ttsAddr = addr // follow NAT re-mappings (Refs #351)
 			sat.lastHeartbeat = time.Now()
 		}
 		s.mu.Unlock()
@@ -432,7 +437,7 @@ func (s *Server) handleControl(payload []byte, addr *net.UDPAddr) {
 
 func (s *Server) handleAudio(payload []byte, addr *net.UDPAddr) {
 	s.mu.Lock()
-	device := s.findDeviceByIP(addr.IP.String())
+	device := s.findDeviceByAddr(addr)
 	if device == "" {
 		s.mu.Unlock()
 		slog.Warn("audio from unregistered IP — satellite must register first", "addr", addr)
@@ -496,13 +501,25 @@ func (s *Server) watchdog() {
 	}
 }
 
-// findDeviceByIP returns the first device name matching the given IP.
+// findDeviceByAddr returns the device whose last known address matches addr
+// exactly (IP + port). Behind a NAT all satellites share the gateway IP, so
+// only the port tells them apart (Refs #351). Falls back to an IP-only match,
+// but only if that IP is unambiguous — for clients sending audio from a
+// different port than their control packets.
 // Must be called with s.mu held.
-func (s *Server) findDeviceByIP(ip string) string {
+func (s *Server) findDeviceByAddr(addr *net.UDPAddr) string {
+	ipMatch, ipMatches := "", 0
 	for device, sat := range s.satellites {
-		if sat.audioAddr.IP.String() == ip {
-			return device
+		if sat.audioAddr.IP.Equal(addr.IP) {
+			if sat.audioAddr.Port == addr.Port {
+				return device
+			}
+			ipMatch = device
+			ipMatches++
 		}
+	}
+	if ipMatches == 1 {
+		return ipMatch
 	}
 	return ""
 }

@@ -4,6 +4,15 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.87.7 (2026-09-25)
+### Hannah Core
+
+* Fixed: when Hannah Core runs in Docker and talks to satellites directly (without the proxy), satellites never played Hannah's answers if Docker hides the satellites' real addresses, as it does on Synology NAS. Hannah now answers to the exact address a satellite's packets come from, and tells several satellites behind the same Docker setup apart by that address, so speech from one is no longer mistaken for another (Refs #351)
+
+### Hannah Proxy
+
+* Fixed: when the proxy runs in Docker, satellites never played Hannah's answers if Docker hides the satellites' real addresses, as it does on Synology NAS. Microphone input still worked, so everything looked connected. The proxy now answers to the exact address a satellite's packets come from, and tells several satellites behind the same Docker setup apart by that address, so speech from one is no longer mistaken for another (Refs #351)
+
 ## 0.87.6 (2026-09-25)
 ### Hannah Core
 

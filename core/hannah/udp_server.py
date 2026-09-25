@@ -279,14 +279,22 @@ class UDPServer:
                     f"nicht funktional (kein Tracking, keine Weiterleitung an Adapter)."
                 )
                 return
-            # Satellit meldet seinen Empfangsport für TTS; Fallback: Absender-Port
-            listen_port = msg.get("listen_port", addr[1])
-            tts_addr = (addr[0], listen_port)
+            # TTS geht an die gesehene Absenderadresse (IP + Port), nicht an Absender-IP +
+            # gemeldeten listen_port: hinter einer NAT (z.B. Docker-Bridge auf Synology)
+            # ist die gesehene IP das NAT-Gateway, und nur der von der NAT vergebene Port
+            # führt zurück zum Satelliten (#351). Alle Satelliten senden über ihren
+            # Listen-Socket, ohne NAT ist beides ohnehin identisch.
+            listen_port = msg.get("listen_port")
+            if listen_port is not None and listen_port != addr[1]:
+                log.info(
+                    f"Satellit '{device}': Absender-Port {addr[1]} ≠ listen_port {listen_port} "
+                    f"(NAT?) — antworte an Absenderadresse"
+                )
             with self._lock:
-                self._satellites[device] = {"addr": addr, "tts_addr": tts_addr, "room": room, "last_heartbeat": time.monotonic()}
+                self._satellites[device] = {"addr": addr, "tts_addr": addr, "room": room, "last_heartbeat": time.monotonic()}
             log.info(
                 f"Satellit registriert: '{device}' "
-                f"(Raum: '{room}', Audio von {addr[0]}:{addr[1]}, TTS an :{listen_port})"
+                f"(Raum: '{room}', Adresse {addr[0]}:{addr[1]})"
             )
             self._send_control({"type": "registered", "ok": True}, addr)
             if self._on_satellite_change:
@@ -316,6 +324,7 @@ class UDPServer:
             with self._lock:
                 if device in self._satellites:
                     self._satellites[device]["addr"] = addr
+                    self._satellites[device]["tts_addr"] = addr  # NAT-Neuzuordnung folgen (#351)
                     self._satellites[device]["last_heartbeat"] = time.monotonic()
                     self._send_control({"type": "heartbeat_ack", "device": device}, addr)
                     log.info(f"Heartbeat von '{device}' — ACK gesendet")
@@ -329,9 +338,9 @@ class UDPServer:
             log.debug(f"UDP Control unbekannt: type='{t}' von {addr}")
 
     def _handle_audio(self, payload: bytes, addr: tuple):
-        device = self._find_device_by_ip(addr[0])
+        device = self._find_device_by_addr(addr)
         if device is None:
-            log.warning(f"UDP: Audio von unbekannter IP {addr[0]} — bitte zuerst registrieren.")
+            log.warning(f"UDP: Audio von unbekannter Adresse {addr[0]}:{addr[1]} — bitte zuerst registrieren.")
             self._send_control({"type": "reregister"}, addr)
             return
 
@@ -401,10 +410,16 @@ class UDPServer:
                     target=self._on_satellite_change, args=(snapshot,), daemon=True
                 ).start()
 
-    def _find_device_by_ip(self, ip: str) -> Optional[str]:
-        """Gibt den Device-Namen für eine IP zurück (erste Übereinstimmung)."""
+    def _find_device_by_addr(self, addr: tuple) -> Optional[str]:
+        """Gibt den Device-Namen für eine Absenderadresse zurück. Exakter Treffer
+        (IP + Port) zuerst — hinter einer NAT teilen sich alle Satelliten die
+        Gateway-IP, nur der Port unterscheidet sie (#351). Fallback auf reinen
+        IP-Vergleich nur, wenn die IP eindeutig ist."""
         with self._lock:
+            ip_matches = []
             for device, sat in self._satellites.items():
-                if sat["addr"][0] == ip:
-                    return device
-        return None
+                if sat["addr"][0] == addr[0]:
+                    if sat["addr"][1] == addr[1]:
+                        return device
+                    ip_matches.append(device)
+        return ip_matches[0] if len(ip_matches) == 1 else None

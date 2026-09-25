@@ -88,7 +88,48 @@ func TestRegister_SetsLastHeartbeat(t *testing.T) {
 	}
 }
 
+func TestRegister_TTSGoesToSourceAddressBehindNAT(t *testing.T) {
+	// Refs #351: behind a NAT the observed address is the gateway with a
+	// NAT-assigned port — TTS must go there, not to gateway IP + listen_port.
+	s := makeServer()
+	natAddr := makeAddr("172.21.0.1", 44000)
+
+	s.handleControl(controlPayload(t, map[string]any{
+		"type":        "register",
+		"device":      "notebook",
+		"listen_port": 7776,
+	}), natAddr)
+
+	s.mu.Lock()
+	got := s.satellites["notebook"].ttsAddr
+	s.mu.Unlock()
+
+	if got.String() != natAddr.String() {
+		t.Errorf("ttsAddr = %v, want %v", got, natAddr)
+	}
+}
+
 // --- handleControl: heartbeat -----------------------------------------------
+
+func TestHeartbeat_FollowsNATRemapping(t *testing.T) {
+	s := makeServer()
+	s.handleControl(controlPayload(t, map[string]any{
+		"type": "register", "device": "notebook", "listen_port": 7776,
+	}), makeAddr("172.21.0.1", 44000))
+
+	remapped := makeAddr("172.21.0.1", 45123)
+	s.handleControl(controlPayload(t, map[string]any{
+		"type": "heartbeat", "device": "notebook",
+	}), remapped)
+
+	s.mu.Lock()
+	got := s.satellites["notebook"].ttsAddr
+	s.mu.Unlock()
+
+	if got.String() != remapped.String() {
+		t.Errorf("ttsAddr = %v, want %v", got, remapped)
+	}
+}
 
 func TestHeartbeat_UpdatesTimestamp(t *testing.T) {
 	s := makeServer()
@@ -218,6 +259,43 @@ func TestCheckTimeouts_PartialTimeout(t *testing.T) {
 	}
 	if !freshExists {
 		t.Error("fresh satellite should not have been removed")
+	}
+}
+
+// --- findDeviceByAddr -------------------------------------------------------
+
+func TestFindDeviceByAddr_DistinguishesSatellitesBehindSameNAT(t *testing.T) {
+	// Refs #351: behind a NAT all satellites share the gateway IP.
+	s := makeServer()
+	addrA := makeAddr("172.21.0.1", 44000)
+	addrB := makeAddr("172.21.0.1", 44001)
+	s.satellites["a"] = &satellite{audioAddr: addrA, ttsAddr: addrA, lastHeartbeat: time.Now()}
+	s.satellites["b"] = &satellite{audioAddr: addrB, ttsAddr: addrB, lastHeartbeat: time.Now()}
+
+	s.mu.Lock()
+	gotA, gotB := s.findDeviceByAddr(addrA), s.findDeviceByAddr(addrB)
+	gotUnknown := s.findDeviceByAddr(makeAddr("172.21.0.1", 45000))
+	s.mu.Unlock()
+
+	if gotA != "a" || gotB != "b" {
+		t.Errorf("got a=%q b=%q, want a=\"a\" b=\"b\"", gotA, gotB)
+	}
+	if gotUnknown != "" {
+		t.Errorf("ambiguous IP with unknown port must not match, got %q", gotUnknown)
+	}
+}
+
+func TestFindDeviceByAddr_FallsBackToUnambiguousIP(t *testing.T) {
+	s := makeServer()
+	addr := makeAddr("192.168.1.100", 7776)
+	s.satellites["a"] = &satellite{audioAddr: addr, ttsAddr: addr, lastHeartbeat: time.Now()}
+
+	s.mu.Lock()
+	got := s.findDeviceByAddr(makeAddr("192.168.1.100", 50000))
+	s.mu.Unlock()
+
+	if got != "a" {
+		t.Errorf("got %q, want \"a\"", got)
 	}
 }
 
