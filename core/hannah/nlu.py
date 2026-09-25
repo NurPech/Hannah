@@ -872,6 +872,8 @@ class NLU:
         best_id = best_name = None
         best_len = 0
         for device_id, name in self._satellites.items():
+            if not name:  # display_name ist nullable — ohne Namen kein Match möglich (#350)
+                continue
             norm_name = _normalize(name)
             if norm_name in norm_text and len(norm_name) > best_len:
                 best_id, best_name, best_len = device_id, name, len(norm_name)

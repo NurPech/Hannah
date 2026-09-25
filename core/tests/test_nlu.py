@@ -228,6 +228,15 @@ class TestCaptureIntents:
         intent = nlu_with_satellite.parse("starte die aufnahme")
         assert intent.name != "StartCapture"
 
+    def test_satellite_without_display_name_is_skipped(self):
+        """#350 — display_name ist nullable; ein Satellit ohne Namen darf parse() nicht crashen."""
+        nlu = NLU(cfg={}, rooms={}, devices={}, satellites={"noname_id": None, "flur01_id": "Flur01"})
+
+        intent = nlu.parse("stoppe die aufnahme auf flur01")
+
+        assert intent.name == "StopCapture"
+        assert intent.satellite_id == "flur01_id"
+
 
 def _make_device(key: str, room: str, category: str = "window") -> Device:
     return Device(id=f"{room}.{key}", name=key, key=key, room=room,

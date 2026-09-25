@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.87.6 (2026-09-25)
+### Hannah Core
+
+* Fixed: a satellite without a name made Hannah fail on every request, whether spoken or typed (e.g. via Telegram), with "'NoneType' object has no attribute 'lower'". Such satellites are now skipped when looking for a satellite name in the request (Refs #350)
+
 ## 0.87.5 (2026-09-24)
 ### AutoDeploy
 
