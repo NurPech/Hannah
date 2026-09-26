@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.87.8 (2026-09-26)
+### Telegram
+
+* Fixed: the Telegram bot token was not masked in the logs sent to the log collector, so it could end up in plain text in a log export. Secret values from the Telegram configuration are now recognized and masked (Refs #353)
+* Fixed: the Telegram bot token showed up in plain text in the service's regular log output (e.g. journal), because every request to Telegram was logged with its full address. These request lines are no longer logged (Refs #352)
+
 ## 0.87.7 (2026-09-25)
 ### Hannah Core
 

@@ -34,17 +34,13 @@ def install(version: str, *, hannah_address: Optional[str] = None, cfg: Any = No
 
 def config_secrets(cfg: Any) -> Iterator[str]:
     """Alle Secret-Werte aus einer Config-Struktur extrahieren."""
-    if dataclasses.is_dataclass(cfg):
-        for field in dataclasses.fields(cfg):
-            yield from config_secrets(getattr(cfg, field.name))
+    if dataclasses.is_dataclass(cfg) and not isinstance(cfg, type):
+        # Feldnamen wie Dict-Keys prüfen — sonst bleibt z.B. telegram_token unerkannt (#353)
+        yield from _named_secrets((f.name, getattr(cfg, f.name)) for f in dataclasses.fields(cfg))
         return
 
     if isinstance(cfg, dict):
-        for key, value in cfg.items():
-            if isinstance(value, str) and _SECRET_KEY.search(str(key)):
-                yield value
-            else:
-                yield from config_secrets(value)
+        yield from _named_secrets(cfg.items())
         return
 
     if isinstance(cfg, list):
@@ -55,3 +51,14 @@ def config_secrets(cfg: Any) -> Iterator[str]:
     if isinstance(cfg, tuple):
         for item in cfg:
             yield from config_secrets(item)
+
+
+def _named_secrets(items: Iterable[tuple[Any, Any]]) -> Iterator[str]:
+    """String-Werte, deren Name nach Secret aussieht; alles andere rekursiv durchsuchen.
+    Leere Werte (z.B. nicht gesetzter Token) sind kein Secret — nichts zu maskieren."""
+    for key, value in items:
+        if isinstance(value, str) and _SECRET_KEY.search(str(key)):
+            if value:
+                yield value
+        else:
+            yield from config_secrets(value)

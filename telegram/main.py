@@ -32,6 +32,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
+# httpx logs every Bot API request at INFO, and the URL contains the bot token (#352)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("hannah_telegram")
 
 
