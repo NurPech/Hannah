@@ -4,8 +4,8 @@ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
-gitlab.com/gessinger/hannah-logging-libs/go v0.1.0 h1:qyhPFILZF+T0THBnhmLqsva+aeIe3USGt1UX9WbKsRc=
-gitlab.com/gessinger/hannah-logging-libs/go v0.1.0/go.mod h1:ZdQaHDVm3MJkrLZ1ON3E2pQwpeCCqjFMmwNYPAojtsI=
+gitlab.com/gessinger/hannah-logging-libs/go v0.1.1 h1:9F+vrUNO7pQOOy652qTr9pR8CqvBF5jv90ALHd0OTiI=
+gitlab.com/gessinger/hannah-logging-libs/go v0.1.1/go.mod h1:ZdQaHDVm3MJkrLZ1ON3E2pQwpeCCqjFMmwNYPAojtsI=
 go.yaml.in/yaml/v2 v2.4.2 h1:DzmwEr2rDGHl7lsFgAHxmNz/1NlQ7xLIrlN2h5d1eGI=
 go.yaml.in/yaml/v2 v2.4.2/go.mod h1:081UH+NErpNdqlCXm3TtEran0rJZGxAYx9hb/ELlsPU=
 go.yaml.in/yaml/v3 v3.0.3 h1:bXOww4E/J3f66rav3pX3m8w6jDE4knZjGOw8b5Y6iNE=

@@ -12,4 +12,4 @@ hannah-proto>=4.4.0 # Proto schema — published package (#60); SubscribeInfrast
 werkzeug>=3.1.0     # Password-Hashing (generate_password_hash)
 dialectorm-m1kad0>=0.1.2 # Mini-ORM (import name: pyorm), published package (#132)
 mysql-connector-python>=8.0 # MySQL-Treiber für pyorm.Database.mysql() — Activity-Log-DB (#220)
-hannah-logging>=0.2.0 # Logs an den Log-Collector (#341); 0.2.0 bringt set_collector_address()
+hannah-logging>=0.3.1 # Logs an den Log-Collector (#341); 0.3.1: stabiler Instanzname im Container (#356)

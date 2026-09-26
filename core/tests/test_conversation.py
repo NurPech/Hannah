@@ -1,6 +1,50 @@
 import time
 
 from hannah.conversation import ConversationContext
+from hannah.nlu import Intent
+
+
+class TestFillIntentDevice:
+    """#354 — "Licht aus" nach "Computer an" hat den Computer ausgeschaltet: fill_intent()
+    hat das Gerät aus dem Kontext geerbt, obwohl der User eine Kategorie genannt hat."""
+
+    def _ctx_after_computer_on(self):
+        ctx = ConversationContext(ttl=120.0)
+        ctx.update_from_intent("sat01", Intent(
+            name="TurnOn", room="OG Zimmer Süd", room_id="og zimmer süd",
+            category_filter="Licht",
+        ))
+        ctx.update_from_intent("sat01", Intent(
+            name="TurnOn", room="OG Zimmer Süd", room_id="og zimmer süd",
+            device="Computer", device_id="javascript.0.virtualDevice.Computer",
+        ))
+        return ctx
+
+    def test_category_named_does_not_inherit_device(self):
+        ctx = self._ctx_after_computer_on()
+        intent = Intent(name="TurnOff", category_filter="Licht")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.device is None
+        assert intent.device_id is None
+        assert intent.category_filter == "Licht"
+        assert intent.room_id == "og zimmer süd"
+
+    def test_no_target_named_still_inherits_device(self):
+        """"Und wieder aus" — weder Gerät noch Kategorie noch Raum: meint das letzte Gerät."""
+        ctx = self._ctx_after_computer_on()
+        intent = Intent(name="TurnOff")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.device == "Computer"
+        assert intent.device_id == "javascript.0.virtualDevice.Computer"
+
+    def test_room_named_does_not_inherit_device(self):
+        ctx = self._ctx_after_computer_on()
+        intent = Intent(name="TurnOff", room="Küche", room_id="küche")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.device is None
 
 
 class TestRecordTts:

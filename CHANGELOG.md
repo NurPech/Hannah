@@ -4,6 +4,28 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.88.0 (2026-09-26)
+### Hannah Core
+
+* Fixed: after switching a specific device, a follow-up command naming a category switched that device instead. For example, "Licht aus" right after "Computer an" turned the computer off. Naming a category like "Licht" now always means all devices of that category, just as naming a room means the whole room (Refs #354)
+* Changed: when Hannah Core runs in Docker, its logs in the log collector no longer show up under a new name after every container recreate. They appear as `container`, or under the name set in the new `HANNAH_LOG_INSTANCE` environment variable (Refs #356)
+
+### Hannah Proxy
+
+* Changed: when the proxy runs in Docker, its logs in the log collector no longer show up under a new name after every container recreate. They appear as `container`, or under the name set in the new `HANNAH_LOG_INSTANCE` environment variable (Refs #356)
+
+### Telegram
+
+* Changed: when the Telegram bot runs in Docker, its logs in the log collector no longer show up under a new name after every container recreate. They appear as `container`, or under the name set in the new `HANNAH_LOG_INSTANCE` environment variable (Refs #356)
+
+### VoiceID
+
+* Changed: when VoiceID runs in Docker, its logs in the log collector no longer show up under a new name after every container recreate. They appear as `container`, or under the name set in the new `HANNAH_LOG_INSTANCE` environment variable (Refs #356)
+
+### AutoDeploy
+
+* Added: the name under which AutoDeploy's logs appear in the log collector (by default the host name) can be set with the new `HANNAH_LOG_INSTANCE` environment variable (Refs #356)
+
 ## 0.87.8 (2026-09-26)
 ### Telegram
 
