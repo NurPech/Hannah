@@ -4,8 +4,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, Optional
-from hannah_proto.hannah_pb2 import AgentDevice as AgentDevice
-from hannah_proto.hannah_pb2 import AgentStateValue as AgentStateValue
+from hannah_proto.v1.hannah_pb2 import AgentDevice as AgentDevice
+from hannah_proto.v1.hannah_pb2 import AgentStateValue as AgentStateValue
 
 if TYPE_CHECKING:
     from .nlu import Intent
@@ -94,7 +94,7 @@ class Device:
     category: str          # Licht
     states: dict = field(default_factory=dict)         # canon-key → state_id
     current: dict = field(default_factory=dict)        # canon-key → aktueller Wert (Cache)
-    state_types: dict = field(default_factory=dict)    # canon-key → StateType (proto-Enum-Int, siehe hannah_proto.shared_pb2)
+    state_types: dict = field(default_factory=dict)    # canon-key → StateType (proto-Enum-Int, siehe hannah_proto.v1.shared_pb2)
     enum_values: dict = field(default_factory=dict)    # canon-key → {rohwert: label}, nur bei ENUM/COLOR
     state_writable: dict = field(default_factory=dict) # canon-key → bool, aus ioBroker common.write
     inverted: bool = False  # category 'blind': Aktor nutzt 0%=auf/100%=zu statt Hannahs Konvention (#270)
@@ -183,11 +183,10 @@ class IoBrokerClient:
                     continue
 
                 parts = device.state_id.split(".")
-                # device_id kommt vom Adapter (#257) — garantiert vorhanden, da
-                # enforce_protocol_version (seit 2026-07-11 in Prod scharf) jeden Client
-                # ohne hannah-proto>=4.0.0 schon auf gRPC-Ebene ablehnt, lange bevor hier
-                # ein Snapshot ankäme. Kein Adapter <1.1.0 (hannah-proto <3.8.0) kann sich
-                # also noch verbinden.
+                # device_id kommt vom Adapter (#257), ab Adapter 1.1.0 (hannah-proto
+                # 3.8.0). Seit #359 lehnt Core ältere Clients nicht mehr per
+                # x-proto-version ab — ein Adapter <1.1.0 käme hier also wieder an;
+                # seine Geräte ohne device_id werden übersprungen.
                 if not device.device_id:
                     continue
                 device_id = device.device_id

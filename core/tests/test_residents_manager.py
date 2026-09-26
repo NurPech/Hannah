@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
 import pytest
-from hannah_proto import hannah_pb2 as pb
+from hannah_proto.v1 import hannah_pb2 as pb
 
 from hannah.residents_manager import ResidentsClient
 from hannah.residents import Roomie

@@ -4,6 +4,14 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.89.0 (2026-09-26)
+### Hannah Core
+
+* Changed: Hannah Core now speaks the first versioned API generation `hannah.v1` and keeps serving the previous, unversioned API alongside it. Components that haven't been updated yet (adapter, Telegram bot, proxy, …) keep working unchanged, and future breaking API changes no longer lock out components that are updated later. Requires `hannah-proto` 4.6.0 (Refs #359)
+* Changed: the `grpc.enforce_protocol_version` setting no longer has any effect, because compatibility is now decided by the API version a component calls. Hannah Core no longer rejects a component because of its reported protocol version, it only logs it. An existing entry in `config.yaml` is ignored with a deprecation warning at startup and can be removed (Refs #359)
+* Changed: `grpc.enforce_protocol_version`'s job is now done by `grpc.enforce_compat_version`, which is on by default. A component too old for a specific request is rejected for that request instead of receiving data it can't handle. To only log such cases instead, set `enforce_compat_version: false` in `config.yaml`. An existing `false` entry is kept (Refs #359)
+* Added: when a component too old for any API version Hannah Core still serves tries to connect, Hannah Core logs the called method and the component's reported protocol version once, so it can be identified (Refs #359)
+
 ## 0.88.0 (2026-09-26)
 ### Hannah Core
 

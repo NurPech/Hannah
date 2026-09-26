@@ -1,7 +1,7 @@
 import pytest
 from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient, Device
 from hannah.nlu import Intent
-from hannah_proto.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
+from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
 
 
 class TestCamelToWords:
@@ -515,10 +515,8 @@ class TestHandleStateUpdate:
 class TestHandleDeviceSnapshotAdapterResolvedKeys:
     """#257 — der Adapter (>=1.1.0, hannah-proto >=3.8.0) löst device_id (Grouping) und
     canonical_key (Rolle, z.B. on/level/color) selbst auf und schickt sie direkt mit.
-    Beide Felder sind seit dem hannah-proto>=4.0.0-Floor von enforce_protocol_version
-    (jeder Call ohne matching x-proto-version wird schon auf gRPC-Ebene abgelehnt)
-    faktisch garantiert vorhanden — es gibt keinen Adapter <1.1.0 mehr, der sich
-    überhaupt noch verbinden könnte."""
+    Seit #359 lehnt Core ältere Clients nicht mehr per x-proto-version ab; Geräte
+    ohne device_id werden übersprungen."""
 
     def _device_msg(self, state_id: str, device_id: str = "", canonical_key: str = "",
                      device_type: str = "light") -> AgentDevice:

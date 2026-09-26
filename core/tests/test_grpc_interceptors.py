@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock
 
 import grpc
@@ -10,9 +11,10 @@ from hannah.grpc_interceptors import (
 )
 
 EXPECTED_VERSION = str(_PROTO_VERSION)
+UNKNOWN_METHOD = "/hannah.v0.HannahService/SubmitText"
 
 
-def _handler_call_details(method="/hannah.HannahService/SubmitText", version=EXPECTED_VERSION):
+def _handler_call_details(method="/hannah.v1.HannahService/SubmitText", version=EXPECTED_VERSION):
     metadata = ((PROTO_VERSION_METADATA_KEY, version),) if version is not None else ()
     return MagicMock(method=method, invocation_metadata=metadata)
 
@@ -21,100 +23,74 @@ def _unary_handler():
     return grpc.unary_unary_rpc_method_handler(lambda request, context: "ok")
 
 
-def _stream_stream_handler():
-    return grpc.stream_stream_rpc_method_handler(lambda request_iterator, context: iter(["ok"]))
+def _version_records(caplog):
+    return [r for r in caplog.records if "[grpc/version]" in r.getMessage()]
 
 
 def test_read_proto_version_matches_package():
     assert read_proto_version() == EXPECTED_VERSION
 
 
-def test_matching_version_passes_through_unchanged():
-    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION, enforce=True)
+def test_matching_version_passes_through_without_log(caplog):
+    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION)
     handler = _unary_handler()
-    continuation = MagicMock(return_value=handler)
 
-    result = interceptor.intercept_service(continuation, _handler_call_details(version=EXPECTED_VERSION))
+    with caplog.at_level(logging.DEBUG, logger="hannah.grpc_interceptors"):
+        result = interceptor.intercept_service(MagicMock(return_value=handler), _handler_call_details())
+
+    assert result is handler
+    assert not _version_records(caplog)
+
+
+def test_mismatch_is_never_rejected_only_logged(caplog):
+    # #359: x-proto-version is diagnostic only — the versioned path decides compatibility.
+    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION)
+    handler = _unary_handler()
+
+    with caplog.at_level(logging.INFO, logger="hannah.grpc_interceptors"):
+        result = interceptor.intercept_service(MagicMock(return_value=handler), _handler_call_details(version="999"))
+
+    assert result is handler
+    records = _version_records(caplog)
+    assert len(records) == 1
+    assert "999" in records[0].getMessage()
+
+
+def test_missing_metadata_is_never_rejected():
+    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION)
+    handler = _unary_handler()
+
+    result = interceptor.intercept_service(MagicMock(return_value=handler), _handler_call_details(version=None))
 
     assert result is handler
 
 
-def test_mismatch_enforce_false_only_logs_and_passes_through():
-    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION, enforce=False)
-    handler = _unary_handler()
-    continuation = MagicMock(return_value=handler)
+def test_unknown_method_logs_path_and_header_and_stays_unimplemented(caplog):
+    # A component older than N−1 calls a path Core no longer serves: handler is None,
+    # gRPC answers UNIMPLEMENTED — but path and x-proto-version must be logged first.
+    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION)
 
-    result = interceptor.intercept_service(continuation, _handler_call_details(version="999"))
+    with caplog.at_level(logging.INFO, logger="hannah.grpc_interceptors"):
+        result = interceptor.intercept_service(
+            MagicMock(return_value=None), _handler_call_details(method=UNKNOWN_METHOD, version="1")
+        )
 
-    assert result is handler
-
-
-def test_missing_metadata_enforce_false_only_logs_and_passes_through():
-    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION, enforce=False)
-    handler = _unary_handler()
-    continuation = MagicMock(return_value=handler)
-
-    result = interceptor.intercept_service(continuation, _handler_call_details(version=None))
-
-    assert result is handler
+    assert result is None
+    records = _version_records(caplog)
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert UNKNOWN_METHOD in records[0].getMessage()
+    assert "'1'" in records[0].getMessage()
 
 
-def test_mismatch_enforce_true_aborts_unary_call():
-    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION, enforce=True)
-    continuation = MagicMock(return_value=_unary_handler())
+def test_same_path_and_header_logged_only_once(caplog):
+    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION)
+    continuation = MagicMock(return_value=None)
 
-    result = interceptor.intercept_service(continuation, _handler_call_details(version="999"))
+    with caplog.at_level(logging.INFO, logger="hannah.grpc_interceptors"):
+        for _ in range(5):
+            interceptor.intercept_service(continuation, _handler_call_details(method=UNKNOWN_METHOD, version="1"))
+        # a different header on the same path is a new finding
+        interceptor.intercept_service(continuation, _handler_call_details(method=UNKNOWN_METHOD, version="2"))
 
-    assert result.request_streaming is False
-    assert result.response_streaming is False
-
-    context = MagicMock()
-    result.unary_unary(MagicMock(), context)
-    context.abort.assert_called_once()
-    code, message = context.abort.call_args[0]
-    assert code == grpc.StatusCode.FAILED_PRECONDITION
-    assert "999" in message
-    assert EXPECTED_VERSION in message
-
-
-def test_missing_metadata_enforce_true_aborts():
-    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION, enforce=True)
-    continuation = MagicMock(return_value=_unary_handler())
-
-    result = interceptor.intercept_service(continuation, _handler_call_details(version=None))
-
-    context = MagicMock()
-    result.unary_unary(MagicMock(), context)
-    context.abort.assert_called_once()
-    code, message = context.abort.call_args[0]
-    assert code == grpc.StatusCode.FAILED_PRECONDITION
-    assert "None" in message
-
-
-def test_mismatch_enforce_true_preserves_streaming_shape():
-    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION, enforce=True)
-    continuation = MagicMock(return_value=_stream_stream_handler())
-
-    result = interceptor.intercept_service(continuation, _handler_call_details(version="999"))
-
-    assert result.request_streaming is True
-    assert result.response_streaming is True
-
-    context = MagicMock()
-    result.stream_stream(iter([MagicMock()]), context)
-    context.abort.assert_called_once()
-    assert context.abort.call_args[0][0] == grpc.StatusCode.FAILED_PRECONDITION
-
-
-def test_enforce_can_be_toggled_at_runtime():
-    interceptor = ProtocolVersionInterceptor(EXPECTED_VERSION, enforce=False)
-    handler = _unary_handler()
-    continuation = MagicMock(return_value=handler)
-
-    # enforce=False -> passes through despite mismatch
-    assert interceptor.intercept_service(continuation, _handler_call_details(version="999")) is handler
-
-    # flip to enforce=True -> same mismatch now gets rejected
-    interceptor.enforce = True
-    result = interceptor.intercept_service(continuation, _handler_call_details(version="999"))
-    assert result is not handler
+    assert len(_version_records(caplog)) == 2

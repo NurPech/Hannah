@@ -2,7 +2,7 @@ import logging
 import threading
 from typing import Optional
 
-from hannah_proto import weather_pb2
+from hannah_proto.v1 import weather_pb2
 
 log = logging.getLogger(__name__)
 

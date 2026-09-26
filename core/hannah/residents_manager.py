@@ -3,7 +3,7 @@ import threading
 from typing import Callable, Optional
 
 from hannah.residents import Resident
-from hannah_proto import hannah_pb2 as pb
+from hannah_proto.v1 import hannah_pb2 as pb
 
 log = logging.getLogger(__name__)
 

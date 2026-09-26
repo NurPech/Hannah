@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock
 
 import grpc
-from hannah_proto import hannah_pb2 as pb
+import pytest
+from hannah_proto import hannah_pb2 as legacy_pb
+from hannah_proto.v1 import hannah_pb2 as pb
 from hannah_proto.interceptor.compat_interceptor import (
     COMPAT_VERSION_METADATA_KEY,
     DEFAULT_COMPAT_VERSION,
@@ -10,7 +12,8 @@ from hannah_proto.interceptor.compat_interceptor import (
     get_message_compat_version,
 )
 
-HANNAH_SERVICE = pb.DESCRIPTOR.services_by_name["HannahService"]
+HANNAH_SERVICE = legacy_pb.DESCRIPTOR.services_by_name["HannahService"]
+V1_HANNAH_SERVICE = pb.DESCRIPTOR.services_by_name["HannahService"]
 
 
 def _handler_call_details(method="/hannah.HannahService/SubmitText", version=None):
@@ -30,10 +33,14 @@ def test_message_without_compat_version_option_defaults_to_1():
     assert get_message_compat_version(pb.SubmitTextRequest.DESCRIPTOR) == DEFAULT_COMPAT_VERSION
 
 
-def test_build_required_versions_covers_every_method_with_full_method_path():
-    versions = build_required_versions(HANNAH_SERVICE)
+@pytest.mark.parametrize("service", [HANNAH_SERVICE, V1_HANNAH_SERVICE], ids=["hannah", "hannah.v1"])
+def test_build_required_versions_covers_every_method_with_full_method_path(service):
+    # Core runs one interceptor per served package (#359): the N−1 one on the
+    # frozen hannah schema, the current one on hannah.v1.
+    prefix = f"/{service.full_name}/"
+    versions = build_required_versions(service)
 
-    assert "/hannah.HannahService/SubmitText" in versions
+    assert f"{prefix}SubmitText" in versions
     # Methods whose request/response message carries an explicit compat_version > 1 —
     # every other method still requires the default. SubmitSatelliteAudioRequest is at
     # 3 since hannah-proto 4.0.0 (speaker_user_id removal, hannah-proto#17/#210 first
@@ -41,11 +48,11 @@ def test_build_required_versions_covers_every_method_with_full_method_path():
     # (hannah-proto#5, #295). TriggerCollectorCapture/CollectorConnect are at 2 since
     # CaptureCommand.compat_version was first set explicitly (hannah-proto 4.0.0).
     elevated = {
-        "/hannah.HannahService/SubmitSatelliteAudio": 3,
-        "/hannah.HannahService/CreateTrigger": 2,
-        "/hannah.HannahService/UpdateTrigger": 2,
-        "/hannah.HannahService/TriggerCollectorCapture": 2,
-        "/hannah.HannahService/CollectorConnect": 2,
+        f"{prefix}SubmitSatelliteAudio": 3,
+        f"{prefix}CreateTrigger": 2,
+        f"{prefix}UpdateTrigger": 2,
+        f"{prefix}TriggerCollectorCapture": 2,
+        f"{prefix}CollectorConnect": 2,
     }
     for method, expected in elevated.items():
         assert versions[method] == expected

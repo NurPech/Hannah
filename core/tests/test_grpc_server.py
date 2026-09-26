@@ -13,7 +13,7 @@ from werkzeug.security import generate_password_hash
 
 from hannah.grpc_server import HannahServicer, _ChannelSub, _LogCollectorSub, _peer_host, _user_to_pb
 from hannah.component_registry import KIND_CHANNEL, KIND_LOG_COLLECTOR
-from hannah_proto import hannah_pb2 as pb
+from hannah_proto.v1 import hannah_pb2 as pb
 from hannah.user_manager import UserManager
 from hannah.models.user import User
 from hannah.residents.Roomie import Roomie

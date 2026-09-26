@@ -44,8 +44,7 @@ mqtt:
 grpc:
   host: "0.0.0.0"   # Bind-Adresse des gRPC-Servers
   port: 50051        # Standard gRPC-Port
-  enforce_protocol_version: false  # #60: Mismatch/fehlende x-proto-version-Metadata ablehnen statt nur loggen — erst aktivieren, wenn ALLE Clients umgestellt sind
-  enforce_compat_version: false    # #217: wie oben, aber pro Message (x-compat-version) statt global — erst aktivieren, wenn ALLE Clients umgestellt sind
+  enforce_compat_version: true     # #217: Clients mit zu niedriger x-compat-version (pro Message) ablehnen; false = nur loggen
 
 user_registry:
   hannah_roomie: "hannah"   # Roomie-ID, unter der Hannah sich selbst als Resident registriert

@@ -1,5 +1,5 @@
 from hannah.weather import WeatherCache
-from hannah_proto.hannah_pb2 import AgentWeatherUpdate, WeatherCurrentData, WeatherForecastDay
+from hannah_proto.v1.hannah_pb2 import AgentWeatherUpdate, WeatherCurrentData, WeatherForecastDay
 
 
 def test_available_false_without_update():
