@@ -2,8 +2,25 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from hannah_grpc.client import CURRENT_SERVICE, PROTO_VERSION_METADATA_KEY
+from hannah_proto import PROTO_VERSION
+
 from hannah_telegram.grpc_client import HannahClient
-from hannah_telegram.grpc_interceptors import PROTO_VERSION_METADATA_KEY, read_proto_version
+
+
+class _FakeStubs:
+    """Stands in for VersionedStub: hands out one MagicMock stub, no probe."""
+
+    def __init__(self):
+        self.stub = MagicMock()
+        self.service = CURRENT_SERVICE
+        self.resets = 0
+
+    async def resolve(self):
+        return self.stub
+
+    def reset(self):
+        self.resets += 1
 
 
 async def test_subscribe_events_sends_proto_version_metadata_explicitly():
@@ -12,15 +29,15 @@ async def test_subscribe_events_sends_proto_version_metadata_explicitly():
     needs x-proto-version and x-compat-version passed explicitly instead of
     relying on the interceptors (#60, #217)."""
     client = HannahClient("localhost", 50051)
-    client._stub = MagicMock()
-    client._stub.SubscribeEvents.side_effect = RuntimeError("stop after first call")
+    client._stubs = _FakeStubs()
+    client._stubs.stub.SubscribeEvents.side_effect = RuntimeError("stop after first call")
 
     with pytest.raises(RuntimeError):
         await client.subscribe_events([], on_event=lambda _e: None)
 
-    client._stub.SubscribeEvents.assert_called_once()
-    _, kwargs = client._stub.SubscribeEvents.call_args
-    assert kwargs["metadata"][0] == (PROTO_VERSION_METADATA_KEY, read_proto_version())
+    client._stubs.stub.SubscribeEvents.assert_called_once()
+    _, kwargs = client._stubs.stub.SubscribeEvents.call_args
+    assert kwargs["metadata"][0] == (PROTO_VERSION_METADATA_KEY, str(PROTO_VERSION))
     assert kwargs["metadata"][1][0] == "x-compat-version"
 
 
@@ -31,7 +48,7 @@ async def test_subscribe_events_sends_proto_version_metadata_explicitly():
 import asyncio
 from types import SimpleNamespace
 
-from hannah_proto import hannah_pb2
+from hannah_proto.v1 import hannah_pb2
 
 
 class _FakeChannelCall:
@@ -64,16 +81,16 @@ async def test_channel_connect_registers_and_dispatches_redeem_result():
             request_id="r1", result=hannah_pb2.REDEEM_OK,
         )),
     ])
-    client._stub = MagicMock()
-    client._stub.ChannelConnect.return_value = call
+    client._stubs = _FakeStubs()
+    client._stubs.stub.ChannelConnect.return_value = call
 
     register = hannah_pb2.ChannelRegister(service="telegram", link_url_template="https://t.me/Bot?start={token}")
     await client.channel_connect(register)
 
     assert call.written == [hannah_pb2.ChannelMessage(register=register)]
     assert fut.result().result == hannah_pb2.REDEEM_OK
-    _, kwargs = client._stub.ChannelConnect.call_args
-    assert kwargs["metadata"][0] == (PROTO_VERSION_METADATA_KEY, read_proto_version())
+    _, kwargs = client._stubs.stub.ChannelConnect.call_args
+    assert kwargs["metadata"][0] == (PROTO_VERSION_METADATA_KEY, str(PROTO_VERSION))
     assert kwargs["metadata"][1][0] == "x-compat-version"
     assert client._channel_call is None  # cleared once the stream is gone
 

@@ -1,6 +1,6 @@
 import logging
 
-import hannah_logging
+import hannah_grpc.logging as hannah_logging
 
 from hannah.component_registry import ComponentRegistry, KIND_CHANNEL, KIND_LOG_COLLECTOR
 from hannah.log_shipping import TRANSCRIPT, config_secrets, follow_registry

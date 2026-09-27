@@ -161,18 +161,20 @@ def test_no_deprecation_log_without_the_key(caplog):
 def test_compat_version_is_enforced_by_default():
     server = GrpcServer({}, MagicMock())
 
-    assert all(i.enforce for i in server._compat_interceptors)
+    assert server._compat_interceptor.enforce
 
 
 def test_compat_version_enforcement_can_be_disabled_in_config():
     server = GrpcServer({"enforce_compat_version": False}, MagicMock())
 
-    assert not any(i.enforce for i in server._compat_interceptors)
+    assert not server._compat_interceptor.enforce
 
 
 def test_compat_version_enforcement_covers_both_packages():
     server = GrpcServer({}, MagicMock())
     server.set_compat_version_enforcement(True)
 
-    assert len(server._compat_interceptors) == 2
-    assert all(i.enforce for i in server._compat_interceptors)
+    required = server._compat_interceptor._required
+    assert {f"/{CURRENT_SERVICE.full_name}/{m.name}" for m in CURRENT_SERVICE.methods} <= required.keys()
+    assert {f"/{LEGACY_SERVICE.full_name}/{m.name}" for m in LEGACY_SERVICE.methods} <= required.keys()
+    assert server._compat_interceptor.enforce

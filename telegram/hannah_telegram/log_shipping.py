@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any, Iterable, Iterator, Optional
 
-import hannah_logging
+import hannah_grpc.logging as hannah_logging
 
 log = logging.getLogger(__name__)
 

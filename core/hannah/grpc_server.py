@@ -24,7 +24,7 @@ from hannah_proto.v1 import hannah_pb2_grpc as pb_grpc
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import ProtocolVersionInterceptor, read_proto_version
-from hannah.grpc_legacy import LEGACY_SERVICE, add_legacy_servicer_to_server
+from hannah.grpc_legacy import add_legacy_servicer_to_server
 from hannah.link_tokens import LinkTokenStore, LOOKUP_EXPIRED, LOOKUP_OK
 from hannah.component_registry import (
     ComponentRegistry, KIND_CHANNEL, KIND_LOG_COLLECTOR, EVENT_REGISTERED,
@@ -2255,18 +2255,15 @@ class GrpcServer:
         # elsewhere doesn't reject clients unaffected by it. A client that
         # never sends x-compat-version is treated as compat_version 1 — same
         # safe default a client predating this mechanism gets.
-        # One interceptor per served package (#359): each keys its map by full
-        # method path and passes unknown paths through, so the v1 one covers
-        # /hannah.v1.HannahService/... and the N−1 one /hannah.HannahService/...,
-        # the latter measured against the frozen schema those clients were built on.
+        # One interceptor for both served packages (#359, #362): without explicit
+        # services it covers hannah.v1 and the N−1 hannah package, keyed by full
+        # method path, so /hannah.HannahService/... is measured against the frozen
+        # schema those clients were built on.
         # Enforced by default since #359: with the exact x-proto-version check
         # gone, this is the only gate keeping clients too old for a message
         # they use away from Core. An explicit `false` in config.yaml still wins.
         enforce_compat = cfg.get("enforce_compat_version", True)
-        self._compat_interceptors = [
-            CompatVersionInterceptor(service=service, enforce=enforce_compat)
-            for service in (pb.DESCRIPTOR.services_by_name["HannahService"], LEGACY_SERVICE)
-        ]
+        self._compat_interceptor = CompatVersionInterceptor(enforce=enforce_compat)
 
     def start(self):
         # Der synchrone grpc.server() belegt pro Streaming-RPC (RegisterProxy,
@@ -2279,7 +2276,7 @@ class GrpcServer:
         # Worker zugeteilt und lieferte dadurch nie Daten, ohne jeden Fehler (#229).
         self._server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=32),
-            interceptors=[self._version_interceptor, *self._compat_interceptors],
+            interceptors=[self._version_interceptor, self._compat_interceptor],
         )
         pb_grpc.add_HannahServiceServicer_to_server(self._servicer, self._server)
         add_legacy_servicer_to_server(self._servicer, self._server)
@@ -2300,8 +2297,7 @@ class GrpcServer:
         False bleiben (nur Logging) — sonst lehnt Hannah jeden Call ab, der
         eine Message mit compat_version > 1 nutzt.
         """
-        for interceptor in self._compat_interceptors:
-            interceptor.enforce = enforce
+        self._compat_interceptor.enforce = enforce
         log.info(f"[grpc/compat_version] Compat-Version-Enforcement: {'AN' if enforce else 'AUS'}")
 
 

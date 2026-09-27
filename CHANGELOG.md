@@ -4,6 +4,18 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.89.1 (2026-09-27)
+### Hannah Core
+
+* Fixed: with `hannah-proto` 4.6.1 or newer installed, Hannah Core failed to start its gRPC server (`CompatVersionInterceptor.__init__() got an unexpected keyword argument 'service'`). Fresh installs and dependency updates were affected, since they pull the latest `hannah-proto`. Requires `hannah-proto` 4.6.2 (Refs #362)
+* Chore: switched log shipping from `hannah-logging` to its renamed successor `hannah-grpc-lib` 0.4.0, no functional change
+
+### Telegram
+
+* Changed: the Telegram bot now speaks Hannah Core's versioned API `hannah.v1`. Against a Hannah Core too old for it, the bot falls back to the previous API on its own and keeps working, and logs once per connection that Hannah Core should be updated. Requires `hannah-proto` 4.6.0 (Refs #360)
+* Chore: switched log shipping from `hannah-logging` to its renamed successor `hannah-grpc-lib` 0.4.0, no functional change
+* Chore: the `hannah.v1` fallback now comes from `hannah-grpc-lib` 0.5.0 instead of the bot's own copy, no functional change. Requires `hannah-proto` 4.6.2 (Refs #361)
+
 ## 0.89.0 (2026-09-26)
 ### Hannah Core
 

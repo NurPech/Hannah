@@ -40,7 +40,7 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 
-from hannah_proto import hannah_pb2
+from hannah_proto.v1 import hannah_pb2
 
 if TYPE_CHECKING:
     from hannah_telegram.grpc_client import HannahClient

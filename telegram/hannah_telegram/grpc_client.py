@@ -9,47 +9,46 @@ from typing import Optional
 import grpc
 import grpc.aio
 
-from hannah_telegram.grpc_interceptors import (
-    PROTO_VERSION_METADATA_KEY,
-    ProtocolVersionClientInterceptor,
-    read_proto_version,
-)
-from hannah_proto import hannah_pb2, hannah_pb2_grpc
-from hannah_proto.interceptor.compat_interceptor import (
-    CompatVersionClientInterceptor,
-    client_compat_version_metadata,
-)
+from hannah_grpc import client as hannah_client
+from hannah_proto.v1 import hannah_pb2
 
 log = logging.getLogger(__name__)
 
 
 class HannahClient:
-    """Thin async wrapper around the Hannah gRPC stub."""
+    """Thin async wrapper around the Hannah gRPC stub.
+
+    Works with hannah.v1 types only. Against a Core too old for hannah.v1, calls go to the
+    unversioned N−1 path instead (hannah_grpc.client.VersionedStub, #360)."""
 
     def __init__(self, host: str, port: int) -> None:
         self._address = f"{host}:{port}"
         self._channel: Optional[grpc.aio.Channel] = None
-        self._stub: Optional[hannah_pb2_grpc.HannahServiceStub] = None
+        self._stubs: Optional[hannah_client.VersionedStub] = None
         # Open ChannelConnect stream (#334) and its redeem requests awaiting an answer
         self._channel_call = None
         self._channel_write_lock = asyncio.Lock()
         self._pending_redeems: dict[str, asyncio.Future] = {}
 
     async def connect(self) -> None:
-        # compat_version (hannah-proto#10/hannah#217) runs additively next
-        # to ProtocolVersionClientInterceptor, not as a replacement — a
-        # breaking change scoped to one message no longer has to reject
-        # every client, only calls that actually use the affected message.
-        service = hannah_pb2.DESCRIPTOR.services_by_name["HannahService"]
+        # x-proto-version and x-compat-version (hannah-proto#10/hannah#217) on every
+        # call, x-compat-version per service path (v1 or N−1).
         self._channel = grpc.aio.insecure_channel(
             self._address,
-            interceptors=[
-                ProtocolVersionClientInterceptor(read_proto_version()),
-                CompatVersionClientInterceptor(service),
-            ],
+            interceptors=hannah_client.aio_interceptors(),
         )
-        self._stub = hannah_pb2_grpc.HannahServiceStub(self._channel)
+        self._stubs = hannah_client.VersionedStub(self._channel)
         log.info("gRPC channel to Hannah at %s created", self._address)
+
+    async def _get_stub(self):
+        assert self._stubs, "call connect() first"
+        return await self._stubs.resolve()
+
+    def _stream_metadata(self, method: str) -> tuple:
+        # grpc.aio's stream interceptors don't reliably apply metadata mutations (unlike
+        # unary-unary), so streams pass both headers explicitly. x-compat-version is
+        # computed against the service whose path is in use.
+        return hannah_client.stream_metadata(self._stubs.service, method)
 
     async def close(self) -> None:
         if self._channel:
@@ -61,9 +60,9 @@ class HannahClient:
 
     async def submit_text_full(self, text: str, chat_id: str) -> "hannah_pb2.SubmitTextResponse":
         """Send a text command to Hannah; return the full SubmitTextResponse (answer + intent_name)."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            return await self._stub.SubmitText(
+            return await stub.SubmitText(
                 hannah_pb2.SubmitTextRequest(
                     text=text,
                     source_service="telegram",
@@ -84,9 +83,9 @@ class HannahClient:
 
     async def submit_voice(self, audio_ogg: bytes, chat_id: str) -> "hannah_pb2.SubmitVoiceResponse":
         """Send OGG/Opus audio to Hannah; returns transcript, answer, intent_name and TTS audio."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            return await self._stub.SubmitVoice(
+            return await stub.SubmitVoice(
                 hannah_pb2.SubmitVoiceRequest(
                     audio=audio_ogg,
                     source_service="telegram",
@@ -111,9 +110,9 @@ class HannahClient:
 
         Returns (found: bool, user_or_None).
         """
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            resp = await self._stub.GetUser(
+            resp = await stub.GetUser(
                 hannah_pb2.GetUserRequest(
                     linked_account=hannah_pb2.LinkedAccountLookup(
                         provider="telegram",
@@ -128,9 +127,9 @@ class HannahClient:
 
     async def get_all_telegram_chat_ids(self) -> list[str]:
         """Return all chat_ids of users with a linked Telegram account."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            resp = await self._stub.GetUsers(
+            resp = await stub.GetUsers(
                 hannah_pb2.GetUsersRequest(include_inactive=False)
             )
             ids = []
@@ -144,9 +143,9 @@ class HannahClient:
 
     async def get_system_message_telegram_ids(self) -> list[str]:
         """Return chat_ids of users with system_messages=True and a linked Telegram account."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            resp = await self._stub.GetUsers(
+            resp = await stub.GetUsers(
                 hannah_pb2.GetUsersRequest(include_inactive=False)
             )
             ids = []
@@ -166,9 +165,9 @@ class HannahClient:
     async def set_system_messages(self, user_id: int, enabled: bool) -> tuple[bool, str]:
         """Enable/disable system message notifications for the user identified by uuid (always
         unambiguous, unlike roomie_id — callers already resolved uuid via a linked-account lookup)."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            resp = await self._stub.SetSystemMessages(
+            resp = await stub.SetSystemMessages(
                 hannah_pb2.SetSystemMessagesRequest(user_id=user_id, enabled=enabled)
             )
             return resp.ok, resp.message
@@ -178,10 +177,10 @@ class HannahClient:
 
     async def set_trust_level(self, user_id: int, level: int) -> tuple[bool, str]:
         """Set the trust level of a roomie. Returns (ok, message)."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
             req = hannah_pb2.SetTrustLevelRequest(user_id=user_id, level=level)
-            resp = await self._stub.SetTrustLevel(req)
+            resp = await stub.SetTrustLevel(req)
             return resp.ok, resp.message
         except grpc.aio.AioRpcError as exc:
             log.error("SetTrustLevel gRPC error: %s", exc)
@@ -190,10 +189,10 @@ class HannahClient:
     async def link_account(self, user_id: int, chat_id: str) -> tuple[bool, str]:
         """Link a Telegram chat_id to a Hannah roomie. resident_type (ROOMIE/GUEST/PET) disambiguates
         if roomie_id collides across types. Returns (ok, message)."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
             req = hannah_pb2.LinkAccountRequest(user_id=user_id, service="telegram", account_id=str(chat_id))
-            resp = await self._stub.LinkAccount(req)
+            resp = await stub.LinkAccount(req)
             return resp.ok, resp.message
         except grpc.aio.AioRpcError as exc:
             log.error("LinkAccount gRPC error: %s", exc)
@@ -201,10 +200,10 @@ class HannahClient:
 
     async def get_user_by_username(self, user_name: str):
         """Check if a userbane exists. Returns (found, user_or_None, error_or_None)."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
             req = hannah_pb2.GetUserRequest(user_name=user_name)
-            resp = await self._stub.GetUser(req)
+            resp = await stub.GetUser(req)
             return resp.found, (resp.user if resp.found else None), None
         except grpc.aio.AioRpcError as exc:
             log.error("GetUser(username) gRPC error: %s", exc)
@@ -216,18 +215,18 @@ class HannahClient:
 
     async def get_devices(self) -> "hannah_pb2.GetDevicesResponse":
         """Returns all rooms and devices with current state for building control menus."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            return await self._stub.GetDevices(hannah_pb2.Empty())
+            return await stub.GetDevices(hannah_pb2.Empty())
         except grpc.aio.AioRpcError as exc:
             log.error("GetDevices gRPC error: %s", exc)
             return hannah_pb2.GetDevicesResponse()
 
     async def control_device(self, device_id: str, state: str, value: str) -> tuple[bool, str]:
         """Directly set a device state. Returns (ok, message)."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            resp = await self._stub.ControlDevice(
+            resp = await stub.ControlDevice(
                 hannah_pb2.ControlDeviceRequest(
                     device_id=device_id,
                     state=state,
@@ -245,9 +244,9 @@ class HannahClient:
 
     async def get_car_state(self) -> tuple[bool, "hannah_pb2.CarStateProto | None"]:
         """Returns (available, CarStateProto_or_None)."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            resp = await self._stub.GetCarState(hannah_pb2.Empty())
+            resp = await stub.GetCarState(hannah_pb2.Empty())
             return resp.available, resp.state if resp.available else None
         except grpc.aio.AioRpcError as exc:
             log.error("GetCarState gRPC error: %s", exc)
@@ -255,9 +254,9 @@ class HannahClient:
 
     async def get_all_car_states(self) -> list["hannah_pb2.CarStateProto"]:
         """Returns list of all available CarStateProtos."""
-        assert self._stub, "call connect() first"
+        stub = await self._get_stub()
         try:
-            resp = await self._stub.GetAllCarStates(hannah_pb2.Empty())
+            resp = await stub.GetAllCarStates(hannah_pb2.Empty())
             return list(resp.states)
         except grpc.aio.AioRpcError as exc:
             log.error("GetAllCarStates gRPC error: %s", exc)
@@ -283,24 +282,14 @@ class HannahClient:
         on_disconnected: async callback when stream is lost (before reconnect).
         event_types:     list of event type strings to filter; empty = all.
         """
-        import asyncio
-        assert self._stub, "call connect() first"
         first_connect = True
         while True:
             try:
                 log.info("Subscribing to Hannah events (filter=%s)", event_types or "all")
-                # grpc.aio's UnaryStreamClientInterceptor doesn't reliably apply metadata
-                # mutations for streaming calls (unlike unary-unary) — pass x-proto-version
-                # explicitly here instead of relying on ProtocolVersionClientInterceptor.
-                # Same reasoning applies to x-compat-version/CompatVersionClientInterceptor.
-                stream = self._stub.SubscribeEvents(
+                stub = await self._get_stub()
+                stream = stub.SubscribeEvents(
                     hannah_pb2.EventFilter(event_types=event_types),
-                    metadata=(
-                        (PROTO_VERSION_METADATA_KEY, read_proto_version()),
-                        client_compat_version_metadata(
-                            hannah_pb2.DESCRIPTOR.services_by_name["HannahService"], "SubscribeEvents"
-                        ),
-                    ),
+                    metadata=self._stream_metadata("SubscribeEvents"),
                 )
                 if on_connected:
                     try:
@@ -315,6 +304,7 @@ class HannahClient:
                         log.error("on_event callback error: %s", exc)
             except grpc.aio.AioRpcError as exc:
                 log.warning("Event stream disconnected: %s – reconnecting in 5s", exc)
+                self._stubs.reset()  # Core may come back as a different version
                 if on_disconnected:
                     try:
                         await on_disconnected()
@@ -335,18 +325,10 @@ class HannahClient:
         so Hannah knows Telegram is running and can hand out deep links.
         Reconnects automatically. Runs until the task is cancelled.
         """
-        assert self._stub, "call connect() first"
         while True:
             try:
-                # Explicit metadata, same reason as in subscribe_events().
-                call = self._stub.ChannelConnect(
-                    metadata=(
-                        (PROTO_VERSION_METADATA_KEY, read_proto_version()),
-                        client_compat_version_metadata(
-                            hannah_pb2.DESCRIPTOR.services_by_name["HannahService"], "ChannelConnect"
-                        ),
-                    ),
-                )
+                stub = await self._get_stub()
+                call = stub.ChannelConnect(metadata=self._stream_metadata("ChannelConnect"))
                 await call.write(hannah_pb2.ChannelMessage(register=register))
                 self._channel_call = call
                 async for cmd in call:
@@ -369,6 +351,7 @@ class HannahClient:
                     if not fut.done():
                         fut.set_result(None)
                 self._pending_redeems.clear()
+            self._stubs.reset()  # Core may come back as a different version
             await asyncio.sleep(5)
 
     async def redeem_link_token(

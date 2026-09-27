@@ -1,5 +1,5 @@
 """
-Core-Logs zusätzlich an den Log-Collector schicken (#341), über die Lib hannah-logging.
+Core-Logs zusätzlich an den Log-Collector schicken (#341), über die Lib hannah-grpc-lib.
 
 Die bestehende Ausgabe (stdout/journald, Syslog→Loki) bleibt unverändert. Die Lib puffert
 ab install() und schickt, sobald ein Collector bekannt ist. Core kennt die Adresse aus der
@@ -15,7 +15,7 @@ import logging
 import re
 from typing import Any, Iterator, Optional
 
-import hannah_logging
+import hannah_grpc.logging as hannah_logging
 
 from hannah.component_registry import (
     ComponentRegistry, EVENT_REGISTERED, EVENT_UNREGISTERED, KIND_LOG_COLLECTOR,

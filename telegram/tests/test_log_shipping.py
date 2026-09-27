@@ -43,7 +43,7 @@ def test_config_secrets_skips_empty_secret_values():
 def test_install_uses_hannah_discovery_and_masks_secrets():
     cfg = {"telegram_token": "bot-secret", "grpc": {"host": "hannah-core", "port": 50051}}
 
-    with patch("hannah_logging.install") as install:
+    with patch("hannah_grpc.logging.install") as install:
         log_shipping.install("dev", hannah_address="hannah-core:50051", cfg=cfg)
 
     install.assert_called_once()
