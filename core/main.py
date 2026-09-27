@@ -37,7 +37,7 @@ from hannah.ble_tags import BleTagManager
 from hannah.presence_sources import PresenceSourceManager
 from hannah.presence_manager import PresenceManager
 from hannah.grpc_server import GrpcServer, HannahServicer, make_car_parked_event, make_firmware_event, make_resident_event, make_system_notification_event, pb
-from hannah.iobroker import IoBrokerClient
+from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, IoBrokerClient
 from hannah.mqtt_handler import MQTTHandler
 from hannah.nlu import NLU, Intent, build_category_clarification_question, build_clarification_question, build_device_clarification_question, resolve_clarification_answer, resolve_yes_no
 from hannah.residents_manager import ResidentsClient
@@ -333,10 +333,25 @@ def main():
 
     # ------------------------------------------------------------------
     # Wecker-Attribuierung (#4): Sprecher (Voice-ID) → Satelliten-Owner → System-User "hannah".
-    # pipeline() (reiner UDP-Pfad, kein Proxy/VoiceID) hat nie einen speaker_user_id und
-    # landet damit praktisch immer bei Owner/System-User.
+    # Ohne erkannten Sprecher (VoiceID läuft auf UDP- und Proxy-Pfad) landet ein Wecker
+    # beim Owner/System-User.
 
     _hannah_system_user_id: Optional[int] = None
+
+    # Trust-Level pro State (#366): nur der sicher erkannte Sprecher/verknüpfte Account
+    # zählt — bewusst kein Satelliten-Owner-Fallback wie bei Wecker/Timer/Messages, sonst
+    # bekäme jeder am Satelliten der Owner-Person deren Trust-Level. Unbekannt = Gast.
+    def _requester_trust(speaker_user_id) -> int:
+        user = speaker_user_id and (
+            _user_manager.get_user_by_id(speaker_user_id)
+            or _user_manager.get_user_by_username(speaker_user_id)
+        )
+        return user.trust_level if user else GUEST_TRUST_LEVEL
+
+    def _denied_answer(denied: list[str], count: int) -> str:
+        if count == 0:
+            return TRUST_DENIED_TEXT
+        return f"{', '.join(denied)} darfst du leider nicht steuern."
 
     def _resolve_alarm_user_id(speaker_user_id, device: str) -> int:
         nonlocal _hannah_system_user_id
@@ -628,9 +643,15 @@ def main():
                     conv_ctx.update_from_intent(device, orig)
                     _feedback(device, True, answer)
                 else:
-                    count = iobroker.execute(orig, satellite_device=device)
+                    denied: list[str] = []
+                    count = iobroker.execute(
+                        orig, satellite_device=device,
+                        trust_level=_requester_trust(speaker_user_id), denied=denied,
+                    )
                     conv_ctx.update_from_intent(device, orig)
-                    if count == 0:
+                    if denied:
+                        _feedback(device, False, _denied_answer(denied, count))
+                    elif count == 0:
                         _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
                 intent = orig
                 _log_pipeline_activity()
@@ -867,10 +888,16 @@ def main():
             else:
                 log.warning(f"[{device}] Keine Antwort auf Query möglich.")
         else:
-            count = iobroker.execute(intent, satellite_device=device)
+            denied: list[str] = []
+            count = iobroker.execute(
+                intent, satellite_device=device,
+                trust_level=_requester_trust(speaker_user_id), denied=denied,
+            )
             conv_ctx.update_from_intent(device, intent)
             if intent.name == "Unknown":
                 _feedback(device, False, "Tut mir leid, ich habe dich nicht verstanden.")
+            elif denied:
+                _feedback(device, False, _denied_answer(denied, count))
             elif count == 0:
                 log.warning(f"[{device}] Keine States gesetzt — Intent nicht auflösbar.")
                 _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
@@ -912,6 +939,10 @@ def main():
         audio_array: Roh-Audio fürs Activity-Log (nur bei Voice-Kanälen vorhanden).
         """
         _source = source or speaker_user_id or "anon"
+        # #366: ioBroker-textCommand bleibt ungeprüft (None) — wer den State schreiben kann,
+        # kann das Gerät in ioBroker ohnehin direkt schalten. Alle anderen Kanäle: Sprecher/
+        # verknüpfter Account, sonst Gast.
+        trust_level = None if channel_type == "iobroker" else _requester_trust(speaker_user_id)
 
         def _logged(answer: str, intent_name: str, intent=None) -> tuple[str, str]:
             # activity_log.user_id ist INTEGER — speaker_user_id kommt vom VoiceID-Pfad
@@ -1019,8 +1050,11 @@ def main():
                     answer = iobroker.answer_query(orig) or "Keine Antwort verfügbar."
                     conv_ctx.update_from_intent(_source, orig)
                     return _logged(answer, "Query", orig)
-                count = iobroker.execute(orig)
+                denied: list[str] = []
+                count = iobroker.execute(orig, trust_level=trust_level, denied=denied)
                 conv_ctx.update_from_intent(_source, orig)
+                if denied:
+                    return _logged(_denied_answer(denied, count), "Routine", orig)
                 return _logged(("OK." if count > 0 else "Keine Geräte gefunden."), "Routine", orig)
             conv_ctx.clear_clarification(_source)
 
@@ -1242,7 +1276,9 @@ def main():
         elif intent.name == "Smalltalk":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
-            answer = tool_agent.run(text, system_prompt=sp, history=history, user_id=speaker_user_id)
+            answer = tool_agent.run(
+                text, system_prompt=sp, history=history, user_id=speaker_user_id, trust_level=trust_level,
+            )
             if answer:
                 conv_ctx.add_llm_exchange(_source, text, answer)
                 conv_ctx.set_smalltalk_active(_source, True)
@@ -1254,16 +1290,22 @@ def main():
         elif intent.name == "Unknown":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
-            answer = tool_agent.run(text, system_prompt=sp, history=history, user_id=speaker_user_id)
+            answer = tool_agent.run(
+                text, system_prompt=sp, history=history, user_id=speaker_user_id, trust_level=trust_level,
+            )
             if answer:
                 conv_ctx.add_llm_exchange(_source, text, answer)
             else:
                 answer = "Das habe ich leider nicht verstanden."
         else:
-            count = iobroker.execute(intent)
+            denied: list[str] = []
+            count = iobroker.execute(intent, trust_level=trust_level, denied=denied)
             if count > 0:
                 conv_ctx.set_smalltalk_active(_source, False)
-            answer = "Keine Geräte gefunden." if count == 0 else "OK."
+            if denied:
+                answer = _denied_answer(denied, count)
+            else:
+                answer = "Keine Geräte gefunden." if count == 0 else "OK."
             conv_ctx.update_from_intent(_source, intent)
 
         return _logged(answer, intent.name, intent)
@@ -2241,7 +2283,9 @@ def main():
         on_proxy_discovery=_on_proxy_discovery,
         on_satellite_change=_on_satellite_change,
         get_devices=lambda: iobroker.get_devices_snapshot(),
-        control_device=lambda device_id, state, value: iobroker.control_direct(device_id, state, value),
+        control_device=lambda device_id, state, value, trust_level: iobroker.control_direct(
+            device_id, state, value, trust_level=trust_level
+        ),
         on_agent_state=_on_agent_state,
         on_agent_resident=_on_agent_resident,
         on_agent_text_command=_on_agent_text_command,

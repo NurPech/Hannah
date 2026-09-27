@@ -1,5 +1,5 @@
 import pytest
-from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient, Device
+from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient, Device, GUEST_TRUST_LEVEL, TrustLevelDenied
 from hannah.nlu import Intent
 from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
 
@@ -649,7 +649,7 @@ class TestExecuteCrossRoomDevice:
         client._devices_by_id[dev.id] = dev
 
         intent = Intent(name="TurnOn", device="Computer", device_id=dev.id)
-        assert client.execute(intent) == 1
+        assert client.execute(intent, trust_level=None) == 1
 
     def test_device_key_fallback_after_room_clarification(self, client):
         """Nach einer Raum-Rückfrage bei Mehrdeutigkeit ist device_id noch nicht
@@ -666,12 +666,12 @@ class TestExecuteCrossRoomDevice:
             name="TurnOn", device_key="nachtlicht",
             room="Schlafzimmer 2", room_id="schlafzimmer_2",
         )
-        assert client.execute(intent) == 1
+        assert client.execute(intent, trust_level=None) == 1
         assert intent.device_id == dev2.id
 
     def test_no_room_and_no_device_id_still_fails(self, client):
         intent = Intent(name="TurnOn")
-        assert client.execute(intent) == 0
+        assert client.execute(intent, trust_level=None) == 0
 
 
 class TestBlindInversionExecute:
@@ -701,7 +701,7 @@ class TestBlindInversionExecute:
         client._devices_by_id[dev.id] = dev
 
         intent = Intent(name="SetLevel", device_id=dev.id, value=100, is_open_close=True)
-        assert client.execute(intent) == 1
+        assert client.execute(intent, trust_level=None) == 1
         assert client._sent == [(dev.states["level"], "0")]
 
     def test_close_word_on_inverted_device_sends_raw_hundred(self, client):
@@ -710,7 +710,7 @@ class TestBlindInversionExecute:
         client._devices_by_id[dev.id] = dev
 
         intent = Intent(name="SetLevel", device_id=dev.id, value=0, is_open_close=True)
-        assert client.execute(intent) == 1
+        assert client.execute(intent, trust_level=None) == 1
         assert client._sent == [(dev.states["level"], "100")]
 
     def test_open_word_on_non_inverted_device_is_unaffected(self, client):
@@ -719,7 +719,7 @@ class TestBlindInversionExecute:
         client._devices_by_id[dev.id] = dev
 
         intent = Intent(name="SetLevel", device_id=dev.id, value=100, is_open_close=True)
-        assert client.execute(intent) == 1
+        assert client.execute(intent, trust_level=None) == 1
         assert client._sent == [(dev.states["level"], "100")]
 
     def test_explicit_percent_on_inverted_device_is_not_converted(self, client):
@@ -730,7 +730,7 @@ class TestBlindInversionExecute:
         client._devices_by_id[dev.id] = dev
 
         intent = Intent(name="SetLevel", device_id=dev.id, value=70, is_open_close=False)
-        assert client.execute(intent) == 1
+        assert client.execute(intent, trust_level=None) == 1
         assert client._sent == [(dev.states["level"], "70")]
 
     def test_category_bulk_command_converts_only_inverted_targets(self, client):
@@ -744,7 +744,7 @@ class TestBlindInversionExecute:
 
         intent = Intent(name="SetLevel", room="Küche", room_id="kueche",
                          category_filter="blind", value=0, is_open_close=True)
-        assert client.execute(intent) == 2
+        assert client.execute(intent, trust_level=None) == 2
         assert (inv.states["level"], "100") in client._sent
         assert (normal.states["level"], "0") in client._sent
 
@@ -775,3 +775,77 @@ class TestBlindInversionDescribe:
         dev = self._device(inverted=False, level=30.0)
         result = client._describe_category("blind", [dev], "Küche")
         assert "30" in result
+
+
+class TestTrustLevelPerState:
+    """#366: Mindest-Trust-Level pro State aus AgentDevice.required_trust_level —
+    nur Setzen wird geprüft, unbekannte User zählen als Gast (0)."""
+
+    LOCK = "javascript.0.virtualDevice.Schloss.EG.Flur.Haustuer.on"
+    LIGHT = "javascript.0.virtualDevice.Licht.EG.Flur.Decke.on"
+
+    def _agent_device(self, state_id: str, name: str, required: int | None = None) -> AgentDevice:
+        dev = AgentDevice(
+            state_id=state_id, room="flur", device=name, device_type="socket",
+            device_id=state_id.rsplit(".", 1)[0], canonical_key="on",
+            value=AgentStateValue(value="false", ack=True), writable=True,
+        )
+        if required is not None:
+            dev.required_trust_level = required
+        return dev
+
+    @pytest.fixture
+    def client(self):
+        c = IoBrokerClient({"host": "localhost", "port": 8093})
+        c._sent = []
+        c.set_setter(lambda state_id, payload: (c._sent.append(state_id), True)[1])
+        c.handle_device_snapshot([
+            self._agent_device(self.LOCK, "Haustuer", required=8),
+            self._agent_device(self.LIGHT, "Decke"),
+        ])
+        return c
+
+    def test_snapshot_keeps_required_level_and_unset_stays_unrestricted(self, client):
+        assert client._devices_by_id[self.LOCK.rsplit(".", 1)[0]].required_trust == {"on": 8}
+        assert client._devices_by_id[self.LIGHT.rsplit(".", 1)[0]].required_trust == {}
+
+    def test_explicit_zero_is_kept(self):
+        c = IoBrokerClient({"host": "localhost", "port": 8093})
+        c.handle_device_snapshot([self._agent_device(self.LOCK, "Haustuer", required=0)])
+        assert c._devices_by_id[self.LOCK.rsplit(".", 1)[0]].required_trust == {"on": 0}
+
+    def test_may_set(self, client):
+        assert client.may_set(self.LOCK, 8) is True
+        assert client.may_set(self.LOCK, 7) is False
+        assert client.may_set(self.LOCK, GUEST_TRUST_LEVEL) is False
+        assert client.may_set(self.LIGHT, GUEST_TRUST_LEVEL) is True
+        # None = bewusst ungeprüfter Aufrufer (ioBroker-textCommand)
+        assert client.may_set(self.LOCK, None) is True
+
+    def test_execute_denies_protected_device_for_guest(self, client):
+        denied: list[str] = []
+        intent = Intent(name="TurnOn", device_id=self.LOCK.rsplit(".", 1)[0])
+        assert client.execute(intent, trust_level=GUEST_TRUST_LEVEL, denied=denied) == 0
+        assert client._sent == []
+        assert denied == ["Haustuer im flur"]
+
+    def test_execute_allows_protected_device_with_sufficient_trust(self, client):
+        intent = Intent(name="TurnOn", device_id=self.LOCK.rsplit(".", 1)[0])
+        assert client.execute(intent, trust_level=8) == 1
+        assert client._sent == [self.LOCK]
+
+    def test_bulk_command_skips_only_protected_devices(self, client):
+        denied: list[str] = []
+        intent = Intent(name="TurnOn", room="Flur", room_id="flur")
+        assert client.execute(intent, trust_level=GUEST_TRUST_LEVEL, denied=denied) == 1
+        assert client._sent == [self.LIGHT]
+        assert denied == ["Haustuer im flur"]
+
+    def test_control_direct_raises_for_insufficient_trust(self, client):
+        with pytest.raises(TrustLevelDenied):
+            client.control_direct(self.LOCK.rsplit(".", 1)[0], "on", "true", trust_level=GUEST_TRUST_LEVEL)
+        assert client._sent == []
+
+    def test_control_direct_allows_sufficient_trust(self, client):
+        assert client.control_direct(self.LOCK.rsplit(".", 1)[0], "on", "true", trust_level=10) is True
+        assert client._sent == [self.LOCK]

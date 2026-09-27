@@ -1775,3 +1775,102 @@ class TestStartVoiceEnrollment:
         )
 
         assert response.ok is False
+
+# ------------------------------------------------------------------
+# ControlDevice: Trust-Level pro State (#366)
+
+class TestControlDeviceTrustLevel:
+    from hannah.iobroker import TrustLevelDenied as _Denied
+
+    def _servicer(self, user=None, deny=False):
+        user_manager = MagicMock(get_user_by_linked_account=MagicMock(return_value=user))
+        servicer = _make_server(user_manager=user_manager)
+        control = MagicMock(side_effect=self._Denied("x") if deny else None, return_value=True)
+        servicer._control_device = control
+        return servicer, control, user_manager
+
+    def test_linked_user_trust_level_is_passed(self):
+        servicer, control, user_manager = self._servicer(user=SimpleNamespace(id=1, trust_level=8))
+
+        response = servicer.ControlDevice(
+            pb.ControlDeviceRequest(device_id="d", state="on", value="true",
+                                    source_service="telegram", source_user_id="42"),
+            MagicMock(),
+        )
+
+        user_manager.get_user_by_linked_account.assert_called_once_with("telegram", "42")
+        control.assert_called_once_with("d", "on", "true", 8)
+        assert response.ok is True
+
+    def test_request_without_source_counts_as_guest(self):
+        servicer, control, user_manager = self._servicer()
+
+        servicer.ControlDevice(pb.ControlDeviceRequest(device_id="d", state="on", value="true"), MagicMock())
+
+        user_manager.get_user_by_linked_account.assert_not_called()
+        control.assert_called_once_with("d", "on", "true", 0)
+
+    def test_unlinked_account_counts_as_guest(self):
+        servicer, control, _ = self._servicer(user=None)
+
+        servicer.ControlDevice(
+            pb.ControlDeviceRequest(device_id="d", state="on", value="true",
+                                    source_service="telegram", source_user_id="99"),
+            MagicMock(),
+        )
+
+        control.assert_called_once_with("d", "on", "true", 0)
+
+    def test_denied_returns_rejection_message(self):
+        servicer, _, _ = self._servicer(deny=True)
+
+        response = servicer.ControlDevice(pb.ControlDeviceRequest(device_id="d", state="on", value="true"), MagicMock())
+
+        assert response.ok is False
+        assert response.message == "Das darfst du leider nicht steuern."
+
+
+# ------------------------------------------------------------------
+# AgentConnect: AgentAck mit unbekannten Feldern (#367)
+
+class TestAgentConnectAck:
+    UNKNOWN_20 = bytes([0xA0, 0x01, 0x07])
+
+    def _run(self, *messages):
+        servicer = _make_server()
+        servicer._on_agent_device_snapshot = MagicMock()
+        context = MagicMock(is_active=MagicMock(return_value=True))
+        return list(servicer.AgentConnect(iter(messages), context)), servicer
+
+    def test_ack_reports_exactly_the_unknown_field(self):
+        msg = pb.AgentMessage(ack_id=7)
+        msg.send_snapshot.devices.add().MergeFromString(
+            pb.AgentDevice(state_id="a", required_trust_level=8).SerializeToString() + self.UNKNOWN_20
+        )
+
+        commands, servicer = self._run(msg)
+
+        servicer._on_agent_device_snapshot.assert_called_once()
+        assert len(commands) == 1
+        ack = commands[0].ack
+        assert ack.ack_id == 7
+        assert [(u.message_type, list(u.field_numbers)) for u in ack.unknown_fields] == [
+            ("hannah.v1.AgentDevice", [20])
+        ]
+
+    def test_known_fields_only_give_empty_ack(self):
+        msg = pb.AgentMessage(ack_id=1)
+        msg.send_snapshot.devices.add(state_id="a", required_trust_level=8)
+
+        commands, _ = self._run(msg)
+
+        assert [c.ack.ack_id for c in commands] == [1]
+        assert list(commands[0].ack.unknown_fields) == []
+
+    def test_no_ack_without_ack_id(self):
+        msg = pb.AgentMessage()
+        msg.send_snapshot.devices.add(state_id="a")
+
+        commands, _ = self._run(msg)
+
+        assert commands == []

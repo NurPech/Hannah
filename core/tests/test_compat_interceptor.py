@@ -54,6 +54,11 @@ def test_build_required_versions_covers_every_method_with_full_method_path(servi
         f"{prefix}TriggerCollectorCapture": 2,
         f"{prefix}CollectorConnect": 2,
     }
+    # ControlDeviceRequest is at 2 since hannah-proto 4.7.1 (source_service/source_user_id
+    # for the per-state trust level, hannah-proto#17, #366) — hannah.v1 only, the frozen
+    # N−1 schema is unchanged.
+    if service is V1_HANNAH_SERVICE:
+        elevated[f"{prefix}ControlDevice"] = 2
     for method, expected in elevated.items():
         assert versions[method] == expected
     other_methods = {k: v for k, v in versions.items() if k not in elevated}

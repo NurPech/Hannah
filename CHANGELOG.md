@@ -4,6 +4,18 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.91.0 (2026-09-27)
+### Hannah Core
+
+* Added: minimum trust level per state. A state can require a minimum user trust level (set per state in the ioBroker adapter); Hannah only switches it for users with at least that level — by voice, text, the LLM assistant and the device menus in Telegram and hannah-chat. Asking for a state is never restricted. Unrecognised voices and unlinked accounts count as guests (trust level 0); commands through the adapter's `textCommand` state are not restricted. For room or category commands, only the protected devices are skipped and named in the answer. States without a minimum trust level behave as before
+* Added: Hannah Core tells the ioBroker adapter which settings it doesn't understand yet. The adapter uses this to warn you when a setting — such as a minimum trust level — has no effect because Hannah Core is too old; Hannah Core also logs a warning then
+* Changed: requires `hannah-proto` 4.7.1
+
+### Telegram
+
+* Changed: the device menu now tells Hannah who is switching, so devices with a minimum trust level can be switched from Telegram by linked users with a high enough trust level. Without it, Hannah treats menu commands as coming from a guest
+* Changed: requires `hannah-proto` 4.7.1
+
 ## 0.90.0 (2026-09-27)
 ### Hannah Core
 

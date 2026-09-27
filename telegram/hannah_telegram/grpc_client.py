@@ -222,8 +222,12 @@ class HannahClient:
             log.error("GetDevices gRPC error: %s", exc)
             return hannah_pb2.GetDevicesResponse()
 
-    async def control_device(self, device_id: str, state: str, value: str) -> tuple[bool, str]:
-        """Directly set a device state. Returns (ok, message)."""
+    async def control_device(self, device_id: str, state: str, value: str, chat_id: str) -> tuple[bool, str]:
+        """Directly set a device state. Returns (ok, message).
+
+        chat_id identifies the requesting user, same as submit_text: Hannah looks the user
+        up via linked accounts to check the state's minimum trust level (#368).
+        """
         stub = await self._get_stub()
         try:
             resp = await stub.ControlDevice(
@@ -231,6 +235,8 @@ class HannahClient:
                     device_id=device_id,
                     state=state,
                     value=value,
+                    source_service="telegram",
+                    source_user_id=str(chat_id),
                 )
             )
             return resp.ok, resp.message

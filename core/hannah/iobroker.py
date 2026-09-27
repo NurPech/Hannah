@@ -27,6 +27,14 @@ DEFAULT_IOBROKER_STATE_NAMES: dict = {
     "power": "power",
 }
 
+# Trust-Level pro State (#366): unbekannte Sprecher/unverknüpfte Accounts zählen als Gast.
+GUEST_TRUST_LEVEL = 0
+TRUST_DENIED_TEXT = "Das darfst du leider nicht steuern."
+
+
+class TrustLevelDenied(Exception):
+    """Der anfragende User hat für diesen State ein zu niedriges Trust-Level (#366)."""
+
 _UMLAUT_MAP = {"ae": "ä", "oe": "ö", "ue": "ü", "Ae": "Ä", "Oe": "Ö", "Ue": "Ü"}
 
 _CATEGORY_LABELS: dict[str, str] = {
@@ -98,6 +106,7 @@ class Device:
     enum_values: dict = field(default_factory=dict)    # canon-key → {rohwert: label}, nur bei ENUM/COLOR
     state_writable: dict = field(default_factory=dict) # canon-key → bool, aus ioBroker common.write
     inverted: bool = False  # category 'blind': Aktor nutzt 0%=auf/100%=zu statt Hannahs Konvention (#270)
+    required_trust: dict = field(default_factory=dict) # canon-key → Mindest-Trust-Level zum Setzen (#366), fehlt = keine Einschränkung
 
 
 class IoBrokerClient:
@@ -121,6 +130,8 @@ class IoBrokerClient:
         self._devices_by_id: dict[str, Device] = {}
         # {state_id: value} — raw states without a room (weather, car, etc.)
         self._state_cache: dict[str, object] = {}
+        # {state_id: Mindest-Trust-Level} — für Schreibpfade, die nur die state_id kennen (Tool-Agent, #366)
+        self._required_trust_by_state: dict[str, int] = {}
 
         # Set by main.py: fn(state_id, json_value) → sends SetState via gRPC adapter
         self._setter: Optional[Callable[[str, str], bool]] = None
@@ -224,6 +235,9 @@ class IoBrokerClient:
                 dev.state_writable[canon] = device.writable
                 if device.enum_values.values:
                     dev.enum_values[canon] = dict(device.enum_values.values)
+                # optional im Proto: nicht gesetzt = keine Einschränkung, bewusst verschieden von 0 (#366)
+                if device.HasField("required_trust_level"):
+                    dev.required_trust[canon] = device.required_trust_level
 
                 log.debug(f"Neues Gerät: {device_id} → {new_device_map[device_id]}")
             except Exception as e:
@@ -238,6 +252,12 @@ class IoBrokerClient:
         self.devices = {}
         self._devices_by_id = {}
         self._state_cache = state_cache or {}
+        self._required_trust_by_state = {
+            device.states[canon]: level
+            for device in device_map.values()
+            for canon, level in device.required_trust.items()
+            if canon in device.states
+        }
 
         total_states = 0
         filled_states = 0
@@ -270,11 +290,34 @@ class IoBrokerClient:
     # ------------------------------------------------------------------
     # Intent ausführen
 
-    def execute(self, intent: "Intent", satellite_device: str = "") -> int:
+    def may_set(self, state_id: str, trust_level: Optional[int]) -> bool:
+        """
+        Zentrale Trust-Level-Prüfung (#366) für alle Schreibpfade mit User-Kontext.
+        trust_level None = Aufrufer ohne User, der bewusst ungeprüft bleibt (ioBroker-
+        textCommand); unbekannte User übergeben GUEST_TRUST_LEVEL, nicht None.
+        Nur Setzen wird geprüft, Lesen nie.
+        """
+        if trust_level is None:
+            return True
+        required = self._required_trust_by_state.get(state_id)
+        return required is None or trust_level >= required
+
+    def execute(
+        self,
+        intent: "Intent",
+        satellite_device: str = "",
+        *,
+        trust_level: Optional[int],
+        denied: Optional[list[str]] = None,
+    ) -> int:
         """
         Löst einen Intent auf und setzt die entsprechenden States per MQTT.
         Gibt die Anzahl erfolgreich gesetzter States zurück.
         satellite_device: Name des Satelliten für TTS-Feedback (leer = kein Feedback)
+        trust_level: Trust-Level des anfragenden Users (#366), siehe may_set(). Pflicht,
+          damit kein Aufrufer die Prüfung versehentlich auslässt.
+        denied: wird um die Labels der Geräte ergänzt, die wegen zu niedrigem Trust-Level
+          übersprungen wurden — bei Sammelbefehlen werden nur diese ausgelassen.
         """
         if intent.name == "Unknown":
             log.debug("execute: Intent 'Unknown', nichts zu tun.")
@@ -337,6 +380,11 @@ class IoBrokerClient:
             # "schließen"-Grenzwerte werden pro Gerät umgerechnet, nie ein explizit
             # genannter Prozentwert (Design-Entscheidung 1) — sonst würde eine ioBroker-
             # Visualisierung einen anderen Wert zeigen als der User genannt hat.
+            if not self.may_set(state_id, trust_level):
+                log.info(f"  {dev.name}: Trust-Level {trust_level} < {self._required_trust_by_state[state_id]}, übersprungen.")
+                if denied is not None:
+                    denied.append(f"{dev.name} im {dev.room_display_name}")
+                continue
             dev_value = value
             if state_key == "level" and intent.is_open_close and dev.inverted:
                 dev_value = 100 - dev_value
@@ -757,12 +805,14 @@ class IoBrokerClient:
                             f"{pending['label']} antwortet nicht — möglicherweise offline.",
                         )
 
-    def control_direct(self, device_id: str, state_key: str, raw_value: str) -> bool:
+    def control_direct(self, device_id: str, state_key: str, raw_value: str, *, trust_level: Optional[int]) -> bool:
         """
         Setzt einen Device-State direkt ohne NLU-Umweg (für gRPC-Menü-Steuerung).
         device_id  : Device.id, z.B. "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.DeckeSeite"
         state_key  : kanonischer Key, z.B. "on", "level", "color"
         raw_value  : String-serialisierter Wert, z.B. "true", "50", "#FF0000"
+        trust_level: Trust-Level des anfragenden Users (#366), siehe may_set()
+        Wirft TrustLevelDenied, wenn das Trust-Level nicht reicht.
         """
         device = self._devices_by_id.get(device_id)
         if not device:
@@ -772,6 +822,9 @@ class IoBrokerClient:
         if not state_id:
             log.warning(f"control_direct: State {state_key!r} für {device.name!r} nicht vorhanden")
             return False
+        if not self.may_set(state_id, trust_level):
+            log.info(f"control_direct: Trust-Level {trust_level} reicht nicht für {state_id}")
+            raise TrustLevelDenied(state_id)
         value = self._parse_payload(raw_value)
         if self.set_state(state_id, value):
             # Update cache immediately — the gRPC roundtrip is async, so GetDevices

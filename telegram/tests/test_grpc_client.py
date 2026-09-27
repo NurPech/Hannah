@@ -126,3 +126,25 @@ async def test_redeem_link_token_times_out():
     client._channel_call = SimpleNamespace(write=write)
     assert await client.redeem_link_token("tok", "123", timeout=0.01) is None
     assert client._pending_redeems == {}
+
+
+# ---------------------------------------------------------------------------
+# ControlDevice: requesting user for the per-state trust level (#368)
+# ---------------------------------------------------------------------------
+
+from unittest.mock import AsyncMock
+
+
+async def test_control_device_sends_requesting_chat():
+    client = HannahClient("localhost", 50051)
+    client._stubs = _FakeStubs()
+    client._stubs.stub.ControlDevice = AsyncMock(
+        return_value=hannah_pb2.StatusResponse(ok=False, message="Das darfst du leider nicht steuern.")
+    )
+
+    ok, msg = await client.control_device("dev", "on", "true", 4711)
+
+    request = client._stubs.stub.ControlDevice.call_args.args[0]
+    assert (request.device_id, request.state, request.value) == ("dev", "on", "true")
+    assert (request.source_service, request.source_user_id) == ("telegram", "4711")
+    assert (ok, msg) == (False, "Das darfst du leider nicht steuern.")

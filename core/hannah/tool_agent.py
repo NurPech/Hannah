@@ -11,6 +11,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT
+
 if TYPE_CHECKING:
     from .llm import LLMClient
     from .iobroker import IoBrokerClient
@@ -218,10 +220,14 @@ class ToolAgent:
         system_prompt: str = "",
         history: list[dict] | None = None,
         user_id: str = "",
+        trust_level: int | None = GUEST_TRUST_LEVEL,
     ) -> str:
         """
         Startet den Tool-Loop für `text`.
         Gibt den endgültigen Antworttext zurück (wird vom Aufrufer per TTS gesprochen).
+        trust_level: Trust-Level des anfragenden Users für set_device_state (#366), siehe
+          IoBrokerClient.may_set(). Default Gast, damit ein Aufrufer ohne Angabe nicht
+          versehentlich alles darf.
         """
         spoken: list[str] = []
         called: set[tuple[str, str]] = set()
@@ -279,7 +285,7 @@ class ToolAgent:
                     log.warning("[tool_agent] Duplikat-Aufruf blockiert: %s(%s)", func_name, args)
                 else:
                     called.add(call_key)
-                    result = self._dispatch(func_name, args, spoken, user_id)
+                    result = self._dispatch(func_name, args, spoken, user_id, trust_level)
                 result_chars = len(result) if isinstance(result, str) else len(json.dumps(result, ensure_ascii=False))
                 log.info("[tool_agent] %s(%s) → %d chars", func_name, args, result_chars)
                 log.debug("[tool_agent] %s result: %s", func_name, result)
@@ -303,7 +309,10 @@ class ToolAgent:
     # ------------------------------------------------------------------
     # Tool-Dispatch
 
-    def _dispatch(self, name: str, args: dict, spoken: list[str], user_id: str = "") -> object:
+    def _dispatch(
+        self, name: str, args: dict, spoken: list[str], user_id: str = "",
+        trust_level: int | None = GUEST_TRUST_LEVEL,
+    ) -> object:
         if name == "get_all_devices":
             return self._get_all_devices()
         if name == "get_active_devices":
@@ -315,7 +324,7 @@ class ToolAgent:
         if name == "get_device_state":
             return self._get_device_state(args.get("device_id", ""))
         if name == "set_device_state":
-            return self._set_device_state(args.get("state_id", ""), args.get("value"))
+            return self._set_device_state(args.get("state_id", ""), args.get("value"), trust_level, spoken)
         if name == "set_automation":
             return self._set_automation(args.get("automation", ""), bool(args.get("enabled", True)), user_id)
         if name == "speak":
@@ -388,7 +397,16 @@ class ToolAgent:
         state_str = ", ".join(f"{k}={v}" for k, v in current.items()) or "keine Zustandswerte"
         return f"Gerät: {dev.name} ({dev.room}, {dev.category})\nZustand: {state_str}"
 
-    def _set_device_state(self, state_id: str, value: object) -> dict:
+    def _set_device_state(
+        self, state_id: str, value: object, trust_level: int | None, spoken: list[str],
+    ) -> dict:
+        if not self._iobroker.may_set(state_id, trust_level):
+            # #366: Absage direkt in die gesprochene Antwort — das LLM kann sie so weder
+            # übergehen noch einen Erfolg erfinden; run() endet nach diesem Batch.
+            log.info("[tool_agent] set_device_state(%s) abgelehnt: Trust-Level %s reicht nicht", state_id, trust_level)
+            if TRUST_DENIED_TEXT not in spoken:
+                spoken.append(TRUST_DENIED_TEXT)
+            return {"ok": False, "error": "Keine Berechtigung: der Nutzer darf dieses Gerät nicht steuern."}
         ok = self._iobroker.set_state(state_id, value)
         return {"ok": ok}
 

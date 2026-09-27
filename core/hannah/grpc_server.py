@@ -17,6 +17,8 @@ from typing import Callable, Iterable, Optional
 import grpc
 from werkzeug.security import generate_password_hash
 
+from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied
+from hannah.unknown_fields import collect_unknown_fields
 from hannah.satellite_manager import SatelliteManager, SatellitePermissionError
 from hannah.user_manager import UserManager
 from hannah_proto.v1 import hannah_pb2 as pb
@@ -141,6 +143,23 @@ _INFRASTRUCTURE_KINDS = {
 }
 
 
+def _agent_ack(msg) -> "pb.AgentAck":
+    """AgentAck für eine AgentMessage mit ack_id (#367): welche Felder Core nicht kennt."""
+    unknown = collect_unknown_fields(msg)
+    if unknown:
+        details = ", ".join(f"{t} {sorted(n)}" for t, n in sorted(unknown.items()))
+        log.warning(
+            f"[grpc] Adapter schickt Felder, die dieser Hannah Core nicht kennt ({details})"
+            " — Hannah Core aktualisieren"
+        )
+    return pb.AgentAck(
+        ack_id=msg.ack_id,
+        unknown_fields=[
+            pb.UnknownFields(message_type=t, field_numbers=sorted(n)) for t, n in sorted(unknown.items())
+        ],
+    )
+
+
 def _peer_host(peer: str) -> str:
     """Host part of a gRPC peer string ("ipv4:1.2.3.4:5678", "ipv6:[::1]:5678"), else ""."""
     scheme, _, address = peer.partition(":")
@@ -188,7 +207,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         enable_udp: Optional[Callable[[], None]] = None,
         on_proxy_discovery: Optional[Callable[[str, int], None]] = None,  # (host, port) — None args = restore own address
         get_devices: Optional[Callable[[], list]] = None,           # → [{key,name,devices:[...]}]
-        control_device: Optional[Callable[[str, str, str], bool]] = None,  # (device_id, state, value) → bool
+        control_device: Optional[Callable[[str, str, str, int], bool]] = None,  # (device_id, state, value, trust_level) → bool, wirft TrustLevelDenied
         enroll_voiceprint: Optional[Callable[[str, bytes, int], tuple]] = None,  # (user_id, pcm, rate) → (ok, msg)
         start_voice_enrollment: Optional[Callable[[int, int, str], tuple]] = None,  # (requestor_id, user_id, satellite_id) → (ok, msg)
         on_satellite_change: Optional[Callable[[dict], None]] = None,           # ({device: room}) bei Register/Disconnect via Proxy
@@ -1074,11 +1093,21 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         return pb.GetDevicesResponse(rooms=rooms_pb)
 
     def ControlDevice(self, request, _context):
+        # #366: anfragender User wie bei SubmitText über linked_accounts; ohne source_*
+        # (alter Client) oder unverknüpft = Gast.
+        user = None
+        if request.source_service and request.source_user_id:
+            user = self._user_manager.get_user_by_linked_account(request.source_service, request.source_user_id)
+        trust_level = user.trust_level if user else GUEST_TRUST_LEVEL
         log.info(
-            f"[grpc] ControlDevice: device={request.device_id!r}"
-            f" state={request.state!r} value={request.value!r}"
+            f"[grpc] ControlDevice von {request.source_service}:{request.source_user_id}"
+            f" (user={user.id if user else 'anonym'}, trust={trust_level}):"
+            f" device={request.device_id!r} state={request.state!r} value={request.value!r}"
         )
-        ok = self._control_device(request.device_id, request.state, request.value)
+        try:
+            ok = self._control_device(request.device_id, request.state, request.value, trust_level)
+        except TrustLevelDenied:
+            return pb.StatusResponse(ok=False, message=TRUST_DENIED_TEXT)
         msg = "OK" if ok else "Gerät oder State nicht gefunden"
         return pb.StatusResponse(ok=ok, message=msg)
 
@@ -1663,7 +1692,11 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                         ).start()
                     else:
                         log.warning(f"[grpc] Unrecognized AgentMessage payload: {which}")
-                            
+
+                    # #367: erst nach der Verarbeitung acken — was nicht als unbekannt
+                    # gemeldet wird, ist damit auch ausgewertet (hannah-proto#16).
+                    if msg.HasField("ack_id"):
+                        q.put(pb.AgentCommand(ack=_agent_ack(msg)))
 
             except Exception as e:
                 log.debug(f"[grpc] Adapter drain ended: {e}")

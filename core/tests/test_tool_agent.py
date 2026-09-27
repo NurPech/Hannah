@@ -214,7 +214,7 @@ class TestToolDispatch:
         self.iobroker.set_state.return_value = True
 
         result = self.agent._set_device_state(
-            "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on", True
+            "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on", True, None, []
         )
 
         self.iobroker.set_state.assert_called_once_with(
@@ -225,7 +225,7 @@ class TestToolDispatch:
     def test_set_device_state_returns_setter_result(self):
         self.iobroker.set_state.return_value = False
 
-        result = self.agent._set_device_state("some.state", 42)
+        result = self.agent._set_device_state("some.state", 42, None, [])
 
         assert result == {"ok": False}
 
@@ -356,3 +356,61 @@ class TestDefaultChatWithTools:
 
         assert result["content"] == "antwort"
         assert result["tool_calls"] == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Trust-Level pro State (#366)
+
+
+class TestToolAgentTrustLevel:
+    STATE = "javascript.0.virtualDevice.Schloss.EG.Flur.Haustuer.on"
+
+    def _agent(self, allowed: bool) -> tuple[ToolAgent, MagicMock]:
+        iobroker = _make_iobroker()
+        iobroker.may_set.return_value = allowed
+        iobroker.set_state.return_value = True
+        return ToolAgent(MagicMock(), iobroker), iobroker
+
+    def test_denied_set_is_not_executed_and_spoken_directly(self):
+        agent, iobroker = self._agent(allowed=False)
+        spoken: list[str] = []
+
+        result = agent._dispatch("set_device_state", {"state_id": self.STATE, "value": True}, spoken, "", 0)
+
+        iobroker.may_set.assert_called_once_with(self.STATE, 0)
+        iobroker.set_state.assert_not_called()
+        assert result["ok"] is False
+        assert spoken == ["Das darfst du leider nicht steuern."]
+
+    def test_allowed_set_is_executed(self):
+        agent, iobroker = self._agent(allowed=True)
+        spoken: list[str] = []
+
+        result = agent._dispatch("set_device_state", {"state_id": self.STATE, "value": True}, spoken, "", 8)
+
+        iobroker.set_state.assert_called_once_with(self.STATE, True)
+        assert result == {"ok": True}
+        assert spoken == []
+
+    def test_run_ends_with_denial_even_if_llm_never_speaks(self):
+        llm = MagicMock()
+        llm.chat_with_tools.return_value = _llm_response(
+            tool_calls=[_tool_call("set_device_state", {"state_id": self.STATE, "value": True})]
+        )
+        iobroker = _make_iobroker()
+        iobroker.may_set.return_value = False
+        agent = ToolAgent(llm, iobroker)
+
+        assert agent.run("schließ die Haustür auf", trust_level=0) == "Das darfst du leider nicht steuern."
+        iobroker.set_state.assert_not_called()
+
+    def test_default_trust_level_is_guest(self):
+        llm = MagicMock()
+        llm.chat_with_tools.return_value = _llm_response(
+            tool_calls=[_tool_call("set_device_state", {"state_id": self.STATE, "value": True})]
+        )
+        iobroker = _make_iobroker()
+        iobroker.may_set.return_value = False
+        ToolAgent(llm, iobroker).run("schließ die Haustür auf")
+
+        iobroker.may_set.assert_called_once_with(self.STATE, 0)

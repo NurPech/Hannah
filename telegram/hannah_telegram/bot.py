@@ -797,7 +797,7 @@ class HannahBot:
                 return
             dev = room.devices[dev_idx]
 
-            ok_ctrl, msg = await self._hannah.control_device(dev.id, state, value)
+            ok_ctrl, msg = await self._hannah.control_device(dev.id, state, value, chat_id)
             if not ok_ctrl:
                 await query.answer(f"Fehler: {msg}", show_alert=True)
                 return

@@ -20,32 +20,36 @@ from hannah.grpc_server import GrpcServer
 
 # ------------------------------------------------------------------
 # Wire compatibility — the generic byte-level bridge only holds while every
-# message a legacy method uses is wire-identical to its v1 counterpart. If this
-# fails, the named method needs a real translator in grpc_legacy.py.
+# message a legacy method uses is a wire-compatible subset of its v1 counterpart:
+# every legacy field exists in v1 with the same number, type and cardinality.
+# v1 may carry additional fields (additive, e.g. #366's required_trust_level /
+# ControlDeviceRequest.source_*): legacy bytes parse into v1 with those unset,
+# and legacy clients skip them as unknown. If this fails, the named method needs
+# a real translator in grpc_legacy.py.
 
-def _wire_shape(descriptor: Descriptor, seen: set) -> tuple:
-    if descriptor.full_name in seen:
-        return ("<recursive>", descriptor.name)
-    seen = seen | {descriptor.full_name}
-    fields = []
-    for field in sorted(descriptor.fields, key=lambda f: f.number):
+def _assert_wire_subset(legacy: Descriptor, current: Descriptor, path: str, seen: set) -> None:
+    if (legacy.full_name, current.full_name) in seen:
+        return
+    seen = seen | {(legacy.full_name, current.full_name)}
+    for field in legacy.fields:
+        other = current.fields_by_number.get(field.number)
+        where = f"{path}.{field.name} (#{field.number})"
+        assert other is not None, f"{where} missing in hannah.v1"
+        assert (other.type, other.is_repeated) == (field.type, field.is_repeated), f"{where} type/cardinality differ"
         if field.type in (FieldDescriptor.TYPE_MESSAGE, FieldDescriptor.TYPE_GROUP):
-            nested = _wire_shape(field.message_type, seen)
+            _assert_wire_subset(field.message_type, other.message_type, where, seen)
         elif field.type == FieldDescriptor.TYPE_ENUM:
-            nested = tuple(sorted(v.number for v in field.enum_type.values))
-        else:
-            nested = None
-        fields.append((field.number, field.type, field.is_repeated, nested))
-    return tuple(fields)
+            missing = {v.number for v in field.enum_type.values} - {v.number for v in other.enum_type.values}
+            assert not missing, f"{where} enum values {sorted(missing)} missing in hannah.v1"
 
 
 @pytest.mark.parametrize("method", list(LEGACY_SERVICE.methods), ids=lambda m: m.name)
-def test_legacy_method_is_wire_identical_to_v1(method):
+def test_legacy_method_is_wire_compatible_with_v1(method):
     current = CURRENT_SERVICE.methods_by_name.get(method.name)
     assert current is not None, f"{method.name} missing in hannah.v1"
     assert (current.client_streaming, current.server_streaming) == (method.client_streaming, method.server_streaming)
-    assert _wire_shape(current.input_type, set()) == _wire_shape(method.input_type, set())
-    assert _wire_shape(current.output_type, set()) == _wire_shape(method.output_type, set())
+    _assert_wire_subset(method.input_type, current.input_type, method.input_type.name, set())
+    _assert_wire_subset(method.output_type, current.output_type, method.output_type.name, set())
 
 
 def test_every_legacy_method_gets_a_handler():
