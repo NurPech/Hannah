@@ -4,6 +4,28 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.90.0 (2026-09-27)
+### Hannah Core
+
+* Changed: logs go to the log collector's versioned API `hannah.v1` (`hannah-grpc-lib` 0.6.0). A log collector too old for it still gets them over the previous API
+
+### Telegram
+
+* Changed: logs go to the log collector's versioned API `hannah.v1` (`hannah-grpc-lib` 0.6.0). A log collector too old for it still gets them over the previous API
+
+### VoiceID
+
+* Changed: logs go to the log collector's versioned API `hannah.v1` (`hannah-grpc-lib` 0.6.0). A log collector too old for it still gets them over the previous API
+
+### AutoDeploy
+
+* Changed: logs go to the log collector's versioned API `hannah.v1` (`hannah-grpc-lib` 0.6.0). A log collector too old for it still gets them over the previous API
+
+### Hannah Proxy
+
+* Changed: logs go to the log collector's versioned API `hannah.v1` (`hannah-grpc-lib` v0.4.0). A log collector too old for it still gets them over the previous API
+* Fixed: calls to the log collector now carry the correct `x-compat-version` (`hannah-proto-go` v4.6.3)
+
 ## 0.89.2 (2026-09-27)
 ### AutoDeploy
 

@@ -6,4 +6,4 @@ uvicorn>=0.29.0
 speechbrain>=1.0.0
 
 # Log shipping to the Hannah log collector (#341)
-hannah-grpc-lib>=0.5.0  # 0.5.0: collector discovery via hannah.v1 with fallback (#365)
+hannah-grpc-lib>=0.6.0  # 0.6.0: log collector via hannah.v1 with fallback
