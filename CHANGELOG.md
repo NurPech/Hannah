@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.91.1 (2026-09-27)
+### Hannah Core
+* Added: add some `link_accounts` providers for future use
+
 ## 0.91.0 (2026-09-27)
 ### Hannah Core
 
