@@ -4,6 +4,20 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.89.2 (2026-09-27)
+### AutoDeploy
+
+* Changed: log shipping switched from `hannah-logging` to its successor `hannah-grpc-lib` 0.5.0, which finds the log collector via Hannah Core's versioned API `hannah.v1` and falls back to the previous API for older Hannah Core versions (Refs #363)
+
+### Hannah Proxy
+
+* Changed: the proxy now speaks Hannah Core's versioned API `hannah.v1`. Against a Hannah Core too old for it, the proxy falls back to the previous API on its own and keeps working, and logs once per connection that Hannah Core should be updated (Refs #364)
+* Changed: log shipping switched from `hannah-logging-libs` to its successor `hannah-grpc-lib` v0.3.0, which finds the log collector the same way (Refs #364)
+
+### VoiceID
+
+* Changed: log shipping switched from `hannah-logging` to its successor `hannah-grpc-lib` 0.5.0, which finds the log collector via Hannah Core's versioned API `hannah.v1` and falls back to the previous API for older Hannah Core versions (Refs #365)
+
 ## 0.89.1 (2026-09-27)
 ### Hannah Core
 

@@ -53,9 +53,9 @@ def install_log_shipping(config: dict):
     place before post_install has installed its requirements. A missing library must not
     keep the updater from starting — it would never get the chance to repair itself."""
     try:
-        import hannah_logging
+        import hannah_grpc.logging as hannah_logging
     except ImportError:
-        log.warning("hannah-logging not installed — log shipping disabled")
+        log.warning("hannah-grpc-lib not installed — log shipping disabled")
         return None
 
     hannah = config.get("hannah")

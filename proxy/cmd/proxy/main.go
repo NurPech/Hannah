@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	hannahlog "gitlab.com/gessinger/hannah-logging-libs/go"
+	hannahlog "gitlab.com/gessinger/hannah-grpc-lib/go/logging"
 
 	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/config"
 	"dev.kernstock.net/gessinger/voice/hannah/proxy/internal/hannah"

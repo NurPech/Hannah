@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-import hannah_logging
+import hannah_grpc.logging as hannah_logging
 
 import log_shipping
 
@@ -24,7 +24,7 @@ def test_hannah_address_from_config():
 def test_install_passes_component_address_and_metadata_category():
     cfg = {"hannah": {"address": "core:50051"}, "api_key": "abc123"}
 
-    with patch("hannah_logging.install") as install:
+    with patch("hannah_grpc.logging.install") as install:
         log_shipping.install("0.88.0", hannah_address="core:50051", cfg=cfg)
 
     kwargs = install.call_args.kwargs
@@ -36,7 +36,7 @@ def test_install_passes_component_address_and_metadata_category():
 
 
 def test_install_without_address_only_buffers():
-    with patch("hannah_logging.install") as install:
+    with patch("hannah_grpc.logging.install") as install:
         log_shipping.install("dev", hannah_address=None, cfg={})
 
     assert install.call_args.kwargs["hannah_address"] is None

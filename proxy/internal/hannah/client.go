@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/NurPech/hannah-proto-go/v4"
+	pb "github.com/NurPech/hannah-proto-go/v4/hannahv1"
+	"gitlab.com/gessinger/hannah-grpc-lib/go/client"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // PlayAudioFunc is called when Hannah pushes a PlayAudioCommand via the proxy stream.
@@ -21,26 +21,25 @@ type PlayAudioFunc func(deviceID string, pcm []byte, sampleRate int32, isLast bo
 
 // Client is a gRPC client to Hannah Core.
 type Client struct {
-	conn *grpc.ClientConn
-	stub pb.HannahServiceClient
+	conn      *grpc.ClientConn
+	versioned *client.VersionedConn
+	stub      pb.HannahServiceClient
 }
 
 // NewClient dials Hannah Core at address (e.g. "192.168.8.1:50051").
+//
+// Calls use hannah.v1; against a Core too old for it they go to the unversioned
+// N−1 path instead (hannah-grpc-lib client, #364). x-proto-version and
+// x-compat-version come from the lib's dial options.
 func NewClient(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(32*1024*1024)),
-		// compat_version (hannah-proto#9/hannah#217) runs additively next to
-		// the version_interceptor.go pair above, not as a replacement — a
-		// breaking change scoped to one message no longer has to reject
-		// every client, only calls that actually use the affected message.
-		grpc.WithChainUnaryInterceptor(versionUnaryInterceptor, pb.CompatVersionUnaryClientInterceptor),
-		grpc.WithChainStreamInterceptor(versionStreamInterceptor, pb.CompatVersionStreamClientInterceptor),
-	)
+	opts := append(client.DialOptions(),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(32*1024*1024)))
+	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("grpc dial %q: %w", address, err)
 	}
-	return &Client{conn: conn, stub: pb.NewHannahServiceClient(conn)}, nil
+	versioned := client.New(conn, nil)
+	return &Client{conn: conn, versioned: versioned, stub: pb.NewHannahServiceClient(versioned)}, nil
 }
 
 // Close tears down the gRPC connection.
@@ -124,6 +123,8 @@ func (c *Client) RunProxy(ctx context.Context, proxyID, udpHost string, udpPort 
 			return
 		case <-time.After(5 * time.Second):
 		}
+		// Core may have been updated or downgraded while the stream was down.
+		c.versioned.Reset()
 	}
 }
 

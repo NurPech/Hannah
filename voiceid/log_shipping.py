@@ -1,4 +1,4 @@
-"""VoiceID-Logs zusätzlich an den Log-Collector senden (#347), über die Lib hannah-logging.
+"""VoiceID-Logs zusätzlich an den Log-Collector senden (#347), über die Lib hannah-grpc-lib (hannah_grpc.logging).
 
 Die bestehende Ausgabe (stdout/journald) bleibt unverändert. Die Lib puffert ab install()
 und schickt, sobald Hannah Core einen Collector meldet (Discovery über `hannah.address`).
@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterator, Optional
 
-import hannah_logging
+import hannah_grpc.logging as hannah_logging
 
 # Logger, über den app.py loggt — alles darunter ist METADATA
 LOGGER_NAME = "voiceid"
