@@ -80,15 +80,22 @@ class ConversationContext:
 
     # ------------------------------------------------------------------
 
-    def fill_intent(self, source: str, intent: Intent) -> None:
-        """Ergänzt fehlende Raum/Gerät/Kategorie aus dem letzten Befehl."""
+    def fill_intent(self, source: str, intent: Intent, satellite_room: Optional[str] = None) -> None:
+        """Ergänzt fehlende Raum/Gerät/Kategorie aus dem letzten Befehl.
+
+        satellite_room: bekannter Fallback-Raum des sprechenden Satelliten, falls vorhanden.
+        Blockiert das Raum-Erben aus dem Kontext genauso wie ein im Text genannter Raum —
+        sonst kann ein raumlos formulierter Folgebefehl einen längst überholten Kontext-Raum
+        aus einer thematisch unabhängigen früheren Anfrage treffen statt den tatsächlichen
+        Standort des Satelliten (#370).
+        """
         with self._lock:
             ctx = self._ctxs.get(source)
             if not ctx or not self._valid(ctx):
                 return
-            user_specified_room = intent.room_id is not None
+            user_specified_room = intent.room_id is not None or satellite_room is not None
             user_specified_category = intent.category_filter is not None
-            if intent.room_id is None and ctx.room_id:
+            if intent.room_id is None and satellite_room is None and ctx.room_id:
                 intent.room = ctx.room
                 intent.room_id = ctx.room_id
                 log.debug(f"[{source}] Kontext: Raum '{ctx.room}' ergänzt")

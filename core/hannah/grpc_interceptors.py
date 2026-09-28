@@ -71,3 +71,30 @@ class ProtocolVersionInterceptor(grpc.ServerInterceptor):
                 self._logged.clear()
             self._logged.add(key)
             return True
+
+
+class OutdatedComponentInterceptor(grpc.ServerInterceptor):
+    """Meldet jeden RPC über den eingefrorenen N−1-Pfad an einen OutdatedComponentNotifier
+    (#358) — unabhängig von Registrierungsnachrichten einzelner Komponenten, da
+    hannah-grpc-lib jedem Call bereits x-proto-version mitgibt und der Pfad selbst schon
+    verrät, ob N oder N−1 gerufen wurde. Läuft dieselbe Methode über den aktuellen Pfad,
+    gilt ein zuvor gesetzter Hinweis als erledigt (Entwarnung)."""
+
+    def __init__(self, notifier, legacy_prefix: str):
+        self._notifier = notifier
+        self._legacy_prefix = legacy_prefix
+
+    def intercept_service(self, continuation, handler_call_details):
+        handler = continuation(handler_call_details)
+        if handler is None:
+            return handler
+
+        method = handler_call_details.method
+        bare_name = method.rsplit("/", 1)[-1]
+        if method.startswith(self._legacy_prefix):
+            metadata = dict(handler_call_details.invocation_metadata or ())
+            proto_version = metadata.get(PROTO_VERSION_METADATA_KEY, "") or ""
+            self._notifier.notify_legacy_call(bare_name, proto_version)
+        else:
+            self._notifier.notify_current_call(bare_name)
+        return handler

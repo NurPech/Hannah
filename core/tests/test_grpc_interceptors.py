@@ -6,9 +6,12 @@ from hannah_proto import PROTO_VERSION as _PROTO_VERSION
 
 from hannah.grpc_interceptors import (
     PROTO_VERSION_METADATA_KEY,
+    OutdatedComponentInterceptor,
     ProtocolVersionInterceptor,
     read_proto_version,
 )
+
+LEGACY_PREFIX = "/hannah.HannahService/"
 
 EXPECTED_VERSION = str(_PROTO_VERSION)
 UNKNOWN_METHOD = "/hannah.v0.HannahService/SubmitText"
@@ -94,3 +97,63 @@ def test_same_path_and_header_logged_only_once(caplog):
         interceptor.intercept_service(continuation, _handler_call_details(method=UNKNOWN_METHOD, version="2"))
 
     assert len(_version_records(caplog)) == 2
+
+
+class TestOutdatedComponentInterceptor:
+    """#358 — jeder Call verrät gratis über den Pfad, ob N oder N−1 gerufen wurde;
+    hannah-grpc-lib hängt x-proto-version an jeden Call, unabhängig von irgendeiner
+    komponentenspezifischen Registrierungsnachricht."""
+
+    def test_legacy_path_notifies_with_bare_method_name_and_proto_version(self):
+        notifier = MagicMock()
+        interceptor = OutdatedComponentInterceptor(notifier, legacy_prefix=LEGACY_PREFIX)
+        handler = _unary_handler()
+
+        result = interceptor.intercept_service(
+            MagicMock(return_value=handler),
+            _handler_call_details(method=f"{LEGACY_PREFIX}ChannelConnect", version="3.2.0"),
+        )
+
+        assert result is handler
+        notifier.notify_legacy_call.assert_called_once_with("ChannelConnect", "3.2.0")
+        notifier.notify_current_call.assert_not_called()
+
+    def test_current_path_reports_recovery_not_a_new_notice(self):
+        notifier = MagicMock()
+        interceptor = OutdatedComponentInterceptor(notifier, legacy_prefix=LEGACY_PREFIX)
+        handler = _unary_handler()
+
+        interceptor.intercept_service(
+            MagicMock(return_value=handler),
+            _handler_call_details(method="/hannah.v1.HannahService/ChannelConnect", version=EXPECTED_VERSION),
+        )
+
+        notifier.notify_current_call.assert_called_once_with("ChannelConnect")
+        notifier.notify_legacy_call.assert_not_called()
+
+    def test_missing_proto_version_header_passed_as_empty_string(self):
+        notifier = MagicMock()
+        interceptor = OutdatedComponentInterceptor(notifier, legacy_prefix=LEGACY_PREFIX)
+        handler = _unary_handler()
+
+        interceptor.intercept_service(
+            MagicMock(return_value=handler),
+            _handler_call_details(method=f"{LEGACY_PREFIX}AgentConnect", version=None),
+        )
+
+        notifier.notify_legacy_call.assert_called_once_with("AgentConnect", "")
+
+    def test_unimplemented_method_is_not_reported(self):
+        """handler is None (Methode existiert nicht mehr) — kein Fall für #358, das
+        deckt ProtocolVersionInterceptor bereits als eigene Diagnose ab."""
+        notifier = MagicMock()
+        interceptor = OutdatedComponentInterceptor(notifier, legacy_prefix=LEGACY_PREFIX)
+
+        result = interceptor.intercept_service(
+            MagicMock(return_value=None),
+            _handler_call_details(method=f"{LEGACY_PREFIX}SomeAncientMethod", version="1.0.0"),
+        )
+
+        assert result is None
+        notifier.notify_legacy_call.assert_not_called()
+        notifier.notify_current_call.assert_not_called()

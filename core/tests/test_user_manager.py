@@ -116,4 +116,42 @@ class TestResidentLinkDoubleEncodedPayload:
         user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
         user.link_account("residents", "leonie_roomie", provider_payload="not json at all")
 
+
+class TestGetUsersWithTrustLevel:
+    """#358 — Admin-Empfänger (Trust-Level 10) für die Mailbox-Benachrichtigung
+    über veraltete Komponenten. init_db() seedet bei leerer DB First-Run-Accounts
+    ("hannah", "admin") mit trust_level=10 (db.py) — die zählen in jeder frischen
+    Test-DB automatisch mit, die Assertions gehen bewusst davon aus statt eine
+    komplett leere Admin-Liste zu erwarten."""
+
+    def test_only_users_at_or_above_min_level_are_returned(self, tmp_path):
+        user_manager = _make_user_manager(tmp_path)
+        admin = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
+        admin.update(trust_level=10)
+        guest = user_manager.create_user("guest", generate_password_hash("x"), email="guest@example.com")
+        guest.update(trust_level=3)
+
+        ids = [u.id for u in user_manager.get_users_with_trust_level(10)]
+
+        assert admin.id in ids
+        assert guest.id not in ids
+
+    def test_default_min_level_is_10(self, tmp_path):
+        user_manager = _make_user_manager(tmp_path)
+        user = user_manager.create_user("leonie", generate_password_hash("x"), email="leonie@example.com")
+        user.update(trust_level=9)
+
+        ids = [u.id for u in user_manager.get_users_with_trust_level()]
+
+        assert user.id not in ids
+
+    def test_seeded_first_run_accounts_count_as_admins(self, tmp_path):
+        """init_db() seedet 'hannah' und 'admin' mit trust_level=10 (First-Run) —
+        die zählen automatisch mit, ohne dass extra jemand hochgestuft werden muss."""
+        user_manager = _make_user_manager(tmp_path)
+
+        result = user_manager.get_users_with_trust_level(10)
+
+        assert {u.username for u in result} == {"hannah", "admin"}
+
         assert user_manager.get_roomie_ids() == set()

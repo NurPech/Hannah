@@ -216,6 +216,13 @@ CREATE TABLE IF NOT EXISTS "applied_migrations" (
 	"applied_at"	TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY("name")
 );
+
+CREATE TABLE IF NOT EXISTS "outdated_component_notices" (
+	"method"	TEXT NOT NULL,
+	"proto_version"	TEXT NOT NULL,
+	"notified_at"	TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY("method","proto_version")
+);
 """
 
 

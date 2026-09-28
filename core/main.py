@@ -58,6 +58,7 @@ from hannah.trigger_engine import TriggerEngine
 from hannah.ble_location import BleLocationEngine, BleTag
 from hannah.alarms import AlarmManager, format_duration
 from hannah.messages import MessageManager
+from hannah.outdated_components import OutdatedComponentNotifier
 from hannah.__version__ import VERSION as HANNAH_VERSION
 
 # Asset-IDs, die Core per play_asset anfordern könnte (#170) — Grundlage für die
@@ -662,28 +663,33 @@ def main():
         # NLU
         intent = nlu.parse(text)
 
-        # Gesprächskontext: fehlende Felder ergänzen + Aktion erben
-        conv_ctx.fill_intent(device, intent)
+        # Satelliten-Fallback-Raum vorab ermitteln — bei Query-Intents bewusst nicht,
+        # dort soll ohne Raumangabe im Text die globale Abfrage greifen statt des
+        # Satelliten-Standorts.
+        satellite_room = (
+            satellite_manager.get_satellite_room(device)
+            if intent.name not in ("Query", "CarQuery") else None
+        )
+
+        # Gesprächskontext: fehlende Felder ergänzen + Aktion erben. Ein bekannter
+        # Satelliten-Raum hat Vorrang vor einem geerbten Kontext-Raum (#370).
+        conv_ctx.fill_intent(device, intent, satellite_room=satellite_room)
         conv_ctx.inherit_action(device, intent)
 
-        # Raum-Fallback: zugewiesener Raum aus SatelliteManager → nichts
-        # Bei Query-Intents nur anwenden wenn der Raum explizit im Text genannt wurde —
-        # ohne Raum soll die globale Abfrage greifen.
-        if intent.room is None and intent.name not in ("Query", "CarQuery"):
-            room = satellite_manager.get_satellite_room(device)
-            if room:
-                intent.room    = room
-                intent.room_id = room
-                log.debug(f"[{device}] Raum-Fallback: '{room}'")
-                # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
-                # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
-                # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
-                # völlig anderen Raum gematcht worden sein.
-                device_key, dev = nlu.resolve_device_in_room(intent.raw_text, room)
-                intent.device_key = device_key
-                intent.device      = dev.name if dev else None
-                intent.device_id   = dev.id if dev else None
-                intent.candidates  = []
+        # Raum-Fallback: zugewiesener Raum aus SatelliteManager
+        if satellite_room and intent.room is None:
+            intent.room    = satellite_room
+            intent.room_id = satellite_room
+            log.debug(f"[{device}] Raum-Fallback: '{satellite_room}'")
+            # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
+            # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
+            # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
+            # völlig anderen Raum gematcht worden sein.
+            device_key, dev = nlu.resolve_device_in_room(intent.raw_text, satellite_room)
+            intent.device_key = device_key
+            intent.device      = dev.name if dev else None
+            intent.device_id   = dev.id if dev else None
+            intent.candidates  = []
 
         log.info(
             f"[{device}] Intent: {intent.name} | "
@@ -1060,27 +1066,34 @@ def main():
 
         intent = nlu.parse(text)
 
-        # Gesprächskontext: fehlende Felder ergänzen + Aktion erben
-        conv_ctx.fill_intent(_source, intent)
+        # Satelliten-Fallback-Raum vorab ermitteln — bei Query-Intents bewusst nicht,
+        # dort soll ohne Raumangabe im Text die globale Abfrage greifen statt des
+        # Satelliten-Standorts.
+        satellite_room = (
+            satellite_manager.get_satellite_room(device)
+            if device and intent.name not in ("Query", "CarQuery") else None
+        )
+
+        # Gesprächskontext: fehlende Felder ergänzen + Aktion erben. Ein bekannter
+        # Satelliten-Raum hat Vorrang vor einem geerbten Kontext-Raum (#370).
+        conv_ctx.fill_intent(_source, intent, satellite_room=satellite_room)
         conv_ctx.inherit_action(_source, intent)
 
         # Raum-Fallback: zugewiesener Raum des Satelliten, falls kein Raum im Text genannt wurde
         # (analog zum UDP-direkt-Pfad in pipeline() — ging im gRPC/Proxy-Pfad verloren)
-        if device and intent.room is None and intent.name not in ("Query", "CarQuery"):
-            room = satellite_manager.get_satellite_room(device)
-            if room:
-                intent.room    = room
-                intent.room_id = room
-                log.debug(f"[{device}] Raum-Fallback: '{room}'")
-                # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
-                # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
-                # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
-                # völlig anderen Raum gematcht worden sein.
-                device_key, dev = nlu.resolve_device_in_room(intent.raw_text, room)
-                intent.device_key = device_key
-                intent.device      = dev.name if dev else None
-                intent.device_id   = dev.id if dev else None
-                intent.candidates  = []
+        if satellite_room and intent.room is None:
+            intent.room    = satellite_room
+            intent.room_id = satellite_room
+            log.debug(f"[{device}] Raum-Fallback: '{satellite_room}'")
+            # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
+            # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
+            # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
+            # völlig anderen Raum gematcht worden sein.
+            device_key, dev = nlu.resolve_device_in_room(intent.raw_text, satellite_room)
+            intent.device_key = device_key
+            intent.device      = dev.name if dev else None
+            intent.device_id   = dev.id if dev else None
+            intent.candidates  = []
 
         log.info(
             f"[textcmd] Text: '{text}' → Intent: {intent.name} | "
@@ -2719,7 +2732,8 @@ def main():
 
     # Before the server starts, so no log collector can register unnoticed (#341)
     log_shipping.follow_registry(log_shipper, grpc_servicer.registry)
-    grpc_srv = GrpcServer(cfg.get("grpc", {}), grpc_servicer)
+    outdated_notifier = OutdatedComponentNotifier(get_db, _user_manager, message_manager)
+    grpc_srv = GrpcServer(cfg.get("grpc", {}), grpc_servicer, outdated_notifier=outdated_notifier)
     grpc_srv.start()
 
     # ------------------------------------------------------------------

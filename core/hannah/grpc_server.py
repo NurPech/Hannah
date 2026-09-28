@@ -25,8 +25,10 @@ from hannah_proto.v1 import hannah_pb2 as pb
 from hannah_proto.v1 import hannah_pb2_grpc as pb_grpc
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
-from hannah.grpc_interceptors import ProtocolVersionInterceptor, read_proto_version
-from hannah.grpc_legacy import add_legacy_servicer_to_server
+from hannah.grpc_interceptors import (
+    ProtocolVersionInterceptor, OutdatedComponentInterceptor, read_proto_version,
+)
+from hannah.grpc_legacy import add_legacy_servicer_to_server, LEGACY_SERVICE
 from hannah.link_tokens import LinkTokenStore, LOOKUP_EXPIRED, LOOKUP_OK
 from hannah.component_registry import (
     ComponentRegistry, KIND_CHANNEL, KIND_LOG_COLLECTOR, EVENT_REGISTERED,
@@ -2269,11 +2271,12 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
 # Server lifecycle
 
 class GrpcServer:
-    def __init__(self, cfg: dict, servicer: HannahServicer):
+    def __init__(self, cfg: dict, servicer: HannahServicer, outdated_notifier=None):
         self._host = cfg.get("host", "0.0.0.0")
         self._port = int(cfg.get("port", 50051))
         self._server: Optional[grpc.Server] = None
         self._servicer = servicer
+        self._outdated_notifier = outdated_notifier
         if "enforce_protocol_version" in cfg:
             # #359: seit Core hannah.v1 und hannah (N−1) parallel bedient, regelt
             # der versionierte Methodenpfad die Kompatibilität. Der Key darf in
@@ -2297,6 +2300,12 @@ class GrpcServer:
         # they use away from Core. An explicit `false` in config.yaml still wins.
         enforce_compat = cfg.get("enforce_compat_version", True)
         self._compat_interceptor = CompatVersionInterceptor(enforce=enforce_compat)
+        # #358: pro RPC gratis erkennbar (Pfad + x-proto-version, siehe
+        # OutdatedComponentInterceptor) — ohne Notifier (z.B. in Tests) einfach aus.
+        self._outdated_interceptor = (
+            OutdatedComponentInterceptor(outdated_notifier, legacy_prefix=f"/{LEGACY_SERVICE.full_name}/")
+            if outdated_notifier is not None else None
+        )
 
     def start(self):
         # Der synchrone grpc.server() belegt pro Streaming-RPC (RegisterProxy,
@@ -2307,9 +2316,12 @@ class GrpcServer:
         # StreamSatelliteAudio-Captures parallel liefen: neue Streams wurden am
         # Transport zwar angenommen, ihr Handler bekam aber nie einen freien
         # Worker zugeteilt und lieferte dadurch nie Daten, ohne jeden Fehler (#229).
+        interceptors = [self._version_interceptor, self._compat_interceptor]
+        if self._outdated_interceptor is not None:
+            interceptors.append(self._outdated_interceptor)
         self._server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=32),
-            interceptors=[self._version_interceptor, self._compat_interceptor],
+            interceptors=interceptors,
         )
         pb_grpc.add_HannahServiceServicer_to_server(self._servicer, self._server)
         add_legacy_servicer_to_server(self._servicer, self._server)

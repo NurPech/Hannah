@@ -47,6 +47,60 @@ class TestFillIntentDevice:
         assert intent.device is None
 
 
+class TestFillIntentSatelliteRoom:
+    """#370 — "Licht an" ohne Raumangabe hat Geräte im "Balkon" geschaltet statt im
+    tatsächlichen Raum des Satelliten ("OG Zimmer Süd"): fill_intent() hatte den Raum
+    aus einem Stunden zurückliegenden, thematisch unabhängigen Balkon-Befehl geerbt,
+    weil praktisch jede Interaktion mit der Quelle die Kontext-TTL erneuert (nicht nur
+    raumtragende Befehle) und der Satelliten-Fallback in main.py nur griff, wenn
+    intent.room zu diesem Zeitpunkt noch None war."""
+
+    def _ctx_after_balkon_on(self):
+        ctx = ConversationContext(ttl=120.0)
+        ctx.update_from_intent("sat01", Intent(
+            name="TurnOn", room="Balkon", room_id="balkon",
+        ))
+        return ctx
+
+    def test_known_satellite_room_blocks_context_room_inherit(self):
+        ctx = self._ctx_after_balkon_on()
+        intent = Intent(name="TurnOn")
+        ctx.fill_intent("sat01", intent, satellite_room="og zimmer süd")
+
+        assert intent.room_id is None
+        assert intent.room is None
+
+    def test_known_satellite_room_blocks_device_inherit_too(self):
+        ctx = ConversationContext(ttl=120.0)
+        ctx.update_from_intent("sat01", Intent(
+            name="TurnOn", room="Balkon", room_id="balkon",
+            device="Strahler", device_id="javascript.0.virtualDevice.Strahler",
+        ))
+        intent = Intent(name="TurnOn")
+        ctx.fill_intent("sat01", intent, satellite_room="og zimmer süd")
+
+        assert intent.device is None
+        assert intent.device_id is None
+
+    def test_without_satellite_room_still_inherits_as_before(self):
+        """Regressionsschutz: Quellen ohne bekannten Satelliten-Raum (z.B. Telegram)
+        erben weiterhin wie bisher aus dem Kontext."""
+        ctx = self._ctx_after_balkon_on()
+        intent = Intent(name="TurnOn")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.room_id == "balkon"
+
+    def test_explicit_room_in_text_wins_over_satellite_room(self):
+        """Nennt der User selbst einen Raum, bleibt der unangetastet — satellite_room
+        ist nur ein Fallback für fehlende Angaben, kein Override."""
+        ctx = self._ctx_after_balkon_on()
+        intent = Intent(name="TurnOn", room="Küche", room_id="küche")
+        ctx.fill_intent("sat01", intent, satellite_room="og zimmer süd")
+
+        assert intent.room_id == "küche"
+
+
 class TestRecordTts:
     """#253 — proaktive Announcements/Notifications laufen nie über add_llm_exchange()
     (kein User-Turn davor). record_tts() merkt sie trotzdem als Assistant-Turn in der

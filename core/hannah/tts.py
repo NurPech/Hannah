@@ -57,6 +57,7 @@ import logging
 import math
 import os
 import struct
+import unicodedata
 import wave
 from pathlib import Path
 from typing import Callable, Optional
@@ -152,6 +153,11 @@ class _PiperBackend(_TTSBackend):
 
     def synthesize(self, text: str) -> Optional[bytes]:
         try:
+            # NFC-Normalisierung: NFD-kodierte Zeichen (Basisbuchstabe + separates
+            # Combining-Diacritic, z.B. bei "Curaçao") kennt Pipers phoneme_id_map
+            # nicht (nur precomposed Zeichen) — der Laut wird sonst stillschweigend
+            # verschluckt ("Missing phoneme from id map").
+            text = unicodedata.normalize("NFC", text)
             from piper.config import SynthesisConfig
             syn_cfg = SynthesisConfig(
                 speaker_id  = self._cfg.get("speaker_id",   None),

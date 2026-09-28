@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.92.0 (2026-09-28)
+### Hannah Core
+
+* Added: users with trust level 10 get a mailbox message when a component still talks to Core over the frozen legacy protocol (`hannah.HannahService`, pre-N/N−1) — the same case that will stop working once that path is eventually retired. One message per RPC and reported proto version, not on every call; the notice clears itself, without a new message, once that component is seen on the current protocol again (Refs #358)
+* Fixed: a control command without a named room ("Licht an") could target the room from an earlier, unrelated command instead of the actual room of the satellite that heard it — as long as there had been any interaction with that satellite since, even one unrelated to rooms, like a status query or a proactive announcement. The satellite's own room now always takes priority over an inherited context room (Refs #370)
+* Fixed: words with certain accented characters (e.g. "Curaçao") could lose that sound when spoken by the local Piper voice, with a `Missing phoneme from id map` warning in the log — text arriving in decomposed Unicode form is now normalized before Piper synthesizes it (Refs #371)
+
 ## 0.91.1 (2026-09-27)
 ### Hannah Core
 * Added: add some `link_accounts` providers for future use

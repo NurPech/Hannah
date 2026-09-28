@@ -228,6 +228,11 @@ class UserManager:
         über AutomationConnect bekommt."""
         return [u for u in self.users() if u.has_automation(automation)]
 
+    def get_users_with_trust_level(self, min_level: int = 10) -> list[User]:
+        """Alle aktiven User mit mindestens diesem Trust-Level — Grundlage für
+        Admin-Benachrichtigungen (z.B. veraltete Komponenten, #358)."""
+        return [u for u in self.users() if u.trust_level >= min_level]
+
     def get_user_by_linked_account(self, provider, external_id) -> User:
         """Gibt den Benutzer mit der angegebenen external ID zurück."""
         user = User.select(self._db()).join(
