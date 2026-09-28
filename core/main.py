@@ -29,6 +29,7 @@ from hannah.utils.activity_db import init_activity_db
 from hannah.residents import Roomie, Guest, Pet, Resident, AWAY_PRESENCE_STATE, HOME_PRESENCE_STATE, NIGHT_PRESENCE_STATE
 from hannah import audio as audio_mod
 from hannah import config as config_mod
+from hannah import responses
 from hannah import log_shipping
 from hannah.log_shipping import TRANSCRIPT
 from hannah.car_tracker import CarManager, CarTracker
@@ -342,16 +343,26 @@ def main():
     # Trust-Level pro State (#366): nur der sicher erkannte Sprecher/verknüpfte Account
     # zählt — bewusst kein Satelliten-Owner-Fallback wie bei Wecker/Timer/Messages, sonst
     # bekäme jeder am Satelliten der Owner-Person deren Trust-Level. Unbekannt = Gast.
-    def _requester_trust(speaker_user_id) -> int:
-        user = speaker_user_id and (
+    def _resolve_requester(speaker_user_id):
+        return speaker_user_id and (
             _user_manager.get_user_by_id(speaker_user_id)
             or _user_manager.get_user_by_username(speaker_user_id)
         )
+
+    def _requester_trust(speaker_user_id) -> int:
+        user = _resolve_requester(speaker_user_id)
         return user.trust_level if user else GUEST_TRUST_LEVEL
 
-    def _denied_answer(denied: list[str], count: int) -> str:
+    def _requester_name(speaker_user_id) -> str:
+        """Anzeigename des aufgelösten Sprechers für Antwort-Varianz (#373), leer wenn
+        unbekannt/Gast — unabhängig davon ob VoiceID oder ein linked Account (z.B. Telegram)
+        aufgelöst hat, beides läuft über denselben User-Lookup."""
+        user = _resolve_requester(speaker_user_id)
+        return user.display_name if user else ""
+
+    def _denied_answer(denied: list[str], count: int, name: str = "") -> str:
         if count == 0:
-            return TRUST_DENIED_TEXT
+            return responses.denied(TRUST_DENIED_TEXT, name)
         return f"{', '.join(denied)} darfst du leider nicht steuern."
 
     def _resolve_alarm_user_id(speaker_user_id, device: str) -> int:
@@ -645,13 +656,15 @@ def main():
                     _feedback(device, True, answer)
                 else:
                     denied: list[str] = []
+                    name = _requester_name(speaker_user_id)
                     count = iobroker.execute(
                         orig, satellite_device=device,
                         trust_level=_requester_trust(speaker_user_id), denied=denied,
+                        requester_name=name,
                     )
                     conv_ctx.update_from_intent(device, orig)
                     if denied:
-                        _feedback(device, False, _denied_answer(denied, count))
+                        _feedback(device, False, _denied_answer(denied, count, name))
                     elif count == 0:
                         _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
                 intent = orig
@@ -895,15 +908,17 @@ def main():
                 log.warning(f"[{device}] Keine Antwort auf Query möglich.")
         else:
             denied: list[str] = []
+            name = _requester_name(speaker_user_id)
             count = iobroker.execute(
                 intent, satellite_device=device,
                 trust_level=_requester_trust(speaker_user_id), denied=denied,
+                requester_name=name,
             )
             conv_ctx.update_from_intent(device, intent)
             if intent.name == "Unknown":
                 _feedback(device, False, "Tut mir leid, ich habe dich nicht verstanden.")
             elif denied:
-                _feedback(device, False, _denied_answer(denied, count))
+                _feedback(device, False, _denied_answer(denied, count, name))
             elif count == 0:
                 log.warning(f"[{device}] Keine States gesetzt — Intent nicht auflösbar.")
                 _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
@@ -1057,11 +1072,21 @@ def main():
                     conv_ctx.update_from_intent(_source, orig)
                     return _logged(answer, "Query", orig)
                 denied: list[str] = []
-                count = iobroker.execute(orig, trust_level=trust_level, denied=denied)
+                offline: list[str] = []
+                name = _requester_name(speaker_user_id)
+                count = iobroker.execute(
+                    orig, trust_level=trust_level, denied=denied,
+                    requester_name=name, wait_confirm=True, offline=offline,
+                )
                 conv_ctx.update_from_intent(_source, orig)
                 if denied:
-                    return _logged(_denied_answer(denied, count), "Routine", orig)
-                return _logged(("OK." if count > 0 else "Keine Geräte gefunden."), "Routine", orig)
+                    return _logged(_denied_answer(denied, count, name), "Routine", orig)
+                if count == 0:
+                    return _logged("Keine Geräte gefunden.", "Routine", orig)
+                if offline:
+                    default = f"{', '.join(offline)} antwortet nicht — möglicherweise offline."
+                    return _logged(responses.offline(default), "Routine", orig)
+                return _logged(responses.success("OK.", name), "Routine", orig)
             conv_ctx.clear_clarification(_source)
 
         intent = nlu.parse(text)
@@ -1312,13 +1337,22 @@ def main():
                 answer = "Das habe ich leider nicht verstanden."
         else:
             denied: list[str] = []
-            count = iobroker.execute(intent, trust_level=trust_level, denied=denied)
+            offline: list[str] = []
+            name = _requester_name(speaker_user_id)
+            count = iobroker.execute(
+                intent, trust_level=trust_level, denied=denied,
+                requester_name=name, wait_confirm=True, offline=offline,
+            )
             if count > 0:
                 conv_ctx.set_smalltalk_active(_source, False)
             if denied:
-                answer = _denied_answer(denied, count)
+                answer = _denied_answer(denied, count, name)
+            elif count == 0:
+                answer = "Keine Geräte gefunden."
+            elif offline:
+                answer = responses.offline(f"{', '.join(offline)} antwortet nicht — möglicherweise offline.")
             else:
-                answer = "Keine Geräte gefunden." if count == 0 else "OK."
+                answer = responses.success("OK.", name)
             conv_ctx.update_from_intent(_source, intent)
 
         return _logged(answer, intent.name, intent)

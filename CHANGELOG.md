@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.93.0 (2026-09-28)
+### Hannah Core
+
+* Added: control-command replies occasionally vary instead of always sounding the same — once a speaker is recognized (VoiceID or a linked account, e.g. Telegram), Hannah sometimes uses their name ("Sehr gerne, Leonie.") instead of the plain default. Unrecognized speakers always get the plain default (Refs #373)
+* Changed: text-channel control commands (Telegram, webchat, the adapter's text command) now wait briefly for ioBroker to actually confirm the device switched, and say so if it doesn't within a few seconds — previously they answered "OK." immediately without checking (Refs #373)
+
 ## 0.92.1 (2026-09-28)
 ### Hannah Proxy
 

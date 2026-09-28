@@ -849,3 +849,61 @@ class TestTrustLevelPerState:
     def test_control_direct_allows_sufficient_trust(self, client):
         assert client.control_direct(self.LOCK.rsplit(".", 1)[0], "on", "true", trust_level=10) is True
         assert client._sent == [self.LOCK]
+
+
+class TestExecuteWaitConfirm:
+    """#373: execute(wait_confirm=True) blockt synchron auf ioBroker-Bestätigung
+    (Text-Kanäle) — unabhängig vom satellitenseitigen _pending/_feedback_cb-Pfad,
+    der weiterhin asynchron über satellite_device läuft."""
+
+    LIGHT = "javascript.0.virtualDevice.Licht.EG.Flur.Decke.on"
+
+    def _agent_device(self, state_id: str, name: str) -> AgentDevice:
+        return AgentDevice(
+            state_id=state_id, room="flur", device=name, device_type="socket",
+            device_id=state_id.rsplit(".", 1)[0], canonical_key="on",
+            value=AgentStateValue(value="false", ack=True), writable=True,
+        )
+
+    @pytest.fixture
+    def client(self):
+        c = IoBrokerClient({"host": "localhost", "port": 8093})
+        c._confirm_timeout = 0.05
+        c.handle_device_snapshot([self._agent_device(self.LIGHT, "Decke")])
+        return c
+
+    def _intent(self):
+        return Intent(name="TurnOn", device_id=self.LIGHT.rsplit(".", 1)[0])
+
+    def test_confirms_immediately_when_iobroker_acks_right_away(self, client):
+        client.set_setter(lambda state_id, payload: client.handle_state_update(state_id, payload) or True)
+        offline: list[str] = []
+        count = client.execute(self._intent(), trust_level=None, wait_confirm=True, offline=offline)
+        assert count == 1
+        assert offline == []
+
+    def test_reports_offline_on_timeout(self, client):
+        client.set_setter(lambda state_id, payload: True)  # ioBroker bestätigt nie
+        offline: list[str] = []
+        count = client.execute(self._intent(), trust_level=None, wait_confirm=True, offline=offline)
+        assert count == 1
+        assert offline == ["Decke im flur"]
+
+    def test_without_wait_confirm_never_populates_offline(self, client):
+        client.set_setter(lambda state_id, payload: True)  # ioBroker bestätigt nie
+        offline: list[str] = []
+        count = client.execute(self._intent(), trust_level=None, offline=offline)
+        assert count == 1
+        assert offline == []
+
+    def test_requester_name_reaches_satellite_feedback_text(self, client, monkeypatch):
+        monkeypatch.setattr("hannah.responses.random.random", lambda: 0.0)
+        monkeypatch.setattr("hannah.responses.random.choice", lambda seq: seq[0])
+        received = {}
+        client.set_feedback_handler(
+            lambda device, success, text: received.update(device=device, success=success, text=text),
+            timeout=0.05,
+        )
+        client.set_setter(lambda state_id, payload: client.handle_state_update(state_id, payload) or True)
+        client.execute(self._intent(), satellite_device="kueche-esp", trust_level=None, requester_name="Leonie")
+        assert received == {"device": "kueche-esp", "success": True, "text": "Sehr gerne, Leonie."}

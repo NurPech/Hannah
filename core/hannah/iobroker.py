@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, Optional
 from hannah_proto.v1.hannah_pb2 import AgentDevice as AgentDevice
 from hannah_proto.v1.hannah_pb2 import AgentStateValue as AgentStateValue
+from . import responses
 
 if TYPE_CHECKING:
     from .nlu import Intent
@@ -148,6 +149,14 @@ class IoBrokerClient:
         # Pending Confirmations: {state_id: {"expected": value, "device": str, "deadline": float, "label": str}}
         self._pending: dict[str, dict] = {}
         self._pending_lock = threading.Lock()
+
+        # Synchroner Confirm-Waiter für execute(wait_confirm=True) (Text-Kanäle, #373) —
+        # bewusst getrennt von _pending/_feedback_cb (Satelliten-Pfad, asynchron): beide
+        # beobachten denselben state_id-Bestätigungsweg in handle_state_update(), aber mit
+        # unterschiedlichem Konsummuster (ein Aufrufer wartet synchron auf genau seine
+        # eigenen state_ids, der andere batcht callback-artig pro Satellit).
+        self._confirm_waiters: dict[str, dict] = {}
+        self._confirm_lock = threading.Lock()
 
         # State-Suffixe, für die schon eine "fehlt in state_names"-Warnung geloggt wurde
         # (vermeidet Log-Spam bei wiederholten Live-Updates desselben Suffixes).
@@ -309,6 +318,9 @@ class IoBrokerClient:
         *,
         trust_level: Optional[int],
         denied: Optional[list[str]] = None,
+        requester_name: str = "",
+        wait_confirm: bool = False,
+        offline: Optional[list[str]] = None,
     ) -> int:
         """
         Löst einen Intent auf und setzt die entsprechenden States per MQTT.
@@ -318,6 +330,16 @@ class IoBrokerClient:
           damit kein Aufrufer die Prüfung versehentlich auslässt.
         denied: wird um die Labels der Geräte ergänzt, die wegen zu niedrigem Trust-Level
           übersprungen wurden — bei Sammelbefehlen werden nur diese ausgelassen.
+        requester_name: Anzeigename des aufgelösten Sprechers (VoiceID oder linked Account),
+          leer wenn unbekannt/Gast — für personalisierte Antwort-Varianten (#373). Fließt beim
+          Satelliten-Pfad in die Pending-Entry (für _fire_feedback), beim Text-Pfad direkt in
+          den Aufrufer zurück (der baut die Antwort selbst).
+        wait_confirm: synchron bis zu self._confirm_timeout auf ioBroker-Bestätigung warten
+          (#373, Text-Kanäle — der Satelliten-Pfad bekommt sein Feedback weiterhin asynchron
+          über satellite_device/_feedback_cb, beide Mechanismen können unabhängig voneinander
+          für denselben Aufruf aktiv sein).
+        offline: wird um die Labels der Geräte ergänzt, die innerhalb des Timeouts nicht
+          bestätigt haben (nur relevant mit wait_confirm=True).
         """
         if intent.name == "Unknown":
             log.debug("execute: Intent 'Unknown', nichts zu tun.")
@@ -371,6 +393,7 @@ class IoBrokerClient:
 
         count = 0
         deadline = time.monotonic() + self._confirm_timeout
+        confirm_waits: list[tuple[str, threading.Event, str]] = []
         for dev in targets:
             state_id = dev.states.get(state_key)
             if not state_id:
@@ -388,19 +411,47 @@ class IoBrokerClient:
             dev_value = value
             if state_key == "level" and intent.is_open_close and dev.inverted:
                 dev_value = 100 - dev_value
+            label = f"{dev.name} im {dev.room_display_name}"
+
+            # Bestätigung *vor* dem eigentlichen set_state() registrieren (#373) — sonst
+            # könnte eine sehr schnelle/synchrone Bestätigung ankommen, bevor überhaupt
+            # jemand zuhört, und würde stillschweigend verloren gehen.
+            confirm_event = None
+            if wait_confirm:
+                confirm_event = threading.Event()
+                with self._confirm_lock:
+                    self._confirm_waiters[state_id] = {"expected": dev_value, "event": confirm_event, "success": False}
+            if satellite_device and self._feedback_cb:
+                with self._pending_lock:
+                    self._pending[state_id] = {
+                        "expected":       dev_value,
+                        "device":         satellite_device,
+                        "deadline":       deadline,
+                        "label":          label,
+                        "confirmed":      False,
+                        "requester_name": requester_name,
+                    }
+
             if self.set_state(state_id, dev_value):
                 count += 1
-                # Bestätigung registrieren wenn Feedback gewünscht
+                if wait_confirm:
+                    confirm_waits.append((state_id, confirm_event, label))
+            else:
+                # Befehl kam nie raus — nichts zu bestätigen, Registrierung zurückrollen.
+                if wait_confirm:
+                    with self._confirm_lock:
+                        self._confirm_waiters.pop(state_id, None)
                 if satellite_device and self._feedback_cb:
-                    label = f"{dev.name} im {dev.room_display_name}"
                     with self._pending_lock:
-                        self._pending[state_id] = {
-                            "expected":  dev_value,
-                            "device":    satellite_device,
-                            "deadline":  deadline,
-                            "label":     label,
-                            "confirmed": False,
-                        }
+                        self._pending.pop(state_id, None)
+
+        for state_id, event, label in confirm_waits:
+            confirmed = event.wait(max(0.0, deadline - time.monotonic()))
+            with self._confirm_lock:
+                waiter = self._confirm_waiters.pop(state_id, None)
+            if not confirmed or not (waiter and waiter["success"]):
+                if offline is not None:
+                    offline.append(label)
 
         return count
 
@@ -752,7 +803,7 @@ class IoBrokerClient:
         device.current[canon] = value
         log.debug(f"Cache: {device.name}.{canon} = {value!r}")
 
-        # Pending-Confirmation prüfen
+        # Pending-Confirmation prüfen (Satelliten-Pfad, asynchron)
         with self._pending_lock:
             pending = self._pending.pop(state_id, None)
 
@@ -765,6 +816,14 @@ class IoBrokerClient:
                 log.warning(f"Bestätigung: {pending['label']} = {value!r}, erwartet {pending['expected']!r} ✗")
                 self._fire_feedback(pending["device"], False, pending, remaining=0)
 
+        # Confirm-Waiter prüfen (Text-Kanäle, synchron, #373) — unabhängig vom Pending-Zweig
+        # oben, execute(wait_confirm=True) wartet direkt auf dieses Event.
+        with self._confirm_lock:
+            waiter = self._confirm_waiters.get(state_id)
+            if waiter:
+                waiter["success"] = (value == waiter["expected"])
+                waiter["event"].set()
+
     def _count_pending(self, satellite_device: str) -> int:
         """Gibt die Anzahl noch ausstehender Confirmations für einen Satelliten zurück."""
         with self._pending_lock:
@@ -776,7 +835,7 @@ class IoBrokerClient:
             log.debug(f"Feedback zurückgestellt: noch {remaining} ausstehende States.")
             return
         if success:
-            text = "ok"
+            text = responses.success("ok", pending.get("requester_name", ""))
         else:
             text = f"{pending['label']} konnte nicht geschaltet werden."
         self._feedback_cb(satellite_device, success, text)
@@ -802,7 +861,7 @@ class IoBrokerClient:
                         self._feedback_cb(
                             pending["device"],
                             False,
-                            f"{pending['label']} antwortet nicht — möglicherweise offline.",
+                            responses.offline(f"{pending['label']} antwortet nicht — möglicherweise offline."),
                         )
 
     def control_direct(self, device_id: str, state_key: str, raw_value: str, *, trust_level: Optional[int]) -> bool:
