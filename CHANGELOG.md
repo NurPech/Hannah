@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.92.1 (2026-09-28)
+### Hannah Proxy
+
+* Fixed: every proxy release published since 2026-09-19 shipped the binary under the wrong file name, so auto-deployed proxies kept silently running their last manually installed build instead of actually updating (Refs #372)
+
 ## 0.92.0 (2026-09-28)
 ### Hannah Core
 
