@@ -84,8 +84,8 @@ curl -sf \
     "${UPDATE_SERVER_URL}/releases/${LATEST_VERSION}?channel=${PROXY_CHANNEL}"
 
 tar -xzf "$TMPTAR" -C "$TMPDIR"
-BINARY="${TMPDIR}/hannah-proxy"
-[[ -f "$BINARY" ]] || err "hannah-proxy not found in downloaded archive."
+BINARY="${TMPDIR}/hannah-proxy-linux-${ARCH}"
+[[ -f "$BINARY" ]] || err "hannah-proxy-linux-${ARCH} not found in downloaded archive."
 file "$BINARY" | grep -q ELF || err "Extracted file is not a valid ELF binary."
 chmod +x "$BINARY"
 
@@ -112,26 +112,13 @@ if [[ -f "${TMPDIR}/config.example.yaml" ]]; then
 fi
 
 # ── systemd unit ──────────────────────────────────────────────────────────────
-# Prefer the unit from the release archive; fall back to one next to install.sh (repo checkout).
-# When piped into bash (curl ... | bash) there is no script file, so BASH_SOURCE[0] is unset.
-UNIT_DIRS=("$TMPDIR")
-if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
-    UNIT_DIRS+=("$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")
-fi
-UNIT_SRC=""
-for dir in "${UNIT_DIRS[@]}"; do
-    if [[ -f "${dir}/${SERVICE_NAME}.service" ]]; then
-        UNIT_SRC="${dir}/${SERVICE_NAME}.service"
-        break
-    fi
-done
-if [[ -n "$UNIT_SRC" ]]; then
-    install -m 644 "$UNIT_SRC" "$SERVICE_FILE"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/hannah-proxy.service" ]]; then
+    install -m 644 "${SCRIPT_DIR}/hannah-proxy.service" "$SERVICE_FILE"
     ok "Service unit installed to ${SERVICE_FILE}"
-elif [[ -f "$SERVICE_FILE" ]]; then
-    info "No ${SERVICE_NAME}.service in archive or next to install.sh — keeping existing ${SERVICE_FILE}."
 else
-    err "No ${SERVICE_NAME}.service in archive or next to install.sh, and none installed yet."
+    info "No hannah-proxy.service found next to install.sh — skipping unit install."
+    info "Download it from the repo and re-run, or manage the service manually."
 fi
 
 systemctl daemon-reload
