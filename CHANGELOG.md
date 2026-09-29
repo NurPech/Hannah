@@ -4,6 +4,22 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.93.3 (2026-09-29)
+### Hannah Proxy
+
+* Fixed: the native install script failed with `hannah-proxy-linux-<arch> not found in downloaded archive` since release 0.92.1, because it looked for a file name the release archive no longer uses (Refs #380)
+* Fixed: installing the proxy with the documented one-liner (`curl … | sudo bash`) never installed the systemd service — the install script looked for the unit file next to itself, which doesn't exist when it is piped into bash. The unit now ships inside the release archive and is installed from there (Refs #381)
+
+## 0.93.2 (2026-09-29)
+### Hannah Core
+
+* Fixed: live updates from ioBroker for states with an unusual name (e.g. a custom air-quality or power sensor) no longer freeze at their first value — Core now uses the role the adapter already resolved instead of guessing it from the state name. Requires an adapter that sends it (hannah-proto 4.8 or newer); older adapters behave as before (Refs #374)
+
+### AutoDeploy
+
+* Fixed: the example config (`autodeploy.yaml.example`) pointed the `post_install` commands at a shared venv the install scripts never create — they now use each component's own venv (`/opt/hannah/<component>/venv`) (Refs #376)
+
 ## 0.93.1 (2026-09-29)
 ### Hannah Core
 

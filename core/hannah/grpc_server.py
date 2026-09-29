@@ -1648,7 +1648,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     which = msg.WhichOneof("payload")
                     if which == "state_update" and self._on_agent_state:
                         u = msg.state_update
-                        self._on_agent_state(u.state_id, u.value, u.ack, u.ts)
+                        self._on_agent_state(u.state_id, u.value, u.ack, u.ts, u.canonical_key)
                     elif which == "resident_update" and self._on_agent_resident:
                         r = msg.resident_update
                         self._on_agent_resident(

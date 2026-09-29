@@ -498,7 +498,39 @@ class TestHandleStateUpdate:
         # (config.yaml missing a state_names entry the code already expects)
         # is what caused the live air-quality values to freeze in production.
         assert "voc_equiv" in caplog.text
-        assert "state_names" in caplog.text
+        assert "DEFAULT_IOBROKER_STATE_NAMES" in caplog.text
+
+    def test_canonical_key_updates_cache_despite_unmapped_suffix(self, client, caplog):
+        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
+        dev = self._device(device_id)
+        dev.current["voc_equiv"] = 0.5
+        client._devices_by_id[device_id] = dev
+
+        with caplog.at_level("WARNING"):
+            client.handle_state_update(f"{device_id}.tvoc", "0.95", "voc_equiv")
+
+        assert dev.current["voc_equiv"] == 0.95
+        assert "tvoc" not in caplog.text
+
+    def test_canonical_key_takes_priority_over_suffix(self, client):
+        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
+        dev = self._device(device_id)
+        client._devices_by_id[device_id] = dev
+
+        client.handle_state_update(f"{device_id}.iaq", "98", "co2_equiv")
+
+        assert dev.current["co2_equiv"] == 98
+        assert "iaq" not in dev.current
+
+    @pytest.mark.parametrize("empty_key", [None, ""])
+    def test_empty_canonical_key_falls_back_to_suffix(self, client, empty_key):
+        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
+        dev = self._device(device_id)
+        client._devices_by_id[device_id] = dev
+
+        client.handle_state_update(f"{device_id}.iaq", "98", empty_key)
+
+        assert dev.current["iaq"] == 98
 
     def test_unmapped_suffix_warning_logged_only_once(self, client, caplog):
         device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
