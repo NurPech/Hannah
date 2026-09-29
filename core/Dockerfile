@@ -2,7 +2,7 @@
 # build-essential is only needed to compile C-extension deps (e.g. miniaudio,
 # which has no prebuilt wheel yet for this Python version) — isolated here so
 # gcc/make/headers never end up in the runtime image.
-FROM python:3.14-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 AS builder
+FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -12,7 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ---- runtime ----
-FROM python:3.14-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2
+FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
 # stdout is block-buffered when it's not a TTY (always true in a container),
 # so print() output (e.g. the first-run admin account announcement in
@@ -54,5 +54,12 @@ EXPOSE 50051
 EXPOSE 7776
 
 VOLUME ["/app/activity_audio", "/app/audio_dumps", "/app/data"]
+
+# Healthy once the gRPC server (started last in main()) accepts connections, so
+# `depends_on: condition: service_healthy` in a compose file waits for a Core
+# that is actually ready. python is the only tool guaranteed in this slim image.
+# start-period covers the faster-whisper model load on a cold start.
+HEALTHCHECK --interval=5s --timeout=5s --start-period=60s --retries=12 \
+    CMD ["python", "-c", "import socket; socket.create_connection(('localhost', 50051), 2)"]
 
 CMD ["python", "main.py", "-c", "/etc/hannah/config.yaml"]

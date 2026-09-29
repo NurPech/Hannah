@@ -1858,8 +1858,8 @@ def main():
         on_change=_refresh_watch_more,
     )
 
-    def _on_state_update(state_id: str, raw: str) -> None:
-        iobroker.handle_state_update(state_id, raw)
+    def _on_state_update(state_id: str, raw: str, canonical_key: str = "") -> None:
+        iobroker.handle_state_update(state_id, raw, canonical_key)
         trigger_engine.on_state_update(state_id, raw)
         presence_manager.on_state_update(state_id, raw)
 
@@ -2046,8 +2046,8 @@ def main():
 
     # ── ioBroker-Adapter gRPC-Callbacks ──────────────────────────────────────
 
-    def _on_agent_state(state_id: str, value: str, *_):
-        _on_state_update(state_id, value)
+    def _on_agent_state(state_id: str, value: str, _ack=None, _ts=None, canonical_key: str = ""):
+        _on_state_update(state_id, value, canonical_key)
         # Route to handlers that expect slash-notation topics and plain string values
         topic = state_id.replace(".", "/")
         raw = _json_to_raw(value)

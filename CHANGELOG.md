@@ -4,6 +4,28 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.93.2 (2026-09-29)
+### Hannah Core
+
+* Fixed: live updates from ioBroker for states with an unusual name (e.g. a custom air-quality or power sensor) no longer freeze at their first value — Core now uses the role the adapter already resolved instead of guessing it from the state name. Requires an adapter that sends it (hannah-proto 4.8 or newer); older adapters behave as before (Refs #374)
+
+### AutoDeploy
+
+* Fixed: the example config (`autodeploy.yaml.example`) pointed the `post_install` commands at a shared venv the install scripts never create — they now use each component's own venv (`/opt/hannah/<component>/venv`) (Refs #376)
+
+## 0.93.1 (2026-09-29)
+### Hannah Core
+
+* Added: the Core Docker image now reports itself as healthy once it accepts connections, so other services in a Compose file can wait for it with `depends_on: hannah-core: condition: service_healthy` instead of starting before Core is ready (Refs #375)
+
+### Telegram
+
+* Changed: updated the Docker base image (Python 3.14-slim) to the latest digest
+
+### VoiceID
+
+* Changed: updated the Docker base image (Python 3.14-slim) to the latest digest
+
 ## 0.93.0 (2026-09-28)
 ### Hannah Core
 

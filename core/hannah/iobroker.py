@@ -14,13 +14,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-# Suffix→canon-Tabelle für handle_state_update() (Live-Updates): AgentStateUpdate hat
-# strukturell nie ein canonical_key-Feld gehabt (das existiert nur auf AgentDevice,
-# siehe handle_device_snapshot), unabhängig von Adapter-/Proto-Version — kein Fallback
-# für alte Adapter, sondern der einzige Übersetzungsweg für diesen Pfad. Vorher aus
-# Settings/DB editierbar (siehe deploy/migrate_config_settings.py), jetzt nur noch
-# Code-Konstante, da der Adapter die Rolle selbst aus common.role auflöst und kein
-# Nutzer-Mapping mehr nötig ist.
+# Suffix→canon-Tabelle für handle_state_update() (Live-Updates): Fallback für Adapter,
+# die in AgentStateUpdate kein canonical_key mitschicken (Feld erst seit hannah-proto
+# 4.8; ältere Adapter senden es nicht). Neuere Adapter liefern den Key direkt, dann wird
+# diese Tabelle nicht befragt. Vorher aus Settings/DB editierbar (siehe
+# deploy/migrate_config_settings.py), jetzt nur noch Code-Konstante, da der Adapter die
+# Rolle selbst aus common.role auflöst und kein Nutzer-Mapping mehr nötig ist.
 DEFAULT_IOBROKER_STATE_NAMES: dict = {
     "on": "on", "level": "level", "color": "color", "colorTemp": "colorTemp",
     "current": "current", "expected": "expected", "illuminance": "illuminance",
@@ -771,11 +770,14 @@ class IoBrokerClient:
             return f"{name} im {room} ist {status} ({power} W)."
         return f"{name} im {room} ist {status}."
 
-    def handle_state_update(self, state_id: str, raw: str):
+    def handle_state_update(self, state_id: str, raw: str, canonical_key: Optional[str] = None):
         """
         Callback für eingehende State-Updates aus ioBroker.
         Parst den Rohwert, schreibt ihn in den Device-Cache und prüft Pending-Confirmations.
         States ohne Raum landen im _state_cache.
+
+        canonical_key kommt aus AgentStateUpdate (hannah-proto >= 4.8); fehlt er (None
+        oder leer, ältere Adapter), wird er über den State-Suffix aufgelöst.
         """
         if state_id in self._state_cache:
             self._state_cache[state_id] = self._parse_payload(raw)
@@ -788,13 +790,14 @@ class IoBrokerClient:
         if not device:
             return
 
-        canon = self._suffix_to_canon.get(state_suffix)
+        canon = canonical_key or self._suffix_to_canon.get(state_suffix)
         if not canon:
             if state_suffix not in self._warned_suffixes:
                 self._warned_suffixes.add(state_suffix)
                 log.warning(
                     f"Unbekannter State-Suffix '{state_suffix}' (state_id={state_id}) — "
-                    f"fehlt in config.yaml's iobroker.state_names, Live-Update wird verworfen "
+                    f"Adapter liefert kein canonical_key und der Suffix fehlt in "
+                    f"DEFAULT_IOBROKER_STATE_NAMES, Live-Update wird verworfen "
                     f"(Wert friert auf dem letzten Snapshot ein)."
                 )
             return
