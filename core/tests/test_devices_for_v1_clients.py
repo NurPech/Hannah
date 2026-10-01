@@ -118,8 +118,16 @@ class TestGetDevices:
 
         assert light.category == "light"
         assert sorted(light.states) == ["level", "on"]
-        assert dict(light.current) == {"on": "true", "level": "60"}
+        # hannah.v1 is frozen: booleans stay in the format of the old device tree (str(bool)),
+        # Telegram compares against "True" (#388)
+        assert dict(light.current) == {"on": "True", "level": "60"}
         assert light.state_types["on"] == pb1.StateType.BOOLEAN
+
+    def test_a_false_boolean_is_false_not_unknown(self, channel):
+        room = pb1_grpc.HannahServiceStub(channel).GetDevices(Empty(), timeout=5).rooms[0]
+        door = next(d for d in room.devices if d.name == "Balkontür")
+
+        assert door.current["open"] == "False"
 
     def test_a_climate_device_is_a_v1_climate_with_enum_states(self, channel):
         room = pb1_grpc.HannahServiceStub(channel).GetDevices(Empty(), timeout=5).rooms[0]

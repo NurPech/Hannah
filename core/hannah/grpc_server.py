@@ -1129,7 +1129,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         der alte Gerätebaum."""
         devices = self._get_typed_devices() if self._get_typed_devices else []
         if devices:
-            return translate(self._typed_devices_response(devices), "v1", strict=False)
+            return grpc_v1.with_v1_state_format(
+                translate(self._typed_devices_response(devices), "v1", strict=False)
+            )
         return grpc_v1.get_devices_response(self.device_snapshot())
 
     def _typed_devices_response(self, devices: list) -> "pb.GetDevicesResponse":

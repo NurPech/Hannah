@@ -4,6 +4,15 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.94.1 (2026-10-01)
+### Hannah Core
+
+* Fixed: in the Telegram device menu (`/haus`) every device showed a grey status dot and the control menu always offered "switch on", whatever the device was doing. Core now reports on/off and open/closed values to `hannah.v1` clients (Telegram, WebUI) in the format those clients expect again (Refs #388)
+
+### VoiceID
+
+* Changed: the dependency of `hannah-grpc-lib` is updated to 0.7.0
+
 ## 0.94.0 (2026-10-01)
 ### Hannah Core
 

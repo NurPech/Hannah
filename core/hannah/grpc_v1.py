@@ -74,6 +74,19 @@ def get_devices_response(rooms_raw: list) -> "pb1.GetDevicesResponse":
     return pb1.GetDevicesResponse(rooms=rooms)
 
 
+def with_v1_state_format(response: "pb1.GetDevicesResponse") -> "pb1.GetDevicesResponse":
+    """Boolean-States im Format des alten Gerätebaums (`"True"`/`"False"`, #388).
+
+    Die Lib-Übersetzung schreibt `"true"`/`"false"`; v1-Clients (Telegram) vergleichen gegen
+    `str(bool)`. hannah.v1 ist eingefroren, also gilt das alte Format weiter."""
+    for room in response.rooms:
+        for device in room.devices:
+            for key, state_type in device.state_types.items():
+                if state_type == pb1.StateType.BOOLEAN and key in device.current:
+                    device.current[key] = "True" if device.current[key].lower() == "true" else "False"
+    return response
+
+
 # ------------------------------------------------------------------
 # AgentConnect: Session eines v1-Adapters
 
