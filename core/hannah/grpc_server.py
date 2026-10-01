@@ -18,17 +18,19 @@ import grpc
 from werkzeug.security import generate_password_hash
 
 from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied
+from hannah.typed_devices import device_info_to_pb, slot_value_from_pb
 from hannah.unknown_fields import collect_unknown_fields
 from hannah.satellite_manager import SatelliteManager, SatellitePermissionError
 from hannah.user_manager import UserManager
-from hannah_proto.v1 import hannah_pb2 as pb
-from hannah_proto.v1 import hannah_pb2_grpc as pb_grpc
+from hannah_proto.v2 import hannah_pb2 as pb
+from hannah_proto.v2 import hannah_pb2_grpc as pb_grpc
+from hannah_grpc.translate import translate
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import (
     ProtocolVersionInterceptor, OutdatedComponentInterceptor, read_proto_version,
 )
-from hannah.grpc_legacy import add_legacy_servicer_to_server, LEGACY_SERVICE
+from hannah import grpc_v1
 from hannah.link_tokens import LinkTokenStore, LOOKUP_EXPIRED, LOOKUP_OK
 from hannah.component_registry import (
     ComponentRegistry, KIND_CHANNEL, KIND_LOG_COLLECTOR, EVENT_REGISTERED,
@@ -162,6 +164,30 @@ def _agent_ack(msg) -> "pb.AgentAck":
     )
 
 
+class _V2AgentSession:
+    """Ein verbundener hannah.v2-Adapter. Gleiche Schnittstelle wie grpc_v1.V1AgentSession:
+    Core legt v2-Befehle mit `put()` ab, `get()` liefert sie in der Generation des Adapters."""
+
+    generation = "v2"
+
+    def __init__(self):
+        self._queue: queue.Queue = queue.Queue()
+
+    def put(self, command, presence_state=None) -> None:
+        # presence_state gibt es in v2 nicht mehr (AgentSetResident kennt nur `action`)
+        self._queue.put(command)
+
+    def get(self, timeout: float):
+        return self._queue.get(timeout=timeout)
+
+    def close(self) -> None:
+        self._queue.put(None)
+
+    def decode(self, msg):
+        which = msg.WhichOneof("payload")
+        return which, (getattr(msg, which) if which else None)
+
+
 def _peer_host(peer: str) -> str:
     """Host part of a gRPC peer string ("ipv4:1.2.3.4:5678", "ipv6:[::1]:5678"), else ""."""
     scheme, _, address = peer.partition(":")
@@ -210,6 +236,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         on_proxy_discovery: Optional[Callable[[str, int], None]] = None,  # (host, port) — None args = restore own address
         get_devices: Optional[Callable[[], list]] = None,           # → [{key,name,devices:[...]}]
         control_device: Optional[Callable[[str, str, str, int], bool]] = None,  # (device_id, state, value, trust_level) → bool, wirft TrustLevelDenied
+        control_slot: Optional[Callable[[str, str, object, int], object]] = None,  # (device_id, slot_id, value, trust_level) → SlotWrite, wirft TrustLevelDenied/ValueError (#386)
+        get_typed_devices: Optional[Callable[[], list]] = None,     # () → [TypedDevice] der Registry (#386)
         enroll_voiceprint: Optional[Callable[[str, bytes, int], tuple]] = None,  # (user_id, pcm, rate) → (ok, msg)
         start_voice_enrollment: Optional[Callable[[int, int, str], tuple]] = None,  # (requestor_id, user_id, satellite_id) → (ok, msg)
         on_satellite_change: Optional[Callable[[dict], None]] = None,           # ({device: room}) bei Register/Disconnect via Proxy
@@ -219,7 +247,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         on_agent_connect: Optional[Callable[[], None]] = None,                       # called on each new adapter connection
         on_agent_set_resident: Optional[Callable[[str, int, pb.ResidentType], None]] = None,    # (resident_id, presence_state, type)
         on_agent_satellite_control: Optional[Callable[[str, str, object], None]] = None,  # (room, key, value)
-        on_agent_device_snapshot: Optional[Callable[[Iterable[pb.AgentDevice]], None]] = None,
+        on_agent_device_snapshot: Optional[Callable[[Iterable], None]] = None,          # hannah.v1-AgentDevice (State-basierter Pfad der v1-Adapter)
+        on_agent_typed_snapshot: Optional[Callable[[Iterable[pb.TypedDevice]], None]] = None,  # typisierte Geräte eines v2-Adapters (#385)
+        on_agent_slot_update: Optional[Callable[[pb.SlotUpdate], None]] = None,
+        on_agent_device_availability: Optional[Callable[[pb.DeviceAvailability], None]] = None,
         on_agent_send_residents: Optional[Callable[[Iterable[pb.AgentResident]], None]] = None,
         on_agent_room_snapshot: Optional[Callable[[Iterable[pb.AgentRoom]], None]] = None,
         on_weather_update: Optional[Callable[[pb.AgentWeatherUpdate], None]] = None,
@@ -291,6 +322,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_proxy_discovery    = on_proxy_discovery or (lambda *_: None)
         self._get_devices           = get_devices or (lambda: [])
         self._control_device        = control_device or (lambda *_: False)
+        self._control_slot          = control_slot
+        self._get_typed_devices     = get_typed_devices
         self._enroll_voiceprint     = enroll_voiceprint
         self._start_voice_enrollment = start_voice_enrollment or (lambda *_: (False, "Nicht konfiguriert."))
         self._on_satellite_change   = on_satellite_change
@@ -301,6 +334,10 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_agent_set_resident      = on_agent_set_resident
         self._on_agent_satellite_control = on_agent_satellite_control
         self._on_agent_device_snapshot    = on_agent_device_snapshot
+        self._on_agent_typed_snapshot     = on_agent_typed_snapshot
+        self._on_agent_slot_update        = on_agent_slot_update
+        self._on_agent_device_availability = on_agent_device_availability
+        self._warned_typed_unconsumed     = False
         self._on_agent_send_residents     = on_agent_send_residents
         self._on_agent_room_snapshot      = on_agent_room_snapshot
         self._on_weather_update           = on_weather_update
@@ -371,7 +408,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._proxy_revert_timer: Optional[threading.Timer] = None
 
         # Per-connection command queues for active agent streams
-        self._agent_queues: list[queue.Queue] = []
+        self._agent_sessions: list = []  # _V2AgentSession | grpc_v1.V1AgentSession
         self._agent_lock = threading.Lock()
 
         # Single queue for the connected Timer Service (at most one at a time)
@@ -1072,46 +1109,99 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_trigger_satellite_restart(device)
         return pb.StatusResponse(ok=True, message=f"Neustart-Kommando gesendet an {device}")
 
-    def GetDevices(self, _request, _context):
-        rooms_raw = self._get_devices()
-        rooms_pb = []
-        for r in rooms_raw:
-            devices_pb = [
-                pb.DeviceInfo(
-                    id=d["id"],
-                    name=d["name"],
-                    category=d["category"],
-                    states=d["states"],
-                    current=d["current"],
-                    state_types=d["state_types"],
-                    state_enum_values={
-                        k: pb.EnumValues(values=v) for k, v in d["state_enum_values"].items()
-                    },
-                    state_writable=d["state_writable"],
-                )
-                for d in r["devices"]
-            ]
-            rooms_pb.append(pb.RoomInfo(key=r["key"], name=r["name"], devices=devices_pb))
-        return pb.GetDevicesResponse(rooms=rooms_pb)
+    def device_snapshot(self) -> list:
+        """Geräteliste pro Raum in der State-basierten Form von Core, für Steuer-Menüs."""
+        return self._get_devices()
 
-    def ControlDevice(self, request, _context):
-        # #366: anfragender User wie bei SubmitText über linked_accounts; ohne source_*
-        # (alter Client) oder unverknüpft = Gast.
+    def GetDevices(self, _request, _context):
+        # Geräte aus der typisierten Registry (Klasse + Slots mit Werten). Ist sie leer oder
+        # nicht verdrahtet, entsteht die Liste in der State-basierten hannah.v1-Form und wird
+        # mit den Tabellen der Lib nach hannah.v2 übersetzt. hannah.v1-Clients bekommen die
+        # State-basierte Liste unverändert (grpc_v1).
+        devices = self._get_typed_devices() if self._get_typed_devices else []
+        if devices:
+            return self._typed_devices_response(devices)
+        return translate(grpc_v1.get_devices_response(self.device_snapshot()), "v2", strict=False)
+
+    def devices_response_v1(self):
+        """GetDevices für hannah.v1-Clients (Telegram, WebUI, ...): die typisierte Registry, mit den
+        Tabellen der Lib in die State-basierte Form übersetzt (#387). Ist die Registry leer, gilt
+        der alte Gerätebaum."""
+        devices = self._get_typed_devices() if self._get_typed_devices else []
+        if devices:
+            return translate(self._typed_devices_response(devices), "v1", strict=False)
+        return grpc_v1.get_devices_response(self.device_snapshot())
+
+    def _typed_devices_response(self, devices: list) -> "pb.GetDevicesResponse":
+        try:
+            room_names = {r["room_id"]: r["display_name"] for r in self._get_rooms()}
+        except Exception as exc:
+            log.warning(f"[grpc] GetDevices: Raumnamen nicht lesbar ({exc}), es gelten die Raum-IDs")
+            room_names = {}
+        by_room: dict[str, list] = {}
+        for device in devices:
+            by_room.setdefault(device.room, []).append(device)
+        return pb.GetDevicesResponse(rooms=[
+            pb.RoomInfo(
+                key=room_id, name=room_names.get(room_id) or room_id,
+                devices=[device_info_to_pb(d) for d in sorted(by_room[room_id], key=lambda d: d.name)],
+            )
+            for room_id in sorted(by_room)
+        ])
+
+    def _requester_trust(self, source_service: str, source_user_id: str):
+        """(User, Trust-Level) des anfragenden Users wie bei SubmitText über linked_accounts (#366);
+        ohne source_* (alter Client) oder unverknüpft = Gast."""
         user = None
-        if request.source_service and request.source_user_id:
-            user = self._user_manager.get_user_by_linked_account(request.source_service, request.source_user_id)
-        trust_level = user.trust_level if user else GUEST_TRUST_LEVEL
+        if source_service and source_user_id:
+            user = self._user_manager.get_user_by_linked_account(source_service, source_user_id)
+        return user, (user.trust_level if user else GUEST_TRUST_LEVEL)
+
+    def control_device_state(
+        self, device_id: str, state: str, value: str, source_service: str, source_user_id: str,
+    ) -> tuple[bool, str]:
+        """ControlDevice für beide Generationen: State-Key + Wert als String → (ok, Meldung)."""
+        user, trust_level = self._requester_trust(source_service, source_user_id)
         log.info(
-            f"[grpc] ControlDevice von {request.source_service}:{request.source_user_id}"
+            f"[grpc] ControlDevice von {source_service}:{source_user_id}"
             f" (user={user.id if user else 'anonym'}, trust={trust_level}):"
-            f" device={request.device_id!r} state={request.state!r} value={request.value!r}"
+            f" device={device_id!r} state={state!r} value={value!r}"
         )
         try:
-            ok = self._control_device(request.device_id, request.state, request.value, trust_level)
+            ok = self._control_device(device_id, state, value, trust_level)
         except TrustLevelDenied:
-            return pb.StatusResponse(ok=False, message=TRUST_DENIED_TEXT)
-        msg = "OK" if ok else "Gerät oder State nicht gefunden"
-        return pb.StatusResponse(ok=ok, message=msg)
+            return False, TRUST_DENIED_TEXT
+        return ok, "OK" if ok else "Gerät oder State nicht gefunden"
+
+    def ControlDevice(self, request, _context):
+        # Slot-Steuerung von hannah.v2 gegen die typisierte Registry (#386). Kennt sie das Gerät
+        # nicht, bleibt der bisherige Weg: die Lib übersetzt Slot-ID + typisierten Wert in den
+        # State-Key und den Wert als String für den State-basierten Gerätebaum.
+        if self._control_slot is not None:
+            user, trust_level = self._requester_trust(request.source_service, request.source_user_id)
+            log.info(
+                f"[grpc] ControlDevice von {request.source_service}:{request.source_user_id}"
+                f" (user={user.id if user else 'anonym'}, trust={trust_level}):"
+                f" device={request.device_id!r} slot={request.slot_id!r}"
+            )
+            try:
+                result = self._control_slot(
+                    request.device_id, request.slot_id, slot_value_from_pb(request.value), trust_level,
+                )
+            except TrustLevelDenied:
+                return pb.StatusResponse(ok=False, message=TRUST_DENIED_TEXT)
+            except ValueError as exc:
+                return pb.StatusResponse(ok=False, message=f"Ungültiger Wert: {exc}")
+            if result.found:
+                return pb.StatusResponse(
+                    ok=result.sent,
+                    message="OK" if result.sent else "Slot nicht schreibbar oder kein Adapter verbunden",
+                )
+        legacy = translate(request, "v1")
+        ok, message = self.control_device_state(
+            legacy.device_id, legacy.state, legacy.value, legacy.source_service, legacy.source_user_id,
+        )
+        return pb.StatusResponse(ok=ok, message=message)
 
     # ------------------------------------------------------------------
     # Car
@@ -1385,42 +1475,52 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
     def agent_connected(self) -> bool:
         """True if at least one adapter stream is active."""
         with self._agent_lock:
-            return len(self._agent_queues) > 0
+            return len(self._agent_sessions) > 0
 
     def agent_set_state(self, state_id: str, value: str) -> bool:
         """Push SetState command to all connected adapters. Returns True if at least one is active."""
         cmd = pb.AgentCommand(set_state=pb.AgentSetState(state_id=state_id, value=value))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
+
+    def agent_set_slot(self, device_id: str, slot_id: str, value: "pb.SlotValue") -> bool:
+        """Push SetSlot to the connected hannah.v2 adapters (#386). A hannah.v1 adapter doesn't
+        know typed devices, it is addressed with SetState. Returns True if at least one v2
+        adapter is connected."""
+        cmd = pb.AgentCommand(set_slot=pb.SetSlot(device_id=device_id, slot_id=slot_id, value=value))
+        with self._agent_lock:
+            targets = [session for session in self._agent_sessions if session.generation == "v2"]
+            for session in targets:
+                session.put(cmd)
+            return len(targets) > 0
 
     def agent_watch_more(self, state_ids: list[str]) -> bool:
         """Push WatchMore request to all connected adapters."""
         cmd = pb.AgentCommand(watch_more=pb.AgentWatchMore(state_ids=state_ids))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
 
     def agent_set_resident(
         self, resident_id: str, presence_state: int, resident_type: pb.ResidentType,
         action: int = pb.RESIDENT_PRESENCE_ACTION_UNSPECIFIED,
     ) -> bool:
         """Push SetResident command to all connected adapters.
-        action (hannah-proto#7/hannah#309): preferred single-flag write; presence_state
-        stays populated as the legacy absolute-value fallback for adapters older than
-        compat_version 2, which don't understand action and ignore it entirely."""
+        action (hannah-proto#7/hannah#309): single-flag write, the only form hannah.v2 has.
+        presence_state is the legacy absolute value, it only reaches hannah.v1 adapters
+        (older ones don't understand action and ignore it entirely)."""
         cmd = pb.AgentCommand(set_resident=pb.AgentSetResident(
             resident_id=resident_id,
-            presence_state=presence_state,
             type=resident_type,
             action=action,
         ))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd, presence_state=presence_state)
+            return len(self._agent_sessions) > 0
 
     def agent_set_resident_mood(self, resident_id: str, mood: int, resident_type: pb.ResidentType) -> bool:
         """Push SetResidentMood command to all connected adapters."""
@@ -1430,9 +1530,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             type=resident_type,
         ))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
 
     def get_proxy_device_id(self, key: str) -> str:
         """Returns the device_id for a proxy satellite key (which IS the device_id now)."""
@@ -1453,9 +1553,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             kwargs["display_name"] = display_name
         cmd = pb.AgentCommand(satellite_update=pb.AgentSatelliteUpdate(**kwargs))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
 
     def agent_firmware_event(self, device: str, version: str, update_available: bool = False) -> bool:
         """Push a firmware version update to all connected adapters."""
@@ -1463,9 +1563,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             device=device, version=version, update_available=update_available,
         ))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
 
     def agent_ble_update(self, label: str, mac: str, room: str, satellite: str, rssi: int) -> bool:
         """Push a BLE tag location update to all connected adapters."""
@@ -1473,9 +1573,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             label=label, mac=mac, room=room or "", satellite=satellite or "", rssi=rssi,
         ))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
 
     def agent_sensor_update(self, device: str, temperature: float, pressure: float,
                             humidity: float, iaq: float = 0.0, iaq_accuracy: int = 0,
@@ -1492,9 +1592,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             voc_equiv=voc_equiv,
         ))
         with self._agent_lock:
-            n = len(self._agent_queues)
-            for q in self._agent_queues:
-                q.put(cmd)
+            n = len(self._agent_sessions)
+            for session in self._agent_sessions:
+                session.put(cmd)
             log.debug(f"agent_sensor_update({device}): pushed to {n} adapter(s)")
             return n > 0
 
@@ -1502,9 +1602,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         """Push a satellite-deleted command to all connected adapters."""
         cmd = pb.AgentCommand(satellite_deleted=pb.AgentSatelliteDeleted(device_id=device_id, room=room))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
 
     def agent_resident_answered(self, correlation_id: str, answer: str) -> bool:
         """Push AgentResidentAnswered to all connected adapters."""
@@ -1513,9 +1613,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             answer=answer,
         ))
         with self._agent_lock:
-            for q in self._agent_queues:
-                q.put(cmd)
-            return len(self._agent_queues) > 0
+            for session in self._agent_sessions:
+                session.put(cmd)
+            return len(self._agent_sessions) > 0
 
     # ------------------------------------------------------------------
     # Timer Service (called from main.py)
@@ -1624,17 +1724,26 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         return pb.StatusResponse(ok=ok, message="" if ok else "Timer Service nicht verbunden")
 
     def AgentConnect(self, request_iterator, context):
+        """Bidirektionaler Stream zum ioBroker-Adapter (hannah.v2), siehe run_agent_stream()."""
+        yield from self.run_agent_stream(request_iterator, context, _V2AgentSession())
+
+    def run_agent_stream(self, request_iterator, context, session):
         """
-        Bidirektionaler Stream: Adapter → State-Updates, Hannah → Geräte-Befehle.
+        Bidirektionaler Stream: Adapter → State-/Geräte-Updates, Hannah → Geräte-Befehle.
 
         Der Adapter sendet AgentMessage-Frames (state_update / resident_update /
-        text_command); Hannah antwortet mit AgentCommand-Frames (set_state /
-        watch_more). Beim Disconnect werden alle gepufferten Befehle verworfen.
+        text_command / Geräte-Nachrichten); Hannah antwortet mit AgentCommand-Frames
+        (set_state / watch_more / ...). Beim Disconnect werden alle gepufferten Befehle
+        verworfen.
+
+        Gemeinsam für beide Generationen: `session` (v2-Adapter oder v1-Adapter aus
+        grpc_v1) kapselt die Wire-Form. Sie liefert pro eingehender Nachricht
+        (Payload-Name, Payload als hannah.v2) und nimmt Befehle als hannah.v2 entgegen.
+        Die State-basierten Geräte-Nachrichten eines v1-Adapters heißen `legacy_*`.
         """
-        q: queue.Queue = queue.Queue()
         with self._agent_lock:
-            self._agent_queues.append(q)
-        log.info("[grpc] ioBroker-Adapter connected")
+            self._agent_sessions.append(session)
+        log.info(f"[grpc] ioBroker-Adapter connected (hannah.{session.generation})")
 
         if self._on_agent_connect:
             try:
@@ -1645,12 +1754,14 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         def _drain():
             try:
                 for msg in request_iterator:
-                    which = msg.WhichOneof("payload")
+                    which, payload = session.decode(msg)
                     if which == "state_update" and self._on_agent_state:
-                        u = msg.state_update
-                        self._on_agent_state(u.state_id, u.value, u.ack, u.ts, u.canonical_key)
+                        self._on_agent_state(payload.state_id, payload.value, payload.ack, payload.ts, "")
+                    elif which == "legacy_state_update" and self._on_agent_state:
+                        # hannah.v1: State-Update mit canonical_key (Live-Updates der Geräte-States)
+                        self._on_agent_state(payload.state_id, payload.value, payload.ack, payload.ts, payload.canonical_key)
                     elif which == "resident_update" and self._on_agent_resident:
-                        r = msg.resident_update
+                        r = payload
                         self._on_agent_resident(
                             r.roomie_id,
                             r.name if r.HasField("name") else None,
@@ -1660,33 +1771,30 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                         )
 
                     elif which == "text_command" and self._on_agent_text_command:
-                        answer, intent = self._on_agent_text_command(msg.text_command.text)
-                        q.put(pb.AgentCommand(text_answer=pb.AgentTextAnswer(
+                        answer, intent = self._on_agent_text_command(payload.text)
+                        session.put(pb.AgentCommand(text_answer=pb.AgentTextAnswer(
                             text=answer, intent=intent,
                         )))
                     elif which == "satellite_control" and self._on_agent_satellite_control:
-                        sc = msg.satellite_control
+                        sc = payload
                         ctrl = sc.WhichOneof("control")
                         if ctrl:
                             self._on_agent_satellite_control(
                                 sc.room, ctrl, getattr(sc, ctrl),
                                 device_id=sc.device_id or "",
                             )
-                    elif which == "set_resident" and self._on_agent_set_resident:
-                        r = msg.set_resident
-                        self._on_agent_set_resident(r.resident_id, r.presence_state, r.type)
-                    elif which == "send_snapshot" and self._on_agent_device_snapshot:
-                        snapshot = msg.send_snapshot
-                        self._on_agent_device_snapshot(snapshot.devices)
+                    elif which == "legacy_snapshot" and self._on_agent_device_snapshot:
+                        self._on_agent_device_snapshot(payload.devices)
+                    elif which in ("typed_snapshot", "slot_update", "device_availability"):
+                        self._on_agent_typed_device_message(which, payload)
                     elif which == "send_residents" and self._on_agent_send_residents:
-                        r = msg.send_residents
-                        self._on_agent_send_residents(r.residents)
+                        self._on_agent_send_residents(payload.residents)
                     elif which == "send_rooms" and self._on_agent_room_snapshot:
-                        self._on_agent_room_snapshot(msg.send_rooms.rooms)
+                        self._on_agent_room_snapshot(payload.rooms)
                     elif which == "weather_update" and self._on_weather_update:
-                        self._on_weather_update(msg.weather_update)
+                        self._on_weather_update(payload)
                     elif which == "ask_resident" and self._on_agent_ask_resident:
-                        ar = msg.ask_resident
+                        ar = payload
                         threading.Thread(
                             target=self._on_agent_ask_resident,
                             args=(ar.correlation_id, ar.room, ar.question),
@@ -1698,13 +1806,13 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     # #367: erst nach der Verarbeitung acken — was nicht als unbekannt
                     # gemeldet wird, ist damit auch ausgewertet (hannah-proto#16).
                     if msg.HasField("ack_id"):
-                        q.put(pb.AgentCommand(ack=_agent_ack(msg)))
+                        session.put(pb.AgentCommand(ack=_agent_ack(msg)))
 
             except Exception as e:
                 log.debug(f"[grpc] Adapter drain ended: {e}")
                 log.debug(f"[grpc] Adapter drain ended: {e}", exc_info=True)
             finally:
-                q.put(None)
+                session.close()
 
         drain_thread = threading.Thread(target=_drain, daemon=True, name="agent-drain")
         drain_thread.start()
@@ -1712,7 +1820,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         try:
             while context.is_active():
                 try:
-                    cmd = q.get(timeout=1.0)
+                    cmd = session.get(timeout=1.0)
                 except queue.Empty:
                     continue
                 if cmd is None:
@@ -1721,9 +1829,28 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         finally:
             drain_thread.join(timeout=2)
             with self._agent_lock:
-                if q in self._agent_queues:
-                    self._agent_queues.remove(q)
-            log.info("[grpc] ioBroker-Adapter disconnected")
+                if session in self._agent_sessions:
+                    self._agent_sessions.remove(session)
+            log.info(f"[grpc] ioBroker-Adapter disconnected (hannah.{session.generation})")
+
+    def _on_agent_typed_device_message(self, which: str, payload) -> None:
+        """Typisierte Geräte eines hannah.v2-Adapters (typed_snapshot / slot_update /
+        device_availability) an die Callbacks (die Registry, #385). Ohne Empfänger werden
+        sie angenommen (und geackt), aber nicht ausgewertet."""
+        handler = {
+            "typed_snapshot": self._on_agent_typed_snapshot,
+            "slot_update": self._on_agent_slot_update,
+            "device_availability": self._on_agent_device_availability,
+        }[which]
+        if handler is None:
+            if not self._warned_typed_unconsumed:
+                self._warned_typed_unconsumed = True
+                log.warning(
+                    f"[grpc] Adapter schickt typisierte Geräte ({which}), aber es ist kein Empfänger "
+                    "verdrahtet — die Geräte bleiben Hannah unbekannt"
+                )
+            return
+        handler(payload.devices if which == "typed_snapshot" else payload)
 
     # ------------------------------------------------------------------
     # Automations
@@ -2278,8 +2405,8 @@ class GrpcServer:
         self._servicer = servicer
         self._outdated_notifier = outdated_notifier
         if "enforce_protocol_version" in cfg:
-            # #359: seit Core hannah.v1 und hannah (N−1) parallel bedient, regelt
-            # der versionierte Methodenpfad die Kompatibilität. Der Key darf in
+            # #359: seit Core zwei Generationen parallel bedient (hannah.v2 N,
+            # hannah.v1 N−1), regelt der versionierte Methodenpfad die Kompatibilität. Der Key darf in
             # bestehenden config.yaml stehen bleiben, wirkt aber nicht mehr.
             log.warning(
                 "[grpc/version] grpc.enforce_protocol_version ist veraltet und wird ignoriert — "
@@ -2291,9 +2418,9 @@ class GrpcServer:
         # elsewhere doesn't reject clients unaffected by it. A client that
         # never sends x-compat-version is treated as compat_version 1 — same
         # safe default a client predating this mechanism gets.
-        # One interceptor for both served packages (#359, #362): without explicit
-        # services it covers hannah.v1 and the N−1 hannah package, keyed by full
-        # method path, so /hannah.HannahService/... is measured against the frozen
+        # One interceptor for both served generations (#359, #362, #384): without
+        # explicit services it covers hannah.v2 and the N−1 hannah.v1, keyed by full
+        # method path, so /hannah.v1.HannahService/... is measured against the frozen
         # schema those clients were built on.
         # Enforced by default since #359: with the exact x-proto-version check
         # gone, this is the only gate keeping clients too old for a message
@@ -2303,7 +2430,7 @@ class GrpcServer:
         # #358: pro RPC gratis erkennbar (Pfad + x-proto-version, siehe
         # OutdatedComponentInterceptor) — ohne Notifier (z.B. in Tests) einfach aus.
         self._outdated_interceptor = (
-            OutdatedComponentInterceptor(outdated_notifier, legacy_prefix=f"/{LEGACY_SERVICE.full_name}/")
+            OutdatedComponentInterceptor(outdated_notifier, legacy_prefix=grpc_v1.V1_PREFIX)
             if outdated_notifier is not None else None
         )
 
@@ -2324,7 +2451,7 @@ class GrpcServer:
             interceptors=interceptors,
         )
         pb_grpc.add_HannahServiceServicer_to_server(self._servicer, self._server)
-        add_legacy_servicer_to_server(self._servicer, self._server)
+        grpc_v1.add_v1_servicer_to_server(self._servicer, self._server)
         addr = f"{self._host}:{self._port}"
         self._server.add_insecure_port(addr)
         self._server.start()

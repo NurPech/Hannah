@@ -4,8 +4,8 @@ Protocol-Version-Diagnose-Interceptor (#60, #359).
 Die externen Hannah-Clients schicken bei jedem RPC die Metadata
 `x-proto-version` mit. Bis #359 wurde sie exakt gegen Hannahs eigene
 PROTO_VERSION geprüft und bei `enforce_protocol_version: true` abgelehnt.
-Seit Core `hannah.v1` (N) und das unversionierte `hannah` (N−1) parallel
-bedient (hannah-proto#11), regelt der versionierte Methodenpfad die
+Seit Core `hannah.v2` (N) und `hannah.v1` (N−1) parallel bedient
+(hannah-proto#11, #384), regelt der versionierte Methodenpfad die
 Kompatibilität — dieser Interceptor lehnt nichts mehr ab, sondern loggt nur
 noch zur Diagnose.
 

@@ -39,6 +39,10 @@ from hannah.presence_sources import PresenceSourceManager
 from hannah.presence_manager import PresenceManager
 from hannah.grpc_server import GrpcServer, HannahServicer, make_car_parked_event, make_firmware_event, make_resident_event, make_system_notification_event, pb
 from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, IoBrokerClient
+from hannah import legacy_devices
+from hannah import device_answers, nlu_devices
+from hannah.device_control import DeviceController
+from hannah.typed_devices import DeviceRegistry
 from hannah.mqtt_handler import MQTTHandler
 from hannah.nlu import NLU, Intent, build_category_clarification_question, build_clarification_question, build_device_clarification_question, resolve_clarification_answer, resolve_yes_no
 from hannah.residents_manager import ResidentsClient
@@ -219,6 +223,9 @@ def main():
     # den hartkodierten Fallback (DEFAULT_IOBROKER_STATE_NAMES) selbst mit.
     iobroker_cfg = {**cfg.get("iobroker", {})}
     iobroker = IoBrokerClient(iobroker_cfg)
+    # Typisierte Geräte (#385), neben dem State-basierten Gerätebaum von iobroker: gefüllt von
+    # hannah.v2-Adaptern direkt und von hannah.v1-Adaptern über die Legacy-Klassifikation.
+    typed_devices = DeviceRegistry()
 
     if not iobroker.rooms:
         log.warning("Keine Räume aus ioBroker geladen — NLU arbeitet ohne Raum-Erkennung.")
@@ -244,8 +251,27 @@ def main():
     # Fragen-Pool/Ziel-Sprechzeit/Max-Fragenanzahl für den Voice-Enrollment-Dialog (hannah#8)
     # — dank seed_defaults() nie leer, siehe hannah.settings_manager.
     voice_enrollment_cfg = settings_manager.get_settings_dict("voice_enrollment")
-    nlu = NLU(nlu_cfg, iobroker.rooms, iobroker.devices,
+    # Die NLU sucht Geräte in der typisierten Registry (#387), nicht mehr im State-basierten
+    # Baum. Der Suchindex wird bei jedem Snapshot (v1 klassifiziert oder v2) neu gebaut.
+    nlu = NLU(nlu_cfg, iobroker.rooms, nlu_devices.build_index(typed_devices),
               satellites={s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()})
+
+    def _nlu_rooms() -> dict:
+        """Die Räume, die die NLU erkennt: die mit Geräten in der Registry (egal von welchem Adapter),
+        mit dem Anzeigenamen aus dem Raum-Katalog, dazu die Raum-Gruppen. Räume ohne Gerät gehören
+        nicht dazu, sonst würde ein bloßer Raumname Zeit- oder Wetterfragen blockieren."""
+        names = {r["room_id"]: r["display_name"] for r in room_manager.get_rooms()}
+        names.update(iobroker.rooms)
+        rooms = {room: names.get(room, room) for room in {d.room for d in typed_devices.devices()}}
+        return {**rooms, **{g["group_id"]: g["display_name"] for g in room_manager.get_groups()}}
+
+    def _refresh_nlu_devices() -> None:
+        nlu._devices = nlu_devices.build_index(typed_devices)
+        nlu._rooms = _nlu_rooms()
+
+    typed_devices.add_listener(_refresh_nlu_devices)
+    # Geräte-Abfragen ("wie warm ist es", "ist das Fenster offen") beantwortet die Registry (#387)
+    iobroker.set_answerer(device_answers.DeviceAnswers(typed_devices, lambda: nlu._rooms).answer)
     tts = TTS(cfg.get("tts", {}))
     voiceid_client = load_voiceid(cfg.get("voice_id", {}))
 
@@ -278,6 +304,9 @@ def main():
         # grpc_servicer ist erst weiter unten definiert — Lambda löst das Forward-Reference-
         # Problem (gleiches Muster wie get_satellites/get_residents oben).
         push_automation_update=lambda user_id, automation, enabled: grpc_servicer.push_automation_update(user_id, automation, enabled),
+        # Geräte liest und schreibt der Agent über die typisierte Registry (#387); den
+        # DeviceController bekommt er weiter unten, sobald der existiert.
+        registry=typed_devices, room_names=lambda: nlu._rooms,
     )
 
     mem_cfg = cfg.get("memory", {})
@@ -656,17 +685,18 @@ def main():
                     _feedback(device, True, answer)
                 else:
                     denied: list[str] = []
+                    unsupported: list[str] = []
                     name = _requester_name(speaker_user_id)
                     count = iobroker.execute(
                         orig, satellite_device=device,
                         trust_level=_requester_trust(speaker_user_id), denied=denied,
-                        requester_name=name,
+                        requester_name=name, unsupported=unsupported,
                     )
                     conv_ctx.update_from_intent(device, orig)
                     if denied:
                         _feedback(device, False, _denied_answer(denied, count, name))
                     elif count == 0:
-                        _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
+                        _feedback(device, False, " ".join(unsupported) or "Tut mir leid, ich weiß nicht was du meinst.")
                 intent = orig
                 _log_pipeline_activity()
                 return
@@ -908,11 +938,12 @@ def main():
                 log.warning(f"[{device}] Keine Antwort auf Query möglich.")
         else:
             denied: list[str] = []
+            unsupported: list[str] = []
             name = _requester_name(speaker_user_id)
             count = iobroker.execute(
                 intent, satellite_device=device,
                 trust_level=_requester_trust(speaker_user_id), denied=denied,
-                requester_name=name,
+                requester_name=name, unsupported=unsupported,
             )
             conv_ctx.update_from_intent(device, intent)
             if intent.name == "Unknown":
@@ -921,7 +952,7 @@ def main():
                 _feedback(device, False, _denied_answer(denied, count, name))
             elif count == 0:
                 log.warning(f"[{device}] Keine States gesetzt — Intent nicht auflösbar.")
-                _feedback(device, False, "Tut mir leid, ich weiß nicht was du meinst.")
+                _feedback(device, False, " ".join(unsupported) or "Tut mir leid, ich weiß nicht was du meinst.")
 
         _log_pipeline_activity()
 
@@ -1073,16 +1104,18 @@ def main():
                     return _logged(answer, "Query", orig)
                 denied: list[str] = []
                 offline: list[str] = []
+                unsupported: list[str] = []
                 name = _requester_name(speaker_user_id)
                 count = iobroker.execute(
                     orig, trust_level=trust_level, denied=denied,
                     requester_name=name, wait_confirm=True, offline=offline,
+                    unsupported=unsupported,
                 )
                 conv_ctx.update_from_intent(_source, orig)
                 if denied:
                     return _logged(_denied_answer(denied, count, name), "Routine", orig)
                 if count == 0:
-                    return _logged("Keine Geräte gefunden.", "Routine", orig)
+                    return _logged(" ".join(unsupported) or "Keine Geräte gefunden.", "Routine", orig)
                 if offline:
                     default = f"{', '.join(offline)} antwortet nicht — möglicherweise offline."
                     return _logged(responses.offline(default), "Routine", orig)
@@ -1338,17 +1371,19 @@ def main():
         else:
             denied: list[str] = []
             offline: list[str] = []
+            unsupported: list[str] = []
             name = _requester_name(speaker_user_id)
             count = iobroker.execute(
                 intent, trust_level=trust_level, denied=denied,
                 requester_name=name, wait_confirm=True, offline=offline,
+                unsupported=unsupported,
             )
             if count > 0:
                 conv_ctx.set_smalltalk_active(_source, False)
             if denied:
                 answer = _denied_answer(denied, count, name)
             elif count == 0:
-                answer = "Keine Geräte gefunden."
+                answer = " ".join(unsupported) or "Keine Geräte gefunden."
             elif offline:
                 answer = responses.offline(f"{', '.join(offline)} antwortet nicht — möglicherweise offline.")
             else:
@@ -1859,6 +1894,13 @@ def main():
     )
 
     def _on_state_update(state_id: str, raw: str, canonical_key: str = "") -> None:
+        # Die Registry zuerst: sie ist die Datenquelle für NLU, Abfragen und Steuern (#387), und eine
+        # Bestätigung (handle_state_update) soll schon den neuen Wert sehen.
+        try:
+            legacy_devices.apply_state_update(typed_devices, state_id, raw)
+        except Exception:
+            # Ein Fehler hier darf Bestätigungen, Trigger und Anwesenheit nicht stoppen.
+            log.exception(f"[devices] Live-Update für {state_id} nicht in die Registry übernommen")
         iobroker.handle_state_update(state_id, raw, canonical_key)
         trigger_engine.on_state_update(state_id, raw)
         presence_manager.on_state_update(state_id, raw)
@@ -2263,6 +2305,10 @@ def main():
     def _on_agent_device_snapshot(devices):
         nonlocal _iobroker_ready
         iobroker.handle_device_snapshot(devices)
+        try:
+            legacy_devices.load_snapshot(typed_devices, devices)
+        except Exception:
+            log.exception("[devices] v1-Snapshot nicht in die Registry klassifiziert")
         # Trigger-State-Cache still nachziehen (kein Feuern) — sonst kennt die
         # TriggerEngine nach einem Core-Neustart also/unless-States erst nach der
         # nächsten echten Änderung (#141).
@@ -2272,9 +2318,7 @@ def main():
         # Satellit drin) würden fälschlich als verschwunden behandelt und gelöscht.
         # Raum-Lebenszyklus läuft ausschließlich über _on_agent_room_snapshot() (siehe
         # dort), das den vollständigen, geräteunabhängigen enum.rooms.*-Katalog bekommt (#134).
-        db_group_rooms = {g["group_id"]: g["display_name"] for g in room_manager.get_groups()}
-        nlu._rooms = {**iobroker.rooms, **db_group_rooms}
-        nlu._devices = iobroker.devices
+        nlu._rooms = _nlu_rooms()
         _iobroker_ready = True
         grpc_servicer.timer_send_ready()
         grpc_servicer.timer_list_request()
@@ -2286,6 +2330,9 @@ def main():
         orphaned = room_manager.sync_rooms({r.room_id: dict(r.display_names).get("de") or r.room_id for r in rooms})
         for device_id, room_id in orphaned:
             grpc_servicer.agent_satellite_deleted(device_id, room_id)
+        # Die Anzeigenamen der NLU-Räume stammen aus diesem Katalog (#387): ein v2-Adapter liefert
+        # Geräte und Räume getrennt, die Namen können nach den Geräten ankommen.
+        nlu._rooms = _nlu_rooms()
 
     def _on_agent_connect():
         state_ids = trigger_engine.get_referenced_state_ids() | presence_manager.get_referenced_state_ids()
@@ -2309,6 +2356,23 @@ def main():
     # gRPC-Servicer wird hier erstellt damit _on_arrival/_on_departure Events pushen können.
     # get_satellites und get_car_state sind Lambdas (late binding) — udp_server ist
     # zum Zeitpunkt des Aufrufs bereits gesetzt.
+    # Schreiben über die typisierte Registry (#386): SetSlot an v2-Adapter, SetState mit der state_id
+    # des Slots an v1-Adapter. grpc_servicer/iobroker sind beim Aufruf gesetzt (late binding).
+    device_control = DeviceController(
+        typed_devices,
+        send_set_slot=lambda device_id, slot_id, value: grpc_servicer.agent_set_slot(device_id, slot_id, value),
+        send_set_state=lambda state_id, value: iobroker.set_state(state_id, value),
+    )
+
+    # Sprachbefehle steuern über die Registry und den DeviceController (#387)
+    iobroker.set_slot_control(typed_devices, device_control, lambda: nlu._rooms)
+    tool_agent.set_device_control(device_control)
+
+    def _on_agent_slot_update(update):
+        typed_devices.handle_slot_update(update)
+        device_control.handle_slot_update(update)
+        iobroker.handle_slot_ack(update)
+
     grpc_servicer = HannahServicer(
         user_manager=_user_manager,
         satellite_manager=satellite_manager,
@@ -2333,6 +2397,10 @@ def main():
         control_device=lambda device_id, state, value, trust_level: iobroker.control_direct(
             device_id, state, value, trust_level=trust_level
         ),
+        control_slot=lambda device_id, slot_id, value, trust_level: device_control.set_slot(
+            device_id, slot_id, value, trust_level=trust_level
+        ),
+        get_typed_devices=typed_devices.devices,
         on_agent_state=_on_agent_state,
         on_agent_resident=_on_agent_resident,
         on_agent_text_command=_on_agent_text_command,
@@ -2340,6 +2408,9 @@ def main():
         on_agent_set_resident=_on_agent_set_resident,
         on_agent_satellite_control=_on_agent_satellite_control,
         on_agent_device_snapshot=_on_agent_device_snapshot,
+        on_agent_typed_snapshot=typed_devices.handle_typed_snapshot,
+        on_agent_slot_update=_on_agent_slot_update,
+        on_agent_device_availability=typed_devices.handle_device_availability,
         on_agent_send_residents=_on_agent_send_residents,
         on_agent_room_snapshot=_on_agent_room_snapshot,
         on_weather_update=_on_weather_update,

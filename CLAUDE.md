@@ -17,7 +17,12 @@ hannah/                          ← Mono-Repo
 ├── core/                        ← Hannah Core (Python, Raspberry Pi)
 │   ├── hannah/
 │   │   ├── nlu.py               ← NLU (regelbasiert)
-│   │   ├── iobroker.py          ← ioBroker REST API Client (Port 8093)
+│   │   ├── iobroker.py          ← execute()/Bestätigungen; alter State-basierter Gerätebaum (Legacy, #387)
+│   │   ├── typed_devices.py     ← Typisierte Geräte-Registry (Klassen + Slots, hannah.v2-Modell)
+│   │   ├── legacy_devices.py    ← v1-Snapshot → typisierte Geräte (Klassifikation)
+│   │   ├── device_control.py    ← Steuern über Slots (DeviceController: SetSlot/SetState, Trust pro Slot)
+│   │   ├── nlu_devices.py       ← Geräte-Sicht der NLU (Suchindex, Kategorie-Codes aus Klasse/Slots)
+│   │   ├── device_answers.py    ← Sprachantworten auf Geräte-Abfragen aus der Registry
 │   │   ├── mqtt_handler.py      ← MQTT Pub/Sub
 │   │   ├── udp_server.py        ← UDP Audio-Empfang von Satelliten
 │   │   ├── grpc_server.py       ← gRPC Server
@@ -34,7 +39,7 @@ hannah/                          ← Mono-Repo
 │   │   ├── room_manager.py      ← Räume/Gruppen/Satellit-Zuordnung (SQLite)
 │   │   ├── alarms.py            ← Wecker (AlarmManager)
 │   │   ├── ble_location.py      ← BLE-Indoor-Lokalisierung
-│   │   ├── tool_agent.py        ← LLM-Tool-Calling-Agent (ioBroker-Aktionen)
+│   │   ├── tool_agent.py        ← LLM-Tool-Calling-Agent (Geräte lesen/setzen über die Registry)
 │   │   ├── weather.py           ← Wetter (OpenWeatherMap)
 │   │   └── audio.py             ← Audio-Utilities (Resampling, VAD)
 |   ├── main.py                  ← Einstiegspunkt, Orchestrierung
@@ -83,8 +88,9 @@ Satellit (Audio/PTT)
 ```
 
 **Schlüsselmodule:**
-- `nlu.py` — Drei-Ebenen-Matching: Raum + Gerätename + Aktion. Intents: TurnOn/TurnOff/SetLevel/SetColor, QuerySensor, CarQuery, WeatherQuery u.a.
-- `iobroker.py` — Lädt Gerätebaum via REST (`/v1/enum/rooms`, `/v1/state/`). States per `PATCH` setzen (ack=false).
+- `nlu.py` — Drei-Ebenen-Matching: Raum + Gerätename + Aktion. Intents: TurnOn/TurnOff/SetLevel/SetColor/SetTemperature/SetMode/SetFanSpeed, Query, CarQuery, WeatherQuery u.a. Geräte sucht sie im Index von `nlu_devices.py` (aus der typisierten Registry).
+- `typed_devices.py`, `legacy_devices.py`, `device_control.py`, `nlu_devices.py`, `device_answers.py` — das typisierte Geräte-Modell, siehe „Typisiertes Geräte-Modell“ unter ioBroker-Integration.
+- `iobroker.py` — `execute()` (Sprachbefehl → Slot-Schreibbefehle über den `DeviceController`, inkl. Trust-Prüfung und Bestätigungen), `answer_query()` delegiert an `device_answers`. Der alte State-basierte Gerätebaum (`devices`, `Device`) ist Legacy.
 - `grpc_server.py` — Servicer für externe Services (Telegram, Proxy). Subscriber-Registry für Event-Streams.
 - `trigger_engine.py` — Abonniert ioBroker States per MQTT, prüft die `triggers`-Tabelle (SQLite, hannah.db), feuert Aktionen.
 - `user_registry.py` — SQLite, synct Roomies aus Residents-Adapter, speichert Trust-Level und Linked Accounts.
@@ -141,7 +147,7 @@ Kein TLS auf UDP (zu teuer für ESP32, im LAN akzeptabel).
 |---|---|
 | `SubmitText` / `SubmitVoice` | Text/Voice-Befehl → Intent + Antwort |
 | `Announce` / `Notify` | TTS-Ansage an Satellit(en) / System-Notification von ioBroker |
-| `GetDevices` / `ControlDevice` | Geräteliste für Steuer-Menüs / direktes Setzen eines State (umgeht NLU) |
+| `GetDevices` / `ControlDevice` | Geräteliste für Steuer-Menüs / direktes Setzen (umgeht NLU). hannah.v2: Klasse + Slots, `ControlDevice` adressiert `device_id` + `slot_id`. hannah.v1-Clients bekommen dieselbe Registry per `hannah_grpc.translate` in State-Form, der State-Key wird darüber auf den Slot abgebildet |
 | `GetUsers` / `GetUser` / `LinkAccount` / `UnlinkAccount` / `SetTrustLevel` / `SetSystemMessages` | User-Registry-Verwaltung |
 | `GetSatellites` | Liste aller registrierten Satelliten inkl. Hardware-Serial |
 | `GetCarState` / `GetAllCarStates` | Live-Autostatus (VW Connect) |
@@ -230,6 +236,25 @@ Hannah bekommt die Geräte über gRPC von dem Adapter über gRPC gemeldet. Sämt
 **Wichtige gRPC-Methode:**
 - `AgentConnect`: Bidirektionaler Stream zwischen Adapter und Hannah (Nachrichtentyp `AgentMessage` rein, `AgentCommand` raus)
 
+#### Typisiertes Geräte-Modell (hannah.v2, #377 / #383 / #387)
+
+Hannah definiert, was sie versteht: feste **Geräteklassen** (Light, Socket, GenericBinarySwitch, Thermostat, Climate, Cover, Sensor, Contact, Generic) mit **Slots** (`SlotKind`) in festen Skalen (Helligkeit 0–100 %, Farbe RGB, Farbtemperatur Kelvin, Position 100 = offen, Temperaturen °C). Die Fähigkeiten eines Geräts sind schlicht seine Slots: eine Lampe ohne `BRIGHTNESS` lässt sich nicht dimmen, und Hannah sagt das. Ein Kontakt trägt als Unterart `subtype` Fenster oder Tür, ein Klimagerät `MODE`/`FAN_SPEED` mit `Slot.options` (die Werte, die es kann). Der Adapter übersetzt ioBroker-Objekte in dieses Modell, Core sieht für v2-Geräte keine ioBroker-State-IDs.
+
+Die **Registry** (`typed_devices.DeviceRegistry`) hat zwei Quellen:
+- ein **hannah.v2-Adapter** schickt `TypedDeviceSnapshot`, `SlotUpdate` und `DeviceAvailability` direkt,
+- ein **hannah.v1-Adapter** schickt weiter den State-basierten Snapshot (`AgentDevice`), den `legacy_devices.py` klassifiziert: Typ-Hinweis (Funktion) vor Slot-Menge, `Thermostat` nur mit Sollwert, nur schreibbare Slots steuern ein Gerät, Name und Raum sind Pflicht. Ist eine Art nicht eindeutig (zwei States mit Key `color`), bleiben alle als Generic-Slots erhalten und keiner wird Standard-Slot.
+
+Alles liest und schreibt die Registry:
+- **NLU**: `nlu_devices.py` baut den Suchindex und leitet die Kategorie-Codes (`light`, `blind`, `window`, …) aus Klasse, Slots und Unterart ab, die Wortlisten in `category_words` bleiben.
+- **Abfragen**: `device_answers.DeviceAnswers` antwortet über Klassen und Slots (Thermostat nennt Ist und Soll, Temperatur und Feuchte kollidieren nicht).
+- **Steuern**: `IoBrokerClient.execute()` löst Ziele in der Registry auf und schreibt über `device_control.DeviceController.set_slot`: Trust-Level pro Slot (`Slot.required_trust_level`), bei v2 `SetSlot` (Bestätigung per `SlotUpdate` mit `ack`), bei v1 `SetState` auf die `state_id` des Slots (Bestätigung per State-Update). Fehlt der Slot oder ist er nur lesbar, sagt Hannah es (`execute(unsupported=…)`), statt still nichts zu tun.
+- **Tool-Agent**: `set_device_state(device_id, slot_id, value)`, die Lese-Tools zeigen Slots mit Werten.
+- **GetDevices/ControlDevice**: v2 nativ, v1-Clients (Telegram, WebUI) bekommen die Registry über `hannah_grpc.translate` in State-Form.
+
+Der **alte Gerätebaum** (`IoBrokerClient.devices`/`Device`, `DEFAULT_IOBROKER_STATE_NAMES`) ist Legacy: er wird aus dem v1-Snapshot weiter gebaut, aber nichts Sichtbares liest ihn mehr. Entfernung nach einer Übergangszeit (weiche Abkündigung).
+
+Grenzen eines v1-Adapters, die Core nicht repariert (das macht der Adapter, ioBroker.hannah#210): jede `level.color.*`-Rolle landet auf dem Key `color` (Farbtemperatur als Kelvin unter `color`), `value.temperature`/`value.humidity` heißen beide `current`.
+
 #### Sensor-/Geräte-Datenfluss (Debugging-Referenz)
 
 Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — als Referenz, weil der Pfad durch mehrere Repos/Prozesse läuft und Debugging sonst sehr lange dauert (Bug-Suche zum Air-Quality-Feature, 2026-06-20, hat zwei unabhängige Bugs über diesen Pfad zutage gefördert).
@@ -242,12 +267,13 @@ Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — al
 6. **Device-Type-/Canonical-Key-Erkennung**: `_resolveDeviceMeta()`/`resolveTypeAndCanonicalKey()` ermittelt pro State sowohl die Hannah-Kategorie (`type`) als auch die semantische Rolle (`canonicalKey`, z.B. `on`/`level`/`current`): zuerst `common.custom["<adapter-namespace>"]` (z.B. `"hannah.0": {enabled: true, type: "...", canonicalKey: "..."}` — offizielle ioBroker-Doku-Konvention, **nicht** ein loses `common.hannah`-Feld, das nicht garantiert persistiert wird), dann `common.role` über eine feste Rollen-Tabelle (`ROLE_TABLE`), dann Function-Namen-Keywords als Fallback nur für `type`. Ab Adapter 1.1.0 (hannah-proto 3.8.0, #257) schickt der Adapter `canonicalKey` direkt in der Gerätemeldung (`AgentDevice.canonical_key`) mit; ab hannah-proto 4.8 auch in Live-Updates (`AgentStateUpdate.canonical_key`), siehe Schritt 10.
 7. **Live-Updates (Adapter)**: `onStateChange()` prüft `ack` — bei Enum-discovered Device-States (`subscribedIds`) wird `ack:false` verworfen (Schutz vor Feedback-Schleifen, da Hannah selbst Befehle mit `ack:false` schreibt, siehe `handleSetState`). Bei `AgentWatchMore`-States (`watchMoreIds`, trigger_engine) wird jede Änderung weitergeleitet, unabhängig von `ack` — Hannah schreibt diese nie selbst. Manuell gesetzte Flags ohne bestätigendes Gerät (z.B. `0_userdata`-Booleans) bleiben bei `ack:false` stehen, wenn das Script sie nicht explizit mit `ack:true` setzt.
 8. **Adapter → Hannah Core (gRPC)**: `AgentStateUpdate` über den `AgentConnect`-Stream.
-9. **Hannah Core (Empfang)**: `main.py:_on_agent_state` → `_on_state_update` → ruft beides auf: `iobroker.handle_state_update()` und `trigger_engine.on_state_update()`.
-10. **Hannah Core (Cache)**: `IoBrokerClient.handle_state_update()` (`core/hannah/iobroker.py`) nimmt den `canonical_key` aus `AgentStateUpdate` (hannah-proto ≥ 4.8, wird von `grpc_server.py` über `_on_agent_state`/`_on_state_update` durchgereicht), bevor `device.current[canon]` geschrieben wird. **Fallback für ältere Adapter** (Feld leer): der rohe State-Suffix wird über die hartkodierte `DEFAULT_IOBROKER_STATE_NAMES`-Tabelle auf den kanonischen Key übersetzt. **Fehlt in diesem Fall der Suffix dort, wird das Update lautlos verworfen** — der Wert bleibt für immer auf dem Stand des letzten Snapshots stehen. Ein `canonicalKey`-Override in ioBroker (siehe Schritt 6) wirkt mit einem Adapter, der `canonical_key` in Live-Updates mitschickt, auch dort; bei älteren Adaptern nur auf den initialen Snapshot.
-11. **NLU-Abfrage**: `category_filter` (`nlu.py`) + `_CATEGORY_STATES`/`_describe_category` (`iobroker.py`) lesen `device.current` und bauen die Sprachantwort.
+9. **Hannah Core (Empfang)**: `main.py:_on_agent_state` → `_on_state_update` → ruft auf: `legacy_devices.apply_state_update()` (Registry), `iobroker.handle_state_update()` (Bestätigungen wartender Befehle, alter Gerätebaum) und `trigger_engine.on_state_update()`.
+10. **Hannah Core (Registry)**: `legacy_devices.apply_state_update()` findet den Slot zur `state_id` (`DeviceRegistry.lookup_state`, aufgebaut bei der Klassifikation des letzten Snapshots) und normalisiert den Wert auf die Skala der Slot-Art. Der `canonical_key` zählt nur noch bei der Klassifikation des Snapshots (Schritt 6). **Ein State, der im letzten Snapshot nicht vorkam (Gerät nach Adapter-Start angelegt), hat keinen Slot, sein Update wird verworfen** — der Wert bleibt auf dem Stand, bis ein neuer Snapshot kommt. Legacy: derselbe Wert geht in den alten Gerätebaum (`Device.current`), dort über `canonical_key` bzw. `DEFAULT_IOBROKER_STATE_NAMES`.
+11. **Sprachantwort**: die NLU (`nlu.py`, Index aus `nlu_devices.py`) erkennt Raum, Gerät und Kategorie, `device_answers.DeviceAnswers` liest die Slots und baut den Text.
 
 **Häufigste Fallstricke:**
-- Adapter ohne `canonical_key` in Live-Updates (hannah-proto < 4.8) + neuer/unüblicher Suffix ohne Eintrag in `DEFAULT_IOBROKER_STATE_NAMES` (`core/hannah/iobroker.py`) → Wert friert nach dem ersten Snapshot ein (siehe Schritt 10)
+- State, der beim letzten Snapshot zu keinem Slot klassifiziert wurde (Gerät nach Adapter-Start angelegt) → bekommt keine Live-Updates (siehe Schritt 10), Adapter neu verbinden bzw. neuen Snapshot abwarten
+- Zwei States eines Geräts mit derselben Rolle (z.B. zwei `color` durch `level.color.*`-Rollen, Adapter #210) → Generic-Slots, das Gerät hat dann keinen `COLOR`-Slot und Hannah antwortet „lässt sich nicht umfärben“; behoben wird das im Adapter
 - Neues Gerät/Enum-Mitglied nach Adapter-Start angelegt → nie abonniert, Adapter-Neustart nötig
 - `common.custom`-Override ohne `enabled: true` → wird von ioBroker verworfen
 - Gerätename überlappt mit Raumnamen (z.B. Licht "Bad" in Raum "Bad oben") → Sprachantwort klingt doppelt; kein Bug, sondern Datenmodellierung (fehlende Geräte-Ebene im virtualDevice-Pfad)
@@ -347,6 +373,8 @@ Zweiteilig: **Topf (Unterteil) + Deckel (Oberteil)**, eigenes FreeCAD-Design ori
 7. **Virtuelle Devices statt Enum-API** — drei-gliedriges Matching (Raum + Gerät + Aktion), Sensor-States pro Gerät.
 8. **16kHz Mono, kein TLS auf UDP** — Modell-Anforderung (Whisper, OWW); UDP ohne TLS spart RAM/CPU auf ESP32.
 9. **MQTT als universeller Steuerkanal** — alle Steuerkommandos (mute, volume, ptt, sampling, listen, …) laufen über MQTT statt UDP, weil UDP nur direkt verbundene Satelliten erreicht, MQTT aber auch Proxy-verbundene. TTS-Audio wird weiterhin korrekt je nach Verbindungstyp geroutet. Erkannt durch Issue #18.
+
+10. **Typisiertes Geräte-Modell statt State-Suffix-Mapping** — Hannah definiert Klassen und Slots (hannah.v2), der Adapter übersetzt, Core kennt für v2-Geräte keine ioBroker-State-IDs. hannah.v1-Adapter bleiben über die Legacy-Klassifikation voll nutzbar (keine harten Schnitte). Sprachbefehle für v1-Adapter antworten gleich, außer wo der alte Weg einen Fehler hatte. Konzept #377, Umsetzung #383–#387.
 
 ---
 

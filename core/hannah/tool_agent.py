@@ -11,7 +11,11 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT
+from hannah_proto.v2 import hannah_pb2 as pb
+
+from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied
+from hannah.nlu_devices import categories_of
+from hannah.typed_devices import DeviceRegistry, Slot, TypedDevice
 
 if TYPE_CHECKING:
     from .llm import LLMClient
@@ -22,13 +26,38 @@ log = logging.getLogger(__name__)
 
 _MAX_ITERATIONS = 5
 
+C = pb.DeviceClass
+K = pb.SlotKind
+
+# Was das LLM als "Kategorie" lesen soll (#387): die Klasse des Geräts in Alltagssprache
+_CLASS_NAMES = {
+    C.DEVICE_CLASS_LIGHT: "Licht", C.DEVICE_CLASS_SOCKET: "Steckdose", C.DEVICE_CLASS_GENERIC_BINARY_SWITCH: "Schalter",
+    C.DEVICE_CLASS_THERMOSTAT: "Thermostat", C.DEVICE_CLASS_COVER: "Rollladen", C.DEVICE_CLASS_SENSOR: "Sensor",
+    C.DEVICE_CLASS_CONTACT: "Kontakt", C.DEVICE_CLASS_CLIMATE: "Klimaanlage", C.DEVICE_CLASS_GENERIC: "Sonstiges",
+}
+
+# Wörter, unter denen das LLM eine Kategorie nennen darf (deutsch oder englisch), je Kategorie-Code
+_CATEGORY_ALIASES = {
+    "light": ("licht", "lampe", "leuchte", "light"),
+    "socket": ("steckdose", "stecker", "socket"),
+    "blind": ("rollladen", "rollo", "jalousie", "markise", "blind", "cover"),
+    "climate": ("klima", "climate"),
+    "thermostat": ("heizung", "thermostat"),
+    "window": ("fenster", "window"),
+    "door": ("tür", "tuer", "door"),
+    "temperature_sensor": ("temperatur", "temperature"),
+    "humidity_sensor": ("feuchte", "humidity"),
+    "illuminance_sensor": ("helligkeit", "illuminance", "lux"),
+    "air_quality_sensor": ("luftqualität", "luftqualitaet", "luft", "air"),
+}
+
 _TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
             "name": "get_all_devices",
             "description": (
-                "Gibt alle bekannten Smart-Home-Geräte zurück (ID, Name, Raum, Kategorie). "
+                "Gibt alle bekannten Smart-Home-Geräte zurück (ID, Name, Raum, Art). "
                 "Nur zur Übersicht — keine Zustandswerte. "
                 "Für aktive Geräte: get_active_devices. "
                 "Für Geräte in einem Raum: get_devices_in_room. "
@@ -55,7 +84,7 @@ _TOOLS: list[dict] = [
             "name": "get_devices_in_room",
             "description": (
                 "Gibt alle Geräte in einem bestimmten Raum zurück "
-                "(ID, Name, Kategorie, verfügbare State-Suffixe). "
+                "(ID, Name, Art, Slots mit Werten). "
                 "Ideal wenn Fragen oder Befehle einen Raum betreffen."
             ),
             "parameters": {
@@ -76,7 +105,7 @@ _TOOLS: list[dict] = [
             "name": "get_devices_by_category",
             "description": (
                 "Gibt alle Geräte einer Kategorie zurück "
-                "(ID, Name, Raum, verfügbare State-Suffixe). "
+                "(ID, Name, Raum, Slots mit Werten). "
                 "Ideal für Massen-Aktionen wie 'alle Lichter aus'."
             ),
             "parameters": {
@@ -95,7 +124,7 @@ _TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "get_device_state",
-            "description": "Gibt den aktuellen Zustand (alle State-Werte) eines Geräts zurück.",
+            "description": "Gibt den aktuellen Zustand (alle Slots mit Werten) eines Geräts zurück.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -113,22 +142,30 @@ _TOOLS: list[dict] = [
         "function": {
             "name": "set_device_state",
             "description": (
-                "Setzt einen State eines Geräts. "
-                "Die state_id ergibt sich aus device_id + '.' + State-Suffix "
-                "(z.B. 'javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on')."
+                "Setzt einen Slot eines Geräts. Geräte und ihre Slots (z.B. 'on', 'brightness', 'color', "
+                "'color_temperature', 'target_temperature', 'position', 'mode', 'fan_speed') stehen in den "
+                "get_*-Tools. Nur Slots, die nicht 'nur lesen' sind, lassen sich setzen."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "state_id": {
+                    "device_id": {
                         "type": "string",
-                        "description": "Vollständige State-ID (Device-ID + Punkt + State-Suffix)",
+                        "description": "Die Geräte-ID aus get_all_devices",
+                    },
+                    "slot_id": {
+                        "type": "string",
+                        "description": "Der Slot des Geräts, z.B. 'on' oder 'brightness'",
                     },
                     "value": {
-                        "description": "Wert: true/false für on, 0–100 für level, Hex-String für color",
+                        "description": (
+                            "Wert: true/false für on, 0–100 für brightness und position (100 = offen), "
+                            "Hex-String für color, Kelvin für color_temperature, Grad für target_temperature, "
+                            "Text aus den angegebenen Werten für mode und fan_speed"
+                        ),
                     },
                 },
-                "required": ["state_id", "value"],
+                "required": ["device_id", "slot_id", "value"],
             },
         },
     },
@@ -170,15 +207,26 @@ class ToolAgent:
         user_manager: "UserManager | None" = None,
         automations: dict[str, list[str]] | None = None,
         push_automation_update=None,  # (user_id: int, automation: str, enabled: bool) -> None
+        registry: "DeviceRegistry | None" = None,
+        room_names=None,  # () -> {room_id: Anzeigename}
     ) -> None:
         self._llm = llm
         self._iobroker = iobroker
+        # Geräte liest und schreibt der Agent über die typisierte Registry (#387). Der Controller
+        # kommt nachträglich (set_device_control), er entsteht in main.py erst später.
+        self._registry = registry if registry is not None else DeviceRegistry()
+        self._controller = None
+        self._room_names = room_names or (lambda: getattr(iobroker, "rooms", {}))
         self._user_manager = user_manager
         self._automations = automations or {}
         self._push_automation_update = push_automation_update or (lambda *_: None)
         self._tools = list(_TOOLS)
         if self._automations:
             self._tools.append(self._build_automation_tool())
+
+    def set_device_control(self, controller) -> None:
+        """Der DeviceController (hannah.device_control), über den set_device_state schreibt."""
+        self._controller = controller
 
     def _build_automation_tool(self) -> dict:
         """Baut das set_automation-Tool mit den tatsächlich bekannten Automation-Keys +
@@ -324,7 +372,10 @@ class ToolAgent:
         if name == "get_device_state":
             return self._get_device_state(args.get("device_id", ""))
         if name == "set_device_state":
-            return self._set_device_state(args.get("state_id", ""), args.get("value"), trust_level, spoken)
+            return self._set_device_state(
+                args.get("device_id", ""), args.get("slot_id", ""), args.get("value"), trust_level, spoken,
+                state_id=args.get("state_id", ""),
+            )
         if name == "set_automation":
             return self._set_automation(args.get("automation", ""), bool(args.get("enabled", True)), user_id)
         if name == "speak":
@@ -336,79 +387,127 @@ class ToolAgent:
     # ------------------------------------------------------------------
     # Tool-Implementierungen
 
+    def _room_name(self, room_id: str) -> str:
+        return self._room_names().get(room_id, room_id)
+
+    @staticmethod
+    def _class_name(device: TypedDevice) -> str:
+        return _CLASS_NAMES.get(device.device_class, "Gerät")
+
+    @staticmethod
+    def _value_text(slot: Slot) -> str:
+        value = slot.value
+        if value is None:
+            return "unbekannt"
+        if slot.kind == K.SLOT_KIND_COLOR and isinstance(value, int) and not isinstance(value, bool):
+            return f"#{value:06X}"
+        return str(value)
+
+    def _slot_text(self, slot: Slot) -> str:
+        text = f"{slot.slot_id}={self._value_text(slot)}"
+        if not slot.writable:
+            text += " (nur lesen)"
+        if slot.options:
+            text += f" (Werte: {', '.join(slot.options)})"
+        return text
+
+    def _slots_text(self, device: TypedDevice) -> str:
+        return ", ".join(self._slot_text(s) for s in device.slots.values()) or "keine Slots"
+
     def _get_all_devices(self) -> str:
-        lines: list[str] = []
-        for room_key, devs in self._iobroker.devices.items():
-            room_name = self._iobroker.rooms.get(room_key, room_key)
-            for dev in devs.values():
-                lines.append(f"- {room_name}: {dev.name} ({dev.category}) [ID: {dev.id}]")
+        lines = [
+            f"- {self._room_name(d.room)}: {d.name} ({self._class_name(d)}) [ID: {d.device_id}]"
+            for d in self._registry.devices()
+        ]
         if not lines:
             return "Keine Geräte bekannt."
         return f"Bekannte Geräte ({len(lines)}):\n" + "\n".join(lines)
 
     def _get_active_devices(self) -> str:
-        total = sum(len(devs) for devs in self._iobroker.devices.values())
-        lines: list[str] = []
-        for room_key, devs in self._iobroker.devices.items():
-            room_name = self._iobroker.rooms.get(room_key, room_key)
-            for dev in devs.values():
-                if self._is_active(dev):
-                    state = self._format_active_state(dev.current or {})
-                    lines.append(f"- {room_name}: {dev.name} ({dev.category}) — {state} [ID: {dev.id}]")
+        devices = self._registry.devices()
+        lines = [
+            f"- {self._room_name(d.room)}: {d.name} ({self._class_name(d)}) — {self._format_active_state(d)} [ID: {d.device_id}]"
+            for d in devices if self._is_active(d)
+        ]
         if not lines:
             return "Keine Geräte sind aktuell aktiv."
-        return f"Aktive Geräte ({len(lines)} von {total}):\n" + "\n".join(lines)
+        return f"Aktive Geräte ({len(lines)} von {len(devices)}):\n" + "\n".join(lines)
 
     def _get_devices_in_room(self, room: str) -> str:
         room_lower = room.lower()
         lines: list[str] = []
         matched_room = room
-        for room_key, devs in self._iobroker.devices.items():
-            room_name = self._iobroker.rooms.get(room_key, room_key)
+        for room_id in sorted({d.room for d in self._registry.devices()}):
+            room_name = self._room_name(room_id)
             if room_lower not in room_name.lower():
                 continue
             matched_room = room_name
-            for dev in devs.values():
-                states = ", ".join(dev.states.keys())
-                lines.append(f"- {dev.name} ({dev.category}) [ID: {dev.id}, States: {states}]")
+            for dev in self._registry.devices_in_room(room_id):
+                lines.append(f"- {dev.name} ({self._class_name(dev)}) [ID: {dev.device_id}, Slots: {self._slots_text(dev)}]")
         if not lines:
             return f"Kein Raum '{room}' gefunden."
         return f"Geräte im {matched_room} ({len(lines)}):\n" + "\n".join(lines)
 
+    @staticmethod
+    def _matches_category(device: TypedDevice, wanted: str) -> bool:
+        """Ob eine vom LLM genannte Kategorie (deutsch oder englisch, Teilwort genügt) zum Gerät passt."""
+        words = {_CLASS_NAMES.get(device.device_class, "").lower()}
+        for code in categories_of(device):
+            words.add(code)
+            words.update(_CATEGORY_ALIASES.get(code, ()))
+        return any(w and (w in wanted or wanted in w) for w in words)
+
     def _get_devices_by_category(self, category: str) -> str:
-        category_lower = category.lower()
-        lines: list[str] = []
-        for room_key, devs in self._iobroker.devices.items():
-            room_name = self._iobroker.rooms.get(room_key, room_key)
-            for dev in devs.values():
-                if category_lower not in dev.category.lower():
-                    continue
-                states = ", ".join(dev.states.keys())
-                lines.append(f"- {room_name}: {dev.name} [ID: {dev.id}, States: {states}]")
+        wanted = category.lower().strip()
+        lines = [
+            f"- {self._room_name(d.room)}: {d.name} [ID: {d.device_id}, Slots: {self._slots_text(d)}]"
+            for d in self._registry.devices() if wanted and self._matches_category(d, wanted)
+        ]
         if not lines:
             return f"Keine Geräte in Kategorie '{category}' gefunden."
         return f"{category}-Geräte ({len(lines)}):\n" + "\n".join(lines)
 
     def _get_device_state(self, device_id: str) -> str:
-        dev = self._iobroker._devices_by_id.get(device_id)
+        dev = self._registry.get(device_id)
         if not dev:
             return f"Gerät '{device_id}' nicht gefunden."
-        current = dev.current or {}
-        state_str = ", ".join(f"{k}={v}" for k, v in current.items()) or "keine Zustandswerte"
-        return f"Gerät: {dev.name} ({dev.room}, {dev.category})\nZustand: {state_str}"
+        return (
+            f"Gerät: {dev.name} ({self._room_name(dev.room)}, {self._class_name(dev)})\n"
+            f"Zustand: {self._slots_text(dev)}"
+        )
 
     def _set_device_state(
-        self, state_id: str, value: object, trust_level: int | None, spoken: list[str],
+        self, device_id: str, slot_id: str, value: object, trust_level: int | None, spoken: list[str],
+        state_id: str = "",
     ) -> dict:
-        if not self._iobroker.may_set(state_id, trust_level):
+        if self._controller is None:
+            return {"ok": False, "error": "Die Gerätesteuerung ist nicht verfügbar."}
+        if not device_id and state_id:
+            # Ein LLM, das noch die ioBroker-State-ID nennt (frühere Fassung des Tools): auf Gerät und
+            # Slot der Registry abbilden, geht nur für Geräte eines v1-Adapters.
+            target = self._registry.lookup_state(state_id)
+            if target is not None:
+                device_id, slot_id = target
+        device = self._registry.get(device_id)
+        if device is None:
+            return {"ok": False, "error": f"Gerät '{device_id}' nicht gefunden."}
+        slot = device.slots.get(slot_id)
+        if slot is None:
+            return {"ok": False, "error": f"{device.name} hat keinen Slot '{slot_id}'. Bekannt: {', '.join(device.slots)}."}
+        if not slot.writable:
+            return {"ok": False, "error": f"Der Slot '{slot_id}' von {device.name} ist nur lesbar."}
+        try:
+            result = self._controller.set_slot(device_id, slot_id, value, trust_level=trust_level)
+        except TrustLevelDenied:
             # #366: Absage direkt in die gesprochene Antwort — das LLM kann sie so weder
             # übergehen noch einen Erfolg erfinden; run() endet nach diesem Batch.
-            log.info("[tool_agent] set_device_state(%s) abgelehnt: Trust-Level %s reicht nicht", state_id, trust_level)
+            log.info("[tool_agent] set_device_state(%s/%s) abgelehnt: Trust-Level %s reicht nicht", device_id, slot_id, trust_level)
             if TRUST_DENIED_TEXT not in spoken:
                 spoken.append(TRUST_DENIED_TEXT)
             return {"ok": False, "error": "Keine Berechtigung: der Nutzer darf dieses Gerät nicht steuern."}
-        ok = self._iobroker.set_state(state_id, value)
-        return {"ok": ok}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": result.sent}
 
     def _set_automation(self, automation: str, enabled: bool, user_id: str) -> dict:
         if not user_id:
@@ -423,25 +522,36 @@ class ToolAgent:
         return {"ok": True}
 
     @staticmethod
-    def _is_active(dev) -> bool:
-        current = dev.current or {}
-        if "on" in current:
-            return bool(current["on"])
-        level = current.get("level")
-        return bool(level and int(level) > 0)
+    def _slot_value(dev: TypedDevice, kind: int):
+        slot = dev.slot_of_kind(kind)
+        return slot.value if slot is not None else None
 
     @staticmethod
-    def _format_active_state(current: dict) -> str:
+    def _is_active(dev: TypedDevice) -> bool:
+        on = ToolAgent._slot_value(dev, K.SLOT_KIND_ON)
+        if on is not None:
+            return bool(on)
+        if dev.has_slot(K.SLOT_KIND_ON):
+            return False
+        for kind in (K.SLOT_KIND_BRIGHTNESS, K.SLOT_KIND_POSITION):
+            level = ToolAgent._slot_value(dev, kind)
+            if level is not None:
+                return bool(level and int(level) > 0)
+        return False
+
+    @staticmethod
+    def _format_active_state(dev: TypedDevice) -> str:
         parts = []
-        if current.get("on"):
+        if ToolAgent._slot_value(dev, K.SLOT_KIND_ON):
             parts.append("eingeschaltet")
-        level = current.get("level")
-        if level is not None and int(level) > 0:
-            parts.append(f"{level}%")
-        color = current.get("color")
+        for kind in (K.SLOT_KIND_BRIGHTNESS, K.SLOT_KIND_POSITION):
+            level = ToolAgent._slot_value(dev, kind)
+            if level is not None and int(level) > 0:
+                parts.append(f"{int(level)}%")
+        color = ToolAgent._slot_value(dev, K.SLOT_KIND_COLOR)
         if color:
-            parts.append(f"Farbe {color}")
-        power = current.get("power")
+            parts.append(f"Farbe #{int(color):06X}")
+        power = ToolAgent._slot_value(dev, K.SLOT_KIND_POWER)
         if power is not None:
-            parts.append(f"{power}W")
+            parts.append(f"{int(power) if float(power) == int(power) else power}W")
         return ", ".join(parts) if parts else "aktiv"

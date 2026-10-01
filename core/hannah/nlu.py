@@ -94,6 +94,15 @@ _COLORS: dict[str, str] = {
 }
 
 
+def _categories_of(dev) -> frozenset:
+    """Die Kategorie-Codes eines Geräts: `categories` der Registry-Sicht (nlu_devices.NluDevice),
+    bei einem alten `Device` der eine Typ-Code seines v1-Adapters."""
+    categories = getattr(dev, "categories", None)
+    if categories is not None:
+        return categories
+    return frozenset({dev.category}) if dev.category else frozenset()
+
+
 @dataclass
 class Intent:
     name: str                          # TurnOn | TurnOff | SetLevel | SetColor | Query | Smalltalk | Unknown
@@ -847,7 +856,7 @@ class NLU:
         _find_device() nichts gefunden hat, aber ein Gerätename-Versuch erkennbar ist
         (#261, z.B. STT "seit" statt "Seite")."""
         pool = [d for d in self._devices.get(room_key, {}).values()
-                if category_filter is None or d.category == category_filter]
+                if category_filter is None or category_filter in _categories_of(d)]
         matches = []
         for dev in pool:
             key_words = [w for w in _normalize(dev.key).split() if len(w) >= _DEVICE_FUZZY_MIN_LEN]
@@ -1082,8 +1091,8 @@ class NLU:
         """Welche Geräte-Kategorien im Zielbereich vorkommen — im genannten Raum, sonst
         global über alle Räume (#272)."""
         if room_key is not None:
-            return {d.category for d in self._devices.get(room_key, {}).values()}
-        return {d.category for devs in self._devices.values() for d in devs.values()}
+            return {c for d in self._devices.get(room_key, {}).values() for c in _categories_of(d)}
+        return {c for devs in self._devices.values() for d in devs.values() for c in _categories_of(d)}
 
     def _dispatch_category_words(
         self, norm_tokens: set[str], device: Optional["Device"],
@@ -1112,7 +1121,13 @@ class NLU:
         if not matched:
             return None, None, None, None, []
 
-        target_category = device.category if device is not None else category_filter
+        if device is not None:
+            # Ein Gerät kann unter mehreren Codes laufen (Raumthermostat: "thermostat" und
+            # "temperature_sensor"); maßgeblich ist der, für den ein Wort gefunden wurde.
+            fitting = sorted(_categories_of(device) & matched.keys())
+            target_category = fitting[0] if fitting else next(iter(sorted(_categories_of(device))), "")
+        else:
+            target_category = category_filter
         if target_category is None:
             scope = self._categories_in_scope(room_key) & matched.keys()
             candidates = scope or set(matched.keys())

@@ -4,9 +4,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, Optional
-from hannah_proto.v1.hannah_pb2 import AgentDevice as AgentDevice
-from hannah_proto.v1.hannah_pb2 import AgentStateValue as AgentStateValue
+
+from hannah_proto.v2 import hannah_pb2 as pb
+
 from . import responses
+from .typed_devices import slot_value_from_pb, slot_value_to_pb
 
 if TYPE_CHECKING:
     from .nlu import Intent
@@ -14,6 +16,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+# Legacy (#387): nur noch für den alten Gerätebaum. Die typisierte Registry braucht sie nicht.
 # Suffix→canon-Tabelle für handle_state_update() (Live-Updates): Fallback für Adapter,
 # die in AgentStateUpdate kein canonical_key mitschicken (Feld erst seit hannah-proto
 # 4.8; ältere Adapter senden es nicht). Neuere Adapter liefern den Key direkt, dann wird
@@ -102,7 +105,7 @@ class Device:
     category: str          # Licht
     states: dict = field(default_factory=dict)         # canon-key → state_id
     current: dict = field(default_factory=dict)        # canon-key → aktueller Wert (Cache)
-    state_types: dict = field(default_factory=dict)    # canon-key → StateType (proto-Enum-Int, siehe hannah_proto.v1.shared_pb2)
+    state_types: dict = field(default_factory=dict)    # canon-key → StateType (Enum-Int des hannah.v1-Adapters, siehe hannah_proto.v1.shared_pb2)
     enum_values: dict = field(default_factory=dict)    # canon-key → {rohwert: label}, nur bei ENUM/COLOR
     state_writable: dict = field(default_factory=dict) # canon-key → bool, aus ioBroker common.write
     inverted: bool = False  # category 'blind': Aktor nutzt 0%=auf/100%=zu statt Hannahs Konvention (#270)
@@ -113,6 +116,11 @@ class IoBrokerClient:
     """
     Lädt Geräte aus javascript.0.virtualDevice.<Kategorie>.<Etage>.<Raum>.<Gerätename>
     und steuert deren States per REST API v1 (PATCH → ack=false).
+
+    Seit #387 liest und schreibt nichts Sichtbares mehr den State-basierten Gerätebaum
+    (`devices`, `Device`): NLU, Abfragen, Steuern, Tool-Agent und GetDevices laufen über die
+    typisierte Registry (hannah.typed_devices). Der Baum wird aus dem v1-Snapshot weiter gebaut,
+    solange Legacy-Wege ihn brauchen, und ist zur Abkündigung vorgemerkt.
     """
 
     def __init__(self, cfg: dict):
@@ -161,6 +169,16 @@ class IoBrokerClient:
         # (vermeidet Log-Spam bei wiederholten Live-Updates desselben Suffixes).
         self._warned_suffixes: set[str] = set()
 
+        # Beantwortet Geräte-Abfragen aus der typisierten Registry (#387, hannah.device_answers);
+        # ohne sie läuft die Antwort wie bisher über den State-basierten Gerätebaum.
+        self._answerer: Optional[Callable[["Intent"], Optional[str]]] = None
+
+        # Steuern über die typisierte Registry und den DeviceController (#387, Schritt 4); ohne
+        # sie schreibt execute() wie bisher über den State-basierten Gerätebaum.
+        self._registry = None
+        self._controller = None
+        self._room_names: Callable[[], dict] = lambda: self.rooms
+
         # Hintergrund-Thread für Timeouts
         self._timeout_thread = threading.Thread(
             target=self._timeout_loop, daemon=True, name="iobroker-confirm"
@@ -175,6 +193,19 @@ class IoBrokerClient:
         """Register a gRPC state getter: fn(state_id) → json_value."""
         self._getter = fn
 
+    def set_slot_control(self, registry, controller, room_names: Optional[Callable[[], dict]] = None):
+        """Register the typed registry and the slot controller (hannah.device_control): execute()
+        resolves its targets in the registry and writes through `controller.set_slot`.
+        room_names: () → {room_id: display name}, for the labels in the answers."""
+        self._registry = registry
+        self._controller = controller
+        if room_names is not None:
+            self._room_names = room_names
+
+    def set_answerer(self, fn: Callable[["Intent"], Optional[str]]):
+        """Register the query answerer: fn(intent) → answer text (hannah.device_answers)."""
+        self._answerer = fn
+
     def set_feedback_handler(self, fn: Callable[[str, bool, str], None], timeout: float = 3.0):
         """
         Registriert den Feedback-Callback.
@@ -187,9 +218,10 @@ class IoBrokerClient:
     # ------------------------------------------------------------------
     # Laden
 
-    def handle_device_snapshot(self, devices: Iterable[AgentDevice]):
+    def handle_device_snapshot(self, devices: Iterable):
         """
-        Verarbeitet die gesamte Liste von gRPC AgentDevice Objekten.
+        Verarbeitet die gesamte Liste von hannah.v1-AgentDevice-Objekten (State-basierter
+        Pfad der v1-Adapter; typisierte Geräte aus hannah.v2 kommen mit #383 dazu).
         States ohne Raum (z.B. Wetter, Auto) landen im _state_cache.
         """
         new_device_map = {}
@@ -320,6 +352,7 @@ class IoBrokerClient:
         requester_name: str = "",
         wait_confirm: bool = False,
         offline: Optional[list[str]] = None,
+        unsupported: Optional[list[str]] = None,
     ) -> int:
         """
         Löst einen Intent auf und setzt die entsprechenden States per MQTT.
@@ -339,6 +372,10 @@ class IoBrokerClient:
           für denselben Aufruf aktiv sein).
         offline: wird um die Labels der Geräte ergänzt, die innerhalb des Timeouts nicht
           bestätigt haben (nur relevant mit wait_confirm=True).
+        unsupported: wird um je einen fertigen Satz für die Geräte ergänzt, denen die gefragte
+          Fähigkeit fehlt (State nicht vorhanden) oder die sie nur lesen können (nicht
+          schreibbar) — ehrliche Antwort statt stillem Ignorieren (#387). Die Aufrufer
+          verwenden sie nur, wenn gar nichts gesetzt wurde (Rückgabe 0).
         """
         if intent.name == "Unknown":
             log.debug("execute: Intent 'Unknown', nichts zu tun.")
@@ -347,6 +384,12 @@ class IoBrokerClient:
         if not intent.room and not intent.device_id:
             log.warning("execute: Kein Raum erkannt.")
             return 0
+
+        if self._controller is not None:
+            return self._execute_slots(
+                intent, satellite_device, trust_level=trust_level, denied=denied, requester_name=requester_name,
+                wait_confirm=wait_confirm, offline=offline, unsupported=unsupported,
+            )
 
         targets: list[Device] = []
 
@@ -397,6 +440,16 @@ class IoBrokerClient:
             state_id = dev.states.get(state_key)
             if not state_id:
                 log.debug(f"  {dev.name}: State '{state_key}' nicht vorhanden, übersprungen.")
+                if unsupported is not None:
+                    unsupported.append(self._unsupported_text(dev, intent, state_key))
+                continue
+            # Ein schreibgeschützter State (z.B. ein nur lesbarer Helligkeitswert) macht das Gerät
+            # nicht steuerbar. Nur bei ausdrücklichem writable=False, ein fehlender Eintrag gilt
+            # als unbekannt und wird wie bisher gesetzt.
+            if dev.state_writable.get(state_key) is False:
+                log.debug(f"  {dev.name}: State '{state_key}' ist schreibgeschützt, übersprungen.")
+                if unsupported is not None:
+                    unsupported.append(self._unsupported_text(dev, intent, state_key))
                 continue
             # Invertierte Rolladen/Markisen (#270): nur die semantischen "öffnen"/
             # "schließen"-Grenzwerte werden pro Gerät umgerechnet, nie ein explizit
@@ -454,6 +507,184 @@ class IoBrokerClient:
 
         return count
 
+    @staticmethod
+    def _unsupported_text(dev: "Device", intent: "Intent", state_key: str) -> str:
+        """Der ehrliche Satz, wenn ein Gerät das Gefragte nicht kann (#387)."""
+        label = f"{dev.name} im {dev.room_display_name}"
+        return IoBrokerClient._unsupported_sentence(label, state_key, intent.is_open_close or dev.category == "blind")
+
+    @staticmethod
+    def _unsupported_sentence(label: str, state_key: str, open_close: bool) -> str:
+        if state_key == "on":
+            return f"{label} lässt sich nicht ein- oder ausschalten."
+        if state_key == "level":
+            if open_close:
+                return f"{label} lässt sich nicht öffnen oder schließen."
+            return f"{label} lässt sich nicht dimmen."
+        if state_key == "color":
+            return f"{label} lässt sich nicht umfärben."
+        if state_key == "colorTemp":
+            return f"{label} lässt sich nicht auf Warm- oder Kaltweiß stellen."
+        if state_key == "expected":
+            return f"{label} hat keine einstellbare Solltemperatur."
+        if state_key == "mode":
+            return f"{label} hat keinen einstellbaren Modus."
+        if state_key == "fanSpeed":
+            return f"{label} hat keine einstellbare Lüfterstufe."
+        return f"{label} kann das nicht."
+
+    # ------------------------------------------------------------------
+    # Steuern über die typisierte Registry (#387, Schritt 4)
+
+    # Kelvin für "warm"/"kalt" (die Skala von SLOT_KIND_COLOR_TEMPERATURE, siehe device_model.proto)
+    _WHITE_KELVIN = {"warm": 2700, "kalt": 6500}
+    _LEGACY_KEY = {
+        pb.SLOT_KIND_ON: "on", pb.SLOT_KIND_BRIGHTNESS: "level", pb.SLOT_KIND_POSITION: "level",
+        pb.SLOT_KIND_COLOR: "color", pb.SLOT_KIND_COLOR_TEMPERATURE: "colorTemp",
+        pb.SLOT_KIND_TARGET_TEMPERATURE: "expected", pb.SLOT_KIND_MODE: "mode", pb.SLOT_KIND_FAN_SPEED: "fanSpeed",
+    }
+
+    def _resolve_slot_targets(self, intent: "Intent") -> list:
+        """Die Geräte der Registry, die ein Intent trifft: ein bestimmtes Gerät, ein per Key im
+        bestätigten Raum nachgeschlagenes (#268) oder alle Geräte eines Raums (nach Kategorie)."""
+        from .nlu_devices import categories_of, to_nlu_device   # lazy: nlu_devices importiert dieses Modul
+        if intent.device_id:
+            device = self._registry.get(intent.device_id)
+            return [device] if device else []
+        if intent.device_key and intent.room_id and self._registry.devices_in_room(intent.room_id):
+            for device in self._registry.devices_in_room(intent.room_id):
+                if to_nlu_device(device).key == intent.device_key:
+                    intent.device_id = device.device_id
+                    return [device]
+            return []
+        devices = self._registry.devices_in_room(intent.room_id or "")
+        if intent.category_filter:
+            devices = [d for d in devices if intent.category_filter in categories_of(d)]
+        return devices
+
+    def _intent_to_slot_and_value(self, intent: "Intent", device) -> tuple:
+        name = intent.name
+        if name == "TurnOn":
+            return pb.SLOT_KIND_ON, True
+        if name == "TurnOff":
+            return pb.SLOT_KIND_ON, False
+        if name == "SetLevel":
+            is_cover = intent.is_open_close or device.device_class == pb.DEVICE_CLASS_COVER
+            return (pb.SLOT_KIND_POSITION if is_cover else pb.SLOT_KIND_BRIGHTNESS), intent.value
+        if name == "SetColor":
+            if isinstance(intent.value, str) and intent.value.startswith("#"):
+                return pb.SLOT_KIND_COLOR, intent.value
+            kelvin = self._WHITE_KELVIN.get(intent.value)
+            return (pb.SLOT_KIND_COLOR_TEMPERATURE, kelvin) if kelvin else (None, None)
+        if name == "SetTemperature":
+            return pb.SLOT_KIND_TARGET_TEMPERATURE, intent.value
+        if name == "SetMode":
+            return pb.SLOT_KIND_MODE, intent.value
+        if name == "SetFanSpeed":
+            return pb.SLOT_KIND_FAN_SPEED, intent.value
+        return None, None
+
+    def _execute_slots(
+        self, intent: "Intent", satellite_device: str, *, trust_level: Optional[int], denied, requester_name: str,
+        wait_confirm: bool, offline, unsupported,
+    ) -> int:
+        """execute() über die Registry: Ziel und Slot-Art aus dem Intent, geschrieben über
+        DeviceController.set_slot (Trust pro Slot). Bestätigungen wie im State-basierten Pfad,
+        nur der Schlüssel unterscheidet sich: die state_id bei einem v1-Gerät, `device#slot` bei
+        einem v2-Gerät (dort bestätigt ein SlotUpdate mit ack, siehe handle_slot_ack)."""
+        from .device_control import _v1_wire_value   # lazy: device_control importiert dieses Modul
+        targets = self._resolve_slot_targets(intent)
+        if not targets:
+            log.warning(
+                f"execute: Keine Geräte für Raum '{intent.room}'"
+                + (f" / Gerät '{intent.device}'" if intent.device else "")
+                + " gefunden."
+            )
+            return 0
+        rooms = self._room_names()
+        log.info(f"execute: {intent.name}, {len(targets)} Gerät(e) gefunden, value={intent.value!r}")
+
+        count = 0
+        deadline = time.monotonic() + self._confirm_timeout
+        confirm_waits: list[tuple[str, threading.Event, str]] = []
+        for dev in targets:
+            kind, value = self._intent_to_slot_and_value(intent, dev)
+            if kind is None:
+                log.warning(f"execute: Intent '{intent.name}' mit Wert {intent.value!r} nicht auf einen Slot abbildbar")
+                continue
+            label = f"{dev.name} im {rooms.get(dev.room, dev.room)}"
+            slot = dev.slot_of_kind(kind)
+            if slot is None or not slot.writable:
+                log.debug(f"  {dev.name}: Slot {pb.SlotKind.Name(kind)} fehlt oder ist schreibgeschützt, übersprungen.")
+                if unsupported is not None:
+                    open_close = intent.is_open_close or dev.device_class == pb.DEVICE_CLASS_COVER
+                    unsupported.append(self._unsupported_sentence(label, self._LEGACY_KEY.get(kind, ""), open_close))
+                continue
+            # Invertierte Rolladen/Markisen (#270): nur die semantischen "öffnen"/"schließen"-Grenzwerte
+            # sind im Slot kanonisch (100 = offen) und werden vom DeviceController zurückgerechnet. Ein
+            # ausdrücklich genannter Prozentwert geht unverändert an den Aktor (Design-Entscheidung 1),
+            # dafür hier vorab gespiegelt.
+            if kind == pb.SLOT_KIND_POSITION and slot.inverted and not intent.is_open_close:
+                value = 100 - value
+            try:
+                slot_value = slot_value_to_pb(kind, value)
+            except ValueError as exc:
+                log.warning(f"  {dev.name}: {exc}")
+                continue
+            if dev.origin == "v1":
+                key, expected = slot.state_id, _v1_wire_value(slot, slot_value)
+            else:
+                key, expected = f"{dev.device_id}#{slot.slot_id}", slot_value_from_pb(slot_value)
+
+            # Bestätigung *vor* dem Senden registrieren (#373), sonst geht eine sehr schnelle
+            # Bestätigung verloren.
+            confirm_event = None
+            if wait_confirm:
+                confirm_event = threading.Event()
+                with self._confirm_lock:
+                    self._confirm_waiters[key] = {"expected": expected, "event": confirm_event, "success": False}
+            if satellite_device and self._feedback_cb:
+                with self._pending_lock:
+                    self._pending[key] = {
+                        "expected": expected, "device": satellite_device, "deadline": deadline, "label": label,
+                        "confirmed": False, "requester_name": requester_name,
+                    }
+
+            sent = False
+            try:
+                sent = self._controller.set_slot(dev.device_id, slot.slot_id, value, trust_level=trust_level).sent
+            except TrustLevelDenied:
+                log.info(f"  {dev.name}: Trust-Level {trust_level} reicht nicht, übersprungen.")
+                if denied is not None:
+                    denied.append(label)
+            if sent:
+                count += 1
+                if wait_confirm:
+                    confirm_waits.append((key, confirm_event, label))
+            else:
+                # Befehl kam nie raus — nichts zu bestätigen, Registrierung zurückrollen.
+                if wait_confirm:
+                    with self._confirm_lock:
+                        self._confirm_waiters.pop(key, None)
+                if satellite_device and self._feedback_cb:
+                    with self._pending_lock:
+                        self._pending.pop(key, None)
+
+        for key, event, label in confirm_waits:
+            confirmed = event.wait(max(0.0, deadline - time.monotonic()))
+            with self._confirm_lock:
+                waiter = self._confirm_waiters.pop(key, None)
+            if not confirmed or not (waiter and waiter["success"]):
+                if offline is not None:
+                    offline.append(label)
+        return count
+
+    def handle_slot_ack(self, update: "pb.SlotUpdate") -> None:
+        """Ein SlotUpdate mit ack=true eines v2-Adapters bestätigt einen gesendeten Befehl
+        (Gegenstück zu handle_state_update bei v1-Adaptern)."""
+        if update.ack:
+            self._confirm(f"{update.device_id}#{update.slot_id}", slot_value_from_pb(update.value))
+
     # ------------------------------------------------------------------
     # State setzen
 
@@ -478,6 +709,8 @@ class IoBrokerClient:
         Ohne Raum → globale Abfrage über alle Räume.
         Gibt None zurück wenn keine Daten verfügbar.
         """
+        if self._answerer is not None:
+            return self._answerer(intent)
         if intent.device_id:
             targets = [self._devices_by_id[intent.device_id]]
             room_label = intent.room
@@ -773,17 +1006,28 @@ class IoBrokerClient:
     def handle_state_update(self, state_id: str, raw: str, canonical_key: Optional[str] = None):
         """
         Callback für eingehende State-Updates aus ioBroker.
-        Parst den Rohwert, schreibt ihn in den Device-Cache und prüft Pending-Confirmations.
+        Parst den Rohwert, prüft Pending-Confirmations und pflegt den alten Gerätebaum.
         States ohne Raum landen im _state_cache.
 
-        canonical_key kommt aus AgentStateUpdate (hannah-proto >= 4.8); fehlt er (None
-        oder leer, ältere Adapter), wird er über den State-Suffix aufgelöst.
+        Bestätigungen hängen an der state_id, nicht am Gerätebaum (#387): sie greifen auch dann,
+        wenn das Gerät nur in der typisierten Registry steht. Den Wert der Registry pflegt
+        main.py (legacy_devices.apply_state_update).
+
+        Der alte Gerätebaum (`devices`, `Device.current`) ist Legacy: nichts Sichtbares liest ihn
+        noch, er bleibt bis zur Abkündigung erhalten. canonical_key kommt aus AgentStateUpdate
+        (hannah-proto >= 4.8); fehlt er (None oder leer, ältere Adapter), wird er dort über den
+        State-Suffix aufgelöst.
         """
         if state_id in self._state_cache:
             self._state_cache[state_id] = self._parse_payload(raw)
             log.debug(f"State-Cache: {state_id} = {self._state_cache[state_id]!r}")
             return
 
+        value = self._parse_payload(raw)
+        self._update_legacy_tree(state_id, value, canonical_key)
+        self._confirm(state_id, value)
+
+    def _update_legacy_tree(self, state_id: str, value, canonical_key: Optional[str]) -> None:
         device_id = ".".join(state_id.rsplit(".", 1)[:-1])
         state_suffix = state_id.rsplit(".", 1)[-1]
         device = self._devices_by_id.get(device_id)
@@ -797,15 +1041,17 @@ class IoBrokerClient:
                 log.warning(
                     f"Unbekannter State-Suffix '{state_suffix}' (state_id={state_id}) — "
                     f"Adapter liefert kein canonical_key und der Suffix fehlt in "
-                    f"DEFAULT_IOBROKER_STATE_NAMES, Live-Update wird verworfen "
-                    f"(Wert friert auf dem letzten Snapshot ein)."
+                    f"DEFAULT_IOBROKER_STATE_NAMES, Live-Update wird im alten Gerätebaum verworfen."
                 )
             return
 
-        value = self._parse_payload(raw)
         device.current[canon] = value
         log.debug(f"Cache: {device.name}.{canon} = {value!r}")
 
+    def _confirm(self, key: str, value) -> None:
+        """Prüft einen eingetroffenen Wert gegen wartende Bestätigungen: die state_id bei einem
+        v1-Gerät, `device#slot` bei einem v2-Gerät."""
+        state_id = key
         # Pending-Confirmation prüfen (Satelliten-Pfad, asynchron)
         with self._pending_lock:
             pending = self._pending.pop(state_id, None)
@@ -875,7 +1121,13 @@ class IoBrokerClient:
         raw_value  : String-serialisierter Wert, z.B. "true", "50", "#FF0000"
         trust_level: Trust-Level des anfragenden Users (#366), siehe may_set()
         Wirft TrustLevelDenied, wenn das Trust-Level nicht reicht.
+
+        Mit registriertem Slot-Controller (#387) läuft das über die typisierte Registry: der
+        State-Key wird auf den Slot des Geräts abgebildet und über DeviceController.set_slot
+        geschrieben, so auch bei Geräten eines hannah.v2-Adapters.
         """
+        if self._controller is not None:
+            return self._control_direct_slots(device_id, state_key, raw_value, trust_level)
         device = self._devices_by_id.get(device_id)
         if not device:
             log.warning(f"control_direct: Gerät {device_id!r} nicht gefunden")
@@ -894,6 +1146,30 @@ class IoBrokerClient:
             device.current[state_key] = value
             return True
         return False
+
+    def _control_direct_slots(self, device_id: str, state_key: str, raw_value: str, trust_level: Optional[int]) -> bool:
+        """control_direct() über die Registry. Der State-Key eines hannah.v1-Clients ist der Key, den
+        ihm die Übersetzung der Lib für den Slot gegeben hat (GetDevices), darüber wird der Slot
+        gefunden."""
+        from hannah_grpc.translate import translate   # lazy: nur dieser Weg braucht die Lib
+        from .typed_devices import device_info_to_pb
+        device = self._registry.get(device_id)
+        if device is None:
+            log.warning(f"control_direct: Gerät {device_id!r} nicht gefunden")
+            return False
+        keys = translate(device_info_to_pb(device), "v1", strict=False).states
+        slot_id = next((slot.slot_id for slot, key in zip(device.slots.values(), keys) if key == state_key), None)
+        if slot_id is None and state_key in device.slots:
+            slot_id = state_key
+        if slot_id is None:
+            log.warning(f"control_direct: State {state_key!r} für {device.name!r} nicht vorhanden")
+            return False
+        try:
+            result = self._controller.set_slot(device_id, slot_id, self._parse_payload(raw_value), trust_level=trust_level)
+        except ValueError as exc:
+            log.warning(f"control_direct: {device.name!r}/{slot_id}: {exc}")
+            return False
+        return result.found and result.sent
 
     def get_devices_snapshot(self) -> list[dict]:
         """
@@ -933,6 +1209,18 @@ class IoBrokerClient:
         if state_id in self._state_cache:
             val = self._state_cache[state_id]
             return str(val) if val is not None else None
+
+        if self._registry is not None:
+            target = self._registry.lookup_state(state_id)
+            slot = None
+            if target is not None:
+                registered = self._registry.get(target[0])
+                slot = registered.slots.get(target[1]) if registered else None
+            if slot is not None:
+                value = slot.value
+                if value is None:
+                    return None
+                return str(int(value)) if isinstance(value, float) and value == int(value) else str(value)
 
         device_id = ".".join(state_id.rsplit(".", 1)[:-1])
         state_suffix = state_id.rsplit(".", 1)[-1]

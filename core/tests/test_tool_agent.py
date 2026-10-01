@@ -3,43 +3,40 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hannah.iobroker import Device
+from hannah_proto.v2 import hannah_pb2 as pb
+
+from hannah.device_control import DeviceController
 from hannah.llm import DummyLLM
 from hannah.tool_agent import ToolAgent
+from hannah.typed_devices import DeviceRegistry, Slot, TypedDevice
+
+C = pb.DeviceClass
+K = pb.SlotKind
+ROOMS = {"wohnzimmer": "Wohnzimmer"}
 
 
-def _make_iobroker(devices: list[Device] | None = None) -> MagicMock:
-    """Helper: IoBrokerClient-Mock mit optionaler Device-Liste."""
+def _make_iobroker() -> MagicMock:
+    """Helper: IoBrokerClient-Mock (Geräte stehen seit #387 in der Registry)."""
     iobroker = MagicMock()
-    devs = devices or []
-    iobroker.rooms = {d.room: d.room_display_name for d in devs}
-    by_key = {d.key: d for d in devs}
-    iobroker.devices = {d.room: by_key for d in devs}
-    iobroker._devices_by_id = {d.id: d for d in devs}
+    iobroker.rooms = ROOMS
     return iobroker
 
 
-def _make_device(
-    device_id: str = "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
-    name: str = "Decke",
-    room: str = "wohnzimmer",
-    room_display_name: str = "Wohnzimmer",
-    floor: str = "EG",
-    category: str = "Licht",
-    states: dict | None = None,
-    current: dict | None = None,
-) -> Device:
-    return Device(
-        id=device_id,
-        name=name,
-        key=name.lower(),
-        room=room,
-        room_display_name=room_display_name,
-        floor=floor,
-        category=category,
-        states=states if states is not None else {"on": f"{device_id}.on"},
-        current=current if current is not None else {"on": True},
-    )
+def _slot(kind, value=None, *, writable=True, trust=None, state_id="", options=None) -> Slot:
+    return Slot(slot_id=pb.SlotKind.Name(kind)[len("SLOT_KIND_"):].lower(), kind=kind, value=value, writable=writable,
+                required_trust_level=trust, state_id=state_id, options=list(options or []))
+
+
+def _typed(device_id, name, *slots, device_class=C.DEVICE_CLASS_LIGHT, room="wohnzimmer", origin="v2") -> TypedDevice:
+    return TypedDevice(device_id=device_id, name=name, room=room, device_class=device_class,
+                       slots={s.slot_id: s for s in slots}, origin=origin)
+
+
+def _registry(*devices: TypedDevice) -> DeviceRegistry:
+    registry = DeviceRegistry()
+    registry.replace("v2", [d for d in devices if d.origin == "v2"])
+    registry.replace("v1", [d for d in devices if d.origin == "v1"])
+    return registry
 
 
 def _llm_response(content: str = "", tool_calls: list | None = None) -> dict:
@@ -154,14 +151,14 @@ class TestToolAgentRun:
         assert messages[-1] == {"role": "user", "content": "text"}
 
     def test_tool_result_appended_to_messages(self):
-        dev = _make_device()
-        iobroker = _make_iobroker([dev])
+        dev = _typed("dev-decke", "Decke", _slot(K.SLOT_KIND_ON, True))
+        iobroker = _make_iobroker()
         llm = MagicMock()
         llm.chat_with_tools.side_effect = [
             _llm_response(tool_calls=[_tool_call("get_all_devices", {})]),
             _llm_response(content="Fertig."),
         ]
-        agent = ToolAgent(llm, iobroker)
+        agent = ToolAgent(llm, iobroker, registry=_registry(dev), room_names=lambda: ROOMS)
 
         agent.run("Zeig Geräte")
 
@@ -169,7 +166,7 @@ class TestToolAgentRun:
         tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
         content = tool_result_msg["content"]
         assert isinstance(content, str)
-        assert dev.id in content
+        assert dev.device_id in content
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -177,32 +174,47 @@ class TestToolAgentRun:
 
 
 class TestToolDispatch:
+    DEVICE_ID = "dev-decke"
+
     def setup_method(self):
-        self.dev = _make_device(
-            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            name="Decke",
-            room="Wohnzimmer",
-            states={"on": "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on"},
-            current={"on": False},
-        )
-        self.iobroker = _make_iobroker([self.dev])
-        self.agent = ToolAgent(MagicMock(), self.iobroker)
+        self.dev = _typed(self.DEVICE_ID, "Decke", _slot(K.SLOT_KIND_ON, False), _slot(K.SLOT_KIND_BRIGHTNESS, 40.0))
+        self.registry = _registry(self.dev)
+        self.iobroker = _make_iobroker()
+        self.iobroker.rooms = ROOMS
+        self.agent = ToolAgent(MagicMock(), self.iobroker, registry=self.registry, room_names=lambda: ROOMS)
+        self.sent: list = []
+        self.set_state = MagicMock(return_value=True)
+        self.agent.set_device_control(DeviceController(
+            self.registry,
+            send_set_slot=lambda device_id, slot_id, value: self.sent.append((device_id, slot_id, value)) or True,
+            send_set_state=self.set_state,
+        ))
 
     def test_get_all_devices_structure(self):
         result = self.agent._get_all_devices()
 
         assert isinstance(result, str)
-        assert self.dev.id in result
+        assert self.DEVICE_ID in result
         assert "Decke" in result
         assert "Wohnzimmer" in result
         assert "Licht" in result
 
-    def test_get_device_state_found(self):
-        result = self.agent._get_device_state(self.dev.id)
+    def test_get_device_state_lists_the_slots_with_their_values(self):
+        result = self.agent._get_device_state(self.DEVICE_ID)
 
-        assert isinstance(result, str)
         assert "Decke" in result
-        assert "on" in result
+        assert "on=False" in result and "brightness=40.0" in result
+
+    def test_get_device_state_marks_read_only_slots_and_lists_options(self):
+        self.registry.replace("v2", [_typed(
+            "klima", "Klima", _slot(K.SLOT_KIND_MODE, "cool", options=["cool", "dry"]),
+            _slot(K.SLOT_KIND_TEMPERATURE, 24.5, writable=False), device_class=C.DEVICE_CLASS_CLIMATE,
+        )])
+
+        result = self.agent._get_device_state("klima")
+
+        assert "mode=cool (Werte: cool, dry)" in result
+        assert "temperature=24.5 (nur lesen)" in result
 
     def test_get_device_state_not_found(self):
         result = self.agent._get_device_state("nicht.vorhanden")
@@ -210,24 +222,81 @@ class TestToolDispatch:
         assert isinstance(result, str)
         assert "nicht.vorhanden" in result
 
-    def test_set_device_state_calls_setter(self):
-        self.iobroker.set_state.return_value = True
+    def test_get_devices_in_room_lists_slots(self):
+        result = self.agent._get_devices_in_room("wohn")
 
-        result = self.agent._set_device_state(
-            "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on", True, None, []
-        )
+        assert "Geräte im Wohnzimmer (1)" in result
+        assert f"[ID: {self.DEVICE_ID}, Slots: on=False, brightness=40.0]" in result
 
-        self.iobroker.set_state.assert_called_once_with(
-            "javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on", True
-        )
+    def test_an_unknown_room_is_reported(self):
+        assert self.agent._get_devices_in_room("Keller") == "Kein Raum 'Keller' gefunden."
+
+    @pytest.mark.parametrize("category", ["Licht", "licht", "Lampen", "light", "Leuchte"])
+    def test_a_light_is_found_by_german_and_english_category_words(self, category):
+        assert self.DEVICE_ID in self.agent._get_devices_by_category(category)
+
+    @pytest.mark.parametrize("category", ["Steckdosen", "Heizung", "Rollladen"])
+    def test_other_categories_do_not_match_a_light(self, category):
+        assert "Keine Geräte in Kategorie" in self.agent._get_devices_by_category(category)
+
+    def test_the_active_devices_name_their_state(self):
+        self.registry.set_slot_value(self.DEVICE_ID, "on", True)
+
+        result = self.agent._get_active_devices()
+
+        assert "Aktive Geräte (1 von 1)" in result
+        assert "eingeschaltet, 40%" in result
+
+    def test_set_device_state_sends_the_slot(self):
+        result = self.agent._set_device_state(self.DEVICE_ID, "on", True, None, [])
+
         assert result == {"ok": True}
+        assert [(d, s, v.boolean) for d, s, v in self.sent] == [(self.DEVICE_ID, "on", True)]
 
-    def test_set_device_state_returns_setter_result(self):
-        self.iobroker.set_state.return_value = False
+    def test_set_device_state_reports_an_unreachable_adapter(self):
+        self.agent._controller._send_set_slot = lambda *_: False
 
-        result = self.agent._set_device_state("some.state", 42, None, [])
+        assert self.agent._set_device_state(self.DEVICE_ID, "on", True, None, []) == {"ok": False}
 
-        assert result == {"ok": False}
+    def test_set_device_state_refuses_a_read_only_slot(self):
+        self.registry.replace("v2", [_typed("m", "Messer", _slot(K.SLOT_KIND_POWER, 5.0, writable=False))])
+
+        result = self.agent._set_device_state("m", "power", 10, None, [])
+
+        assert result["ok"] is False and "nur lesbar" in result["error"]
+        assert self.sent == []
+
+    def test_set_device_state_names_the_known_slots_for_an_unknown_one(self):
+        result = self.agent._set_device_state(self.DEVICE_ID, "farbe", "#FF0000", None, [])
+
+        assert result["ok"] is False
+        assert "on, brightness" in result["error"]
+
+    def test_set_device_state_tells_the_llm_about_a_wrong_value(self):
+        result = self.agent._set_device_state(self.DEVICE_ID, "brightness", "hell", None, [])
+
+        assert result["ok"] is False and "BRIGHTNESS" in result["error"]
+        assert self.sent == []
+
+    def test_an_unknown_device_is_reported(self):
+        result = self.agent._set_device_state("gibt-es-nicht", "on", True, None, [])
+
+        assert result["ok"] is False and "nicht gefunden" in result["error"]
+
+    def test_a_llm_that_still_names_the_state_id_reaches_a_v1_device(self):
+        self.registry.replace("v1", [_typed(
+            "x.Lampe", "Lampe", _slot(K.SLOT_KIND_ON, False, state_id="x.Lampe.on"), origin="v1",
+        )])
+
+        result = self.agent._dispatch("set_device_state", {"state_id": "x.Lampe.on", "value": True}, [], "", None)
+
+        assert result == {"ok": True}
+        self.set_state.assert_called_once_with("x.Lampe.on", True)
+
+    def test_without_a_device_control_nothing_is_written(self):
+        agent = ToolAgent(MagicMock(), self.iobroker, registry=self.registry)
+
+        assert agent._set_device_state(self.DEVICE_ID, "on", True, None, [])["ok"] is False
 
     def test_speak_appends_to_spoken(self):
         spoken: list[str] = []
@@ -244,24 +313,19 @@ class TestToolDispatch:
         assert "fly_to_moon" in result["error"]
 
     def test_is_active_on_true(self):
-        dev = _make_device(current={"on": True, "level": 80})
-        assert ToolAgent._is_active(dev) is True
+        assert ToolAgent._is_active(_typed("a", "A", _slot(K.SLOT_KIND_ON, True), _slot(K.SLOT_KIND_BRIGHTNESS, 80.0))) is True
 
     def test_is_active_on_false_with_level(self):
-        dev = _make_device(current={"on": False, "level": 80})
-        assert ToolAgent._is_active(dev) is False
+        assert ToolAgent._is_active(_typed("a", "A", _slot(K.SLOT_KIND_ON, False), _slot(K.SLOT_KIND_BRIGHTNESS, 80.0))) is False
 
-    def test_is_active_no_on_state_level_positive(self):
-        dev = _make_device(current={"level": 50})
-        assert ToolAgent._is_active(dev) is True
+    def test_is_active_no_on_slot_level_positive(self):
+        assert ToolAgent._is_active(_typed("a", "A", _slot(K.SLOT_KIND_BRIGHTNESS, 50.0))) is True
 
-    def test_is_active_no_on_state_level_zero(self):
-        dev = _make_device(current={"level": 0})
-        assert ToolAgent._is_active(dev) is False
+    def test_is_active_no_on_slot_level_zero(self):
+        assert ToolAgent._is_active(_typed("a", "A", _slot(K.SLOT_KIND_BRIGHTNESS, 0.0))) is False
 
-    def test_is_active_empty_current(self):
-        dev = _make_device(current={})
-        assert ToolAgent._is_active(dev) is False
+    def test_is_active_without_values(self):
+        assert ToolAgent._is_active(_typed("a", "A")) is False
 
 
 class TestSetAutomationDispatch:
@@ -363,54 +427,54 @@ class TestDefaultChatWithTools:
 
 
 class TestToolAgentTrustLevel:
-    STATE = "javascript.0.virtualDevice.Schloss.EG.Flur.Haustuer.on"
+    DEVICE_ID = "haustuer"
 
-    def _agent(self, allowed: bool) -> tuple[ToolAgent, MagicMock]:
-        iobroker = _make_iobroker()
-        iobroker.may_set.return_value = allowed
-        iobroker.set_state.return_value = True
-        return ToolAgent(MagicMock(), iobroker), iobroker
+    def _agent(self, llm=None) -> tuple[ToolAgent, list]:
+        registry = _registry(_typed(self.DEVICE_ID, "Haustür", _slot(K.SLOT_KIND_ON, False, trust=8)))
+        sent: list = []
+        agent = ToolAgent(llm or MagicMock(), _make_iobroker(), registry=registry, room_names=lambda: ROOMS)
+        agent.set_device_control(DeviceController(
+            registry, send_set_slot=lambda *args: sent.append(args) or True, send_set_state=MagicMock(return_value=True),
+        ))
+        return agent, sent
 
     def test_denied_set_is_not_executed_and_spoken_directly(self):
-        agent, iobroker = self._agent(allowed=False)
+        agent, sent = self._agent()
         spoken: list[str] = []
 
-        result = agent._dispatch("set_device_state", {"state_id": self.STATE, "value": True}, spoken, "", 0)
+        result = agent._dispatch("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True}, spoken, "", 0)
 
-        iobroker.may_set.assert_called_once_with(self.STATE, 0)
-        iobroker.set_state.assert_not_called()
+        assert sent == []
         assert result["ok"] is False
         assert spoken == ["Das darfst du leider nicht steuern."]
 
     def test_allowed_set_is_executed(self):
-        agent, iobroker = self._agent(allowed=True)
+        agent, sent = self._agent()
         spoken: list[str] = []
 
-        result = agent._dispatch("set_device_state", {"state_id": self.STATE, "value": True}, spoken, "", 8)
+        result = agent._dispatch("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True}, spoken, "", 8)
 
-        iobroker.set_state.assert_called_once_with(self.STATE, True)
+        assert len(sent) == 1
         assert result == {"ok": True}
         assert spoken == []
 
     def test_run_ends_with_denial_even_if_llm_never_speaks(self):
         llm = MagicMock()
         llm.chat_with_tools.return_value = _llm_response(
-            tool_calls=[_tool_call("set_device_state", {"state_id": self.STATE, "value": True})]
+            tool_calls=[_tool_call("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True})]
         )
-        iobroker = _make_iobroker()
-        iobroker.may_set.return_value = False
-        agent = ToolAgent(llm, iobroker)
+        agent, sent = self._agent(llm)
 
         assert agent.run("schließ die Haustür auf", trust_level=0) == "Das darfst du leider nicht steuern."
-        iobroker.set_state.assert_not_called()
+        assert sent == []
 
     def test_default_trust_level_is_guest(self):
         llm = MagicMock()
         llm.chat_with_tools.return_value = _llm_response(
-            tool_calls=[_tool_call("set_device_state", {"state_id": self.STATE, "value": True})]
+            tool_calls=[_tool_call("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True})]
         )
-        iobroker = _make_iobroker()
-        iobroker.may_set.return_value = False
-        ToolAgent(llm, iobroker).run("schließ die Haustür auf")
+        agent, sent = self._agent(llm)
 
-        iobroker.may_set.assert_called_once_with(self.STATE, 0)
+        agent.run("schließ die Haustür auf")
+
+        assert sent == []

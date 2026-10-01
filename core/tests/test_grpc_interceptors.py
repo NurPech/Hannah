@@ -11,13 +11,13 @@ from hannah.grpc_interceptors import (
     read_proto_version,
 )
 
-LEGACY_PREFIX = "/hannah.HannahService/"
+LEGACY_PREFIX = "/hannah.v1.HannahService/"
 
 EXPECTED_VERSION = str(_PROTO_VERSION)
-UNKNOWN_METHOD = "/hannah.v0.HannahService/SubmitText"
+UNKNOWN_METHOD = "/hannah.HannahService/SubmitText"  # the unversioned package is gone since hannah.v2
 
 
-def _handler_call_details(method="/hannah.v1.HannahService/SubmitText", version=EXPECTED_VERSION):
+def _handler_call_details(method="/hannah.v2.HannahService/SubmitText", version=EXPECTED_VERSION):
     metadata = ((PROTO_VERSION_METADATA_KEY, version),) if version is not None else ()
     return MagicMock(method=method, invocation_metadata=metadata)
 
@@ -125,7 +125,7 @@ class TestOutdatedComponentInterceptor:
 
         interceptor.intercept_service(
             MagicMock(return_value=handler),
-            _handler_call_details(method="/hannah.v1.HannahService/ChannelConnect", version=EXPECTED_VERSION),
+            _handler_call_details(method="/hannah.v2.HannahService/ChannelConnect", version=EXPECTED_VERSION),
         )
 
         notifier.notify_current_call.assert_called_once_with("ChannelConnect")
