@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.94.4 (2026-10-01)
+### Hannah Proxy
+
+* Changed: the proxy now speaks the new `hannah.v2` API to Hannah Core and still works against a Core that only knows `hannah.v1`. A Core older than `hannah.v1`, which predates the versioned API, is no longer supported. Requires `hannah-proto-go` v5.2.0 and `hannah-grpc-lib` 0.6.1 (Refs #392)
+
 ## 0.94.3 (2026-10-01)
 ### Hannah Core
 

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/NurPech/hannah-proto-go/v4/hannahv1"
+	pb "github.com/NurPech/hannah-proto-go/v5/hannahv2"
 	"gitlab.com/gessinger/hannah-grpc-lib/go/client"
 	"google.golang.org/grpc"
 )
@@ -22,13 +22,13 @@ type PlayAudioFunc func(deviceID string, pcm []byte, sampleRate int32, isLast bo
 // Client is a gRPC client to Hannah Core.
 type Client struct {
 	conn      *grpc.ClientConn
-	versioned *client.VersionedConn
+	versioned *client.Versioned
 	stub      pb.HannahServiceClient
 }
 
 // NewClient dials Hannah Core at address (e.g. "192.168.8.1:50051").
 //
-// Calls use hannah.v1; against a Core too old for it they go to the unversioned
+// Calls use hannah.v2; against a Core too old for it they go to the hannah.v1
 // N−1 path instead (hannah-grpc-lib client, #364). x-proto-version and
 // x-compat-version come from the lib's dial options.
 func NewClient(address string) (*Client, error) {
@@ -39,7 +39,7 @@ func NewClient(address string) (*Client, error) {
 		return nil, fmt.Errorf("grpc dial %q: %w", address, err)
 	}
 	versioned := client.New(conn, nil)
-	return &Client{conn: conn, versioned: versioned, stub: pb.NewHannahServiceClient(versioned)}, nil
+	return &Client{conn: conn, versioned: versioned, stub: pb.NewHannahServiceClient(versioned.Translated())}, nil
 }
 
 // Close tears down the gRPC connection.
