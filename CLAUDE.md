@@ -249,7 +249,7 @@ Alles liest und schreibt die Registry:
 - **Abfragen**: `device_answers.DeviceAnswers` antwortet über Klassen und Slots (Thermostat nennt Ist und Soll, Temperatur und Feuchte kollidieren nicht).
 - **Steuern**: `IoBrokerClient.execute()` löst Ziele in der Registry auf und schreibt über `device_control.DeviceController.set_slot`: Trust-Level pro Slot (`Slot.required_trust_level`), bei v2 `SetSlot` (Bestätigung per `SlotUpdate` mit `ack`), bei v1 `SetState` auf die `state_id` des Slots (Bestätigung per State-Update). Fehlt der Slot oder ist er nur lesbar, sagt Hannah es (`execute(unsupported=…)`), statt still nichts zu tun.
 - **Tool-Agent**: `set_device_state(device_id, slot_id, value)`, die Lese-Tools zeigen Slots mit Werten.
-- **GetDevices/ControlDevice**: v2 nativ, v1-Clients (Telegram, WebUI) bekommen die Registry über `hannah_grpc.translate` in State-Form.
+- **GetDevices/ControlDevice**: v2 nativ (Telegram seit #389), v1-Clients (WebUI) bekommen die Registry über `hannah_grpc.translate` in State-Form.
 
 Der **alte Gerätebaum** (`IoBrokerClient.devices`/`Device`, `DEFAULT_IOBROKER_STATE_NAMES`) ist Legacy: er wird aus dem v1-Snapshot weiter gebaut, aber nichts Sichtbares liest ihn mehr. Entfernung nach einer Übergangszeit (weiche Abkündigung).
 

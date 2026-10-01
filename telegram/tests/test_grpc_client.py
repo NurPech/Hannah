@@ -16,7 +16,12 @@ class _FakeStubs:
         self.service = CURRENT_SERVICE
         self.resets = 0
 
+    previous = False
+
     async def resolve(self):
+        return self.stub
+
+    async def resolve_translated(self):
         return self.stub
 
     def reset(self):
@@ -48,7 +53,7 @@ async def test_subscribe_events_sends_proto_version_metadata_explicitly():
 import asyncio
 from types import SimpleNamespace
 
-from hannah_proto.v1 import hannah_pb2
+from hannah_proto.v2 import hannah_pb2
 
 
 class _FakeChannelCall:
@@ -129,7 +134,7 @@ async def test_redeem_link_token_times_out():
 
 
 # ---------------------------------------------------------------------------
-# ControlDevice: requesting user for the per-state trust level (#368)
+# ControlDevice: requesting user for the per-slot trust level (#368)
 # ---------------------------------------------------------------------------
 
 from unittest.mock import AsyncMock
@@ -142,9 +147,10 @@ async def test_control_device_sends_requesting_chat():
         return_value=hannah_pb2.StatusResponse(ok=False, message="Das darfst du leider nicht steuern.")
     )
 
-    ok, msg = await client.control_device("dev", "on", "true", 4711)
+    ok, msg = await client.control_device("dev", "on", hannah_pb2.SlotValue(boolean=True), 4711)
 
     request = client._stubs.stub.ControlDevice.call_args.args[0]
-    assert (request.device_id, request.state, request.value) == ("dev", "on", "true")
+    assert (request.device_id, request.slot_id) == ("dev", "on")
+    assert request.value.boolean is True
     assert (request.source_service, request.source_user_id) == ("telegram", "4711")
     assert (ok, msg) == (False, "Das darfst du leider nicht steuern.")

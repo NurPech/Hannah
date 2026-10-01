@@ -10,7 +10,9 @@ import grpc
 import grpc.aio
 
 from hannah_grpc import client as hannah_client
-from hannah_proto.v1 import hannah_pb2
+from hannah_grpc import translate as hannah_translate
+from hannah_proto.v1 import hannah_pb2 as v1_pb2
+from hannah_proto.v2 import hannah_pb2
 
 log = logging.getLogger(__name__)
 
@@ -18,8 +20,8 @@ log = logging.getLogger(__name__)
 class HannahClient:
     """Thin async wrapper around the Hannah gRPC stub.
 
-    Works with hannah.v1 types only. Against a Core too old for hannah.v1, calls go to the
-    unversioned N−1 path instead (hannah_grpc.client.VersionedStub, #360)."""
+    Works with hannah.v2 types only. Against a Core too old for hannah.v2, the calls are
+    translated to hannah.v1 (hannah_grpc.client.VersionedStub.resolve_translated())."""
 
     def __init__(self, host: str, port: int) -> None:
         self._address = f"{host}:{port}"
@@ -27,12 +29,13 @@ class HannahClient:
         self._stubs: Optional[hannah_client.VersionedStub] = None
         # Open ChannelConnect stream (#334) and its redeem requests awaiting an answer
         self._channel_call = None
+        self._channel_pb = hannah_pb2
         self._channel_write_lock = asyncio.Lock()
         self._pending_redeems: dict[str, asyncio.Future] = {}
 
     async def connect(self) -> None:
         # x-proto-version and x-compat-version (hannah-proto#10/hannah#217) on every
-        # call, x-compat-version per service path (v1 or N−1).
+        # call, x-compat-version per service path (v2 or N−1).
         self._channel = grpc.aio.insecure_channel(
             self._address,
             interceptors=hannah_client.aio_interceptors(),
@@ -42,7 +45,7 @@ class HannahClient:
 
     async def _get_stub(self):
         assert self._stubs, "call connect() first"
-        return await self._stubs.resolve()
+        return await self._stubs.resolve_translated()
 
     def _stream_metadata(self, method: str) -> tuple:
         # grpc.aio's stream interceptors don't reliably apply metadata mutations (unlike
@@ -222,18 +225,20 @@ class HannahClient:
             log.error("GetDevices gRPC error: %s", exc)
             return hannah_pb2.GetDevicesResponse()
 
-    async def control_device(self, device_id: str, state: str, value: str, chat_id: str) -> tuple[bool, str]:
-        """Directly set a device state. Returns (ok, message).
+    async def control_device(
+        self, device_id: str, slot_id: str, value: "hannah_pb2.SlotValue", chat_id: str,
+    ) -> tuple[bool, str]:
+        """Directly set a slot of a device. Returns (ok, message).
 
         chat_id identifies the requesting user, same as submit_text: Hannah looks the user
-        up via linked accounts to check the state's minimum trust level (#368).
+        up via linked accounts to check the slot's minimum trust level (#368).
         """
         stub = await self._get_stub()
         try:
             resp = await stub.ControlDevice(
                 hannah_pb2.ControlDeviceRequest(
                     device_id=device_id,
-                    state=state,
+                    slot_id=slot_id,
                     value=value,
                     source_service="telegram",
                     source_user_id=str(chat_id),
@@ -333,10 +338,18 @@ class HannahClient:
         """
         while True:
             try:
-                stub = await self._get_stub()
+                # A bidirectional stream isn't translated by the lib: the native stub of the
+                # active generation, with that generation's messages.
+                assert self._stubs, "call connect() first"
+                stub = await self._stubs.resolve()
+                previous = self._stubs.previous
+                pb = v1_pb2 if previous else hannah_pb2
                 call = stub.ChannelConnect(metadata=self._stream_metadata("ChannelConnect"))
-                await call.write(hannah_pb2.ChannelMessage(register=register))
+                await call.write(pb.ChannelMessage(
+                    register=hannah_translate.translate(register, "v1") if previous else register,
+                ))
                 self._channel_call = call
+                self._channel_pb = pb
                 async for cmd in call:
                     which = cmd.WhichOneof("command")
                     if which == "registered":
@@ -373,7 +386,8 @@ class HannahClient:
         self._pending_redeems[request_id] = fut
         try:
             async with self._channel_write_lock:
-                await call.write(hannah_pb2.ChannelMessage(redeem=hannah_pb2.RedeemLinkToken(
+                pb = self._channel_pb
+                await call.write(pb.ChannelMessage(redeem=pb.RedeemLinkToken(
                     request_id=request_id, token=token, account_id=account_id,
                 )))
             return await asyncio.wait_for(fut, timeout)

@@ -40,7 +40,9 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 
-from hannah_proto.v1 import hannah_pb2
+from hannah_proto.v2 import hannah_pb2
+
+from hannah_telegram import device_menu
 
 if TYPE_CHECKING:
     from hannah_telegram.grpc_client import HannahClient
@@ -68,9 +70,9 @@ def _cb_device(room_idx: int, dev_idx: int) -> str:
     return f"{_CB}:d:{room_idx}:{dev_idx}"
 
 
-def _cb_ctrl(room_idx: int, dev_idx: int, state: str, value: str) -> str:
+def _cb_ctrl(room_idx: int, dev_idx: int, slot_id: str, value: str) -> str:
     """Callback-Daten für Steuerbefehl. Max. ~30 Bytes (weit unter Telegramm-Limit von 64)."""
-    return f"{_CB}:c:{room_idx}:{dev_idx}:{state}:{value}"
+    return f"{_CB}:c:{room_idx}:{dev_idx}:{slot_id}:{value}"
 
 
 _COMMANDS_DEFAULT = [
@@ -94,25 +96,6 @@ _COMMANDS_ADMIN = [
     telegram.BotCommand("systemmessages", "System-Benachrichtigungen an/aus"),
     telegram.BotCommand("trustlevel",     "Trust-Level setzen"),
 ]
-
-def _iaq_label(value: float) -> str:
-    """Übersetzt den BSEC2-IAQ-Index (0–500) in eine Klartext-Bewertung (gespiegelt aus Hannah Core)."""
-    if value <= 50:
-        return "gut"
-    if value <= 100:
-        return "okay"
-    if value <= 150:
-        return "leicht belastet"
-    return "schlecht"
-
-
-_CATEGORY_ICONS = {
-    "Licht":        "💡",
-    "Stecker":      "🔌",
-    "Temperaturen": "🌡️",
-    "Fenster":      "🪟",
-    "Helligkeit":   "☀️",
-}
 
 _WELCOME_TEMPLATE = (
     "Hallo! Ich bin Hannah, dein persönlicher Sprachassistent.\n\n"
@@ -504,55 +487,22 @@ class HannahBot:
     def _device_keyboard(self, room: object, room_idx: int) -> InlineKeyboardMarkup:
         buttons = []
         for dev_idx, dev in enumerate(room.devices):
-            icon = _CATEGORY_ICONS.get(dev.category, "⚙️")
-            on_val = dev.current.get("on", "")
-            state_dot = "🟢" if on_val == "True" else ("🔴" if on_val == "False" else "⚫")
             buttons.append([InlineKeyboardButton(
-                f"{state_dot} {icon} {dev.name}",
+                f"{device_menu.device_dot(dev)} {device_menu.device_icon(dev)} {dev.name}",
                 callback_data=_cb_device(room_idx, dev_idx),
             )])
         buttons.append([InlineKeyboardButton("← Räume", callback_data=_cb_rooms())])
         return InlineKeyboardMarkup(buttons)
 
     def _control_keyboard(self, dev: object, room_idx: int, dev_idx: int) -> InlineKeyboardMarkup:
-        """Erstellt die Steuerungs-Buttons für ein einzelnes Gerät."""
-        buttons = []
-        states = list(dev.states)
-
-        if "on" in states:
-            on_val = dev.current.get("on", "")
-            is_on = (on_val == "True")
-            row = []
-            if not is_on:
-                row.append(InlineKeyboardButton("✅ Einschalten", callback_data=_cb_ctrl(room_idx, dev_idx, "on", "true")))
-            else:
-                row.append(InlineKeyboardButton("⏹ Ausschalten", callback_data=_cb_ctrl(room_idx, dev_idx, "on", "false")))
-            buttons.append(row)
-
-        if "level" in states:
-            level_val = dev.current.get("level", "")
-            try:
-                cur = int(float(level_val))
-            except (ValueError, TypeError):
-                cur = -1
-            level_buttons = []
-            for pct in (25, 50, 75, 100):
-                mark = "·" if cur != pct else "▶"
-                level_buttons.append(InlineKeyboardButton(
-                    f"{mark}{pct}%", callback_data=_cb_ctrl(room_idx, dev_idx, "level", str(pct))
-                ))
-            buttons.append(level_buttons)
-
-        if "color" in states:
-            color_buttons = [
-                InlineKeyboardButton("🔴", callback_data=_cb_ctrl(room_idx, dev_idx, "color", "#FF0000")),
-                InlineKeyboardButton("🟢", callback_data=_cb_ctrl(room_idx, dev_idx, "color", "#00FF00")),
-                InlineKeyboardButton("🔵", callback_data=_cb_ctrl(room_idx, dev_idx, "color", "#0000FF")),
-                InlineKeyboardButton("🟡", callback_data=_cb_ctrl(room_idx, dev_idx, "color", "#FFFF00")),
-                InlineKeyboardButton("⚪", callback_data=_cb_ctrl(room_idx, dev_idx, "color", "#FFFFFF")),
+        """Erstellt die Steuerungs-Buttons für ein einzelnes Gerät, je schreibbarem Slot."""
+        buttons = [
+            [
+                InlineKeyboardButton(label, callback_data=_cb_ctrl(room_idx, dev_idx, slot_id, value))
+                for label, slot_id, value in row
             ]
-            buttons.append(color_buttons)
-
+            for row in device_menu.control_rows(dev)
+        ]
         buttons.append([
             InlineKeyboardButton("🔄 Aktualisieren", callback_data=_cb_device(room_idx, dev_idx)),
             InlineKeyboardButton("← Raum", callback_data=_cb_room(room_idx)),
@@ -560,50 +510,7 @@ class HannahBot:
         return InlineKeyboardMarkup(buttons)
 
     def _device_status_text(self, dev: object) -> str:
-        category_label = dev.category.replace("_", " ")
-        parts = [f"*{dev.name}* ({category_label})"]
-        cur = dev.current
-        if "on" in cur:
-            parts.append("Status: " + ("🟢 an" if cur["on"] == "True" else "🔴 aus"))
-        if "level" in cur:
-            try:
-                parts.append(f"Helligkeit: {int(float(cur['level']))}%")
-            except (ValueError, TypeError):
-                pass
-        if "color" in cur:
-            parts.append(f"Farbe: {cur['color']}")
-        if "current" in cur:
-            try:
-                parts.append(f"Ist: {float(cur['current']):.1f}°")
-            except (ValueError, TypeError):
-                parts.append(f"Ist: {cur['current']}°")
-        if "expected" in cur:
-            try:
-                parts.append(f"Soll: {float(cur['expected']):.1f}°")
-            except (ValueError, TypeError):
-                parts.append(f"Soll: {cur['expected']}°")
-        if "illuminance" in cur:
-            parts.append(f"Helligkeit: {cur['illuminance']} lx")
-        if "open" in cur:
-            parts.append("Fenster: " + ("offen" if cur["open"] == "True" else "geschlossen"))
-        if "power" in cur:
-            parts.append(f"Verbrauch: {cur['power']} W")
-        if "iaq" in cur:
-            try:
-                parts.append(f"Luftqualität: {_iaq_label(float(cur['iaq']))}")
-            except (ValueError, TypeError):
-                pass
-        if "co2_equiv" in cur:
-            try:
-                parts.append(f"CO₂: {float(cur['co2_equiv']):.1f} ppm")
-            except (ValueError, TypeError):
-                parts.append(f"CO₂: {cur['co2_equiv']} ppm")
-        if "voc_equiv" in cur:
-            try:
-                parts.append(f"VOC: {float(cur['voc_equiv']):.2f} ppm")
-            except (ValueError, TypeError):
-                parts.append(f"VOC: {cur['voc_equiv']} ppm")
-        return "\n".join(parts)
+        return device_menu.device_status_text(dev)
 
     # ------------------------------------------------------------------
     # Message handlers
@@ -705,7 +612,7 @@ class HannahBot:
           haus:rooms
           haus:r:{room_idx}
           haus:d:{room_idx}:{dev_idx}
-          haus:c:{room_idx}:{dev_idx}:{state}:{value}
+          haus:c:{room_idx}:{dev_idx}:{slot_id}:{value}
         """
         ok, _user = await self._has_trust(chat_id, _MENU_TRUST_MIN)
         if not ok:
@@ -783,8 +690,8 @@ class HannahBot:
             except ValueError:
                 await query.answer("Ungültige Auswahl.", show_alert=True)
                 return
-            state = parts[4]
-            value = ":".join(parts[5:])  # Farbwerte wie #FF0000 enthalten kein ':'
+            slot_id = parts[4]
+            value_text = ":".join(parts[5:])  # Farbwerte wie #FF0000 enthalten kein ':'
 
             # Device-ID für gRPC-Aufruf via Index nachschlagen
             resp = await self._hannah.get_devices()
@@ -797,7 +704,17 @@ class HannahBot:
                 return
             dev = room.devices[dev_idx]
 
-            ok_ctrl, msg = await self._hannah.control_device(dev.id, state, value, chat_id)
+            slot = device_menu.find_slot(dev, slot_id)
+            if slot is None:
+                await query.answer("Das Gerät kann das nicht (mehr).", show_alert=True)
+                return
+            try:
+                value = device_menu.slot_value_from_text(slot, value_text)
+            except ValueError as exc:
+                await query.answer(f"Ungültiger Wert: {exc}", show_alert=True)
+                return
+
+            ok_ctrl, msg = await self._hannah.control_device(dev.id, slot_id, value, chat_id)
             if not ok_ctrl:
                 await query.answer(f"Fehler: {msg}", show_alert=True)
                 return

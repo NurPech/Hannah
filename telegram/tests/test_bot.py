@@ -2,7 +2,7 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from hannah_proto.v1 import hannah_pb2
+from hannah_proto.v2 import hannah_pb2
 from hannah_telegram.bot import (
     HannahBot,
     _car_proto_to_message,

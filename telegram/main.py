@@ -25,7 +25,7 @@ from hannah_telegram.bot import HannahBot
 from hannah_telegram.config import load as load_config
 from hannah_telegram.grpc_client import HannahClient
 from hannah_telegram.version import get_version
-from hannah_proto.v1 import hannah_pb2
+from hannah_proto.v2 import hannah_pb2
 
 logging.basicConfig(
     level=logging.INFO,

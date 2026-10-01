@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.94.2 (2026-10-01)
+### Telegram
+
+* Changed: the Telegram bot now speaks the new `hannah.v2` API to Hannah Core (and still works against a Core that only knows `hannah.v1`). Requires `hannah-proto>=5.1.0` and `hannah-grpc-lib>=0.8.0` (Refs #389)
+* Changed: the house menu (`/haus`) is built from the device class and the capabilities of each device instead of single states: only what a device can do gets a button. Besides on/off, dimming and colour there are now colour temperature, blind position (open / 50 % / closed) and, for air conditioners, the operating modes and fan levels the device offers. The status text names actual and target temperature, humidity, window or door state, power and air quality, and the icons follow the device class (Refs #389)
+
 ## 0.94.1 (2026-10-01)
 ### Hannah Core
 
