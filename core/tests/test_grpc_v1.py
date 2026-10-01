@@ -291,7 +291,7 @@ UNKNOWN_20 = bytes([0xA0, 0x01, 0x07])
 @pytest.fixture
 def agent_server():
     callbacks = {
-        "on_agent_state": MagicMock(), "on_agent_device_snapshot": MagicMock(),
+        "on_agent_state": MagicMock(), "on_agent_state_initial": MagicMock(), "on_agent_device_snapshot": MagicMock(),
         "on_agent_resident": MagicMock(), "on_agent_room_snapshot": MagicMock(),
     }
     servicer = HannahServicer(
@@ -450,6 +450,27 @@ class TestAgentConnectV2:
         list(pb_grpc.HannahServiceStub(ch).AgentConnect(iter([msg]), timeout=5))
 
         callbacks["on_agent_state"].assert_called_once_with("0_userdata.0.feeded", "true", True, 3, "")
+        callbacks["on_agent_state_initial"].assert_not_called()
+
+    def test_initial_state_updates_only_seed_and_are_no_changes(self, agent_server):
+        ch, _, callbacks = agent_server
+        messages = [
+            pb.AgentMessage(state_update=pb.AgentStateUpdate(state_id="0_userdata.0.feeded", value="true", ack=True, ts=3, initial=True)),
+            pb.AgentMessage(state_update=pb.AgentStateUpdate(state_id="0_userdata.0.feeded", value="false", ack=True, ts=4)),
+        ]
+
+        list(pb_grpc.HannahServiceStub(ch).AgentConnect(iter(messages), timeout=5))
+
+        callbacks["on_agent_state_initial"].assert_called_once_with("0_userdata.0.feeded", "true")
+        callbacks["on_agent_state"].assert_called_once_with("0_userdata.0.feeded", "false", True, 4, "")
+
+    def test_initial_state_update_is_acked(self, agent_server):
+        ch, _, _ = agent_server
+        msg = pb.AgentMessage(ack_id=7, state_update=pb.AgentStateUpdate(state_id="s", value="1", initial=True))
+
+        commands = list(pb_grpc.HannahServiceStub(ch).AgentConnect(iter([msg]), timeout=5))
+
+        assert [c.ack.ack_id for c in commands] == [7]
 
     def test_set_resident_reaches_a_v2_adapter_with_the_action_only(self, agent_server):
         ch, servicer, _ = agent_server

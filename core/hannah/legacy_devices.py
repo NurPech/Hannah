@@ -267,6 +267,7 @@ def _classify_device(device_id: str, name: str, room: str, floor: str, states: l
             state_id=state.state_id,
             inverted=state.inverted and kind == K.SLOT_KIND_POSITION,
             options=list(state.options) if kind in _ENUM_KINDS else [],
+            identifier=state.state_id,
         )
 
     dtypes = {s.dtype for s in states if s.dtype}

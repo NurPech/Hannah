@@ -461,6 +461,59 @@ class TestPersistentStateCache:
         assert eng._state_cache == {}
 
 
+class TestSeedState:
+    """seed_state() belegt den Cache für einen einzelnen Startwert still vor (AgentStateUpdate.initial)."""
+
+    def test_seed_does_not_fire_trigger(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": False}, say="Licht aus!")
+
+        engine.seed_state("s1", "false")
+
+        assert engine.announced == []
+        with engine._lock:
+            assert engine._state_cache["s1"] is False
+
+    def test_unchanged_update_after_seed_does_not_fire_but_real_change_does(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": False}, say="Licht aus!")
+
+        engine.seed_state("s1", "true")
+        engine.on_state_update("s1", "true")  # unverändert ggü. Startwert
+        assert engine.announced == []
+        engine.on_state_update("s1", "false")  # echte Transition an->aus
+
+        assert engine.announced == [("all", "Licht aus!")]
+
+    def test_seed_feeds_unless_condition(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": True, "unless": {"state": "s2", "value": True}}, say="Hallo")
+
+        engine.seed_state("s2", "true")  # Flag ohne Gerät, nur per WatchMore beobachtet
+        engine.on_state_update("s1", "true")
+
+        assert engine.announced == []
+
+    def test_seeded_unless_flag_that_is_off_lets_the_trigger_fire(self, engine):
+        _create(engine, "t1", {"state": "s1", "value": True, "unless": {"state": "s2", "value": True}}, say="Hallo")
+
+        engine.seed_state("s2", "false")
+        engine.on_state_update("s1", "true")
+
+        assert engine.announced == [("all", "Hallo")]
+
+    def test_seed_persists_only_on_change(self, tmp_path):
+        db_module.DB_PATH = str(tmp_path / "h.db")
+        db_module.init_db()
+        cache_path = tmp_path / "cache.json"
+        eng = TriggerEngine(db_module.get_db, announce_fn=lambda room, text: None,
+                             state_cache_path=str(cache_path))
+
+        eng.seed_state("s1", "true")
+        assert cache_path.exists()
+        cache_path.unlink()
+        eng.seed_state("s1", "true")  # derselbe Wert: nichts zu schreiben
+
+        assert not cache_path.exists()
+
+
 class TestSeedFromSnapshot:
     """seed_from_snapshot() aktualisiert den Cache still, ohne Trigger zu feuern (#141)."""
 

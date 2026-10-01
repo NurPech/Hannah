@@ -94,6 +94,9 @@ class Slot:
     inverted: bool = False
     # Die Werte, die das Gerät annimmt (SLOT_KIND_MODE/FAN_SPEED), leer = keine Angabe
     options: list = field(default_factory=list)
+    # Der Bezeichner, den der Adapter für den Wert hinter dem Slot vergibt (ioBroker: State-ID),
+    # worüber Trigger ihn adressieren. Für Core undurchsichtig, leer = nicht adressierbar.
+    identifier: str = ""
 
 
 @dataclass
@@ -133,6 +136,7 @@ def device_info_to_pb(device: TypedDevice) -> "pb.DeviceInfo":
         message = info.slots.add(
             slot_id=slot.slot_id, kind=slot.kind, value=_slot_value_or_unset(slot),
             writable=slot.writable, unit=slot.unit, label=slot.label, options=slot.options,
+            identifier=slot.identifier,
         )
         if slot.required_trust_level is not None:
             message.required_trust_level = slot.required_trust_level
@@ -155,6 +159,7 @@ def device_from_pb(device: "pb.TypedDevice") -> TypedDevice:
             label=s.label,
             required_trust_level=s.required_trust_level if s.HasField("required_trust_level") else None,
             options=list(s.options),
+            identifier=s.identifier,
         )
     return TypedDevice(
         device_id=device.device_id, name=device.name, room=device.room, floor=device.floor,

@@ -47,6 +47,19 @@ def kinds(device) -> dict:
 # Lichter, Steckdosen, Schalter
 
 class TestSwitchables:
+    def test_every_slot_carries_the_state_id_as_its_identifier(self):
+        device = classify(
+            state("Decke", "on", "true", state_type=BOOLEAN),
+            state("Decke", "level", "40"),
+            state("Decke", "weird", "x", state_type=TEXT),
+        )["Decke"]
+
+        assert {s.slot_id: s.identifier for s in device.slots.values()} == {
+            "on": f"{BASE}.Decke.on",
+            "brightness": f"{BASE}.Decke.level",
+            "weird": f"{BASE}.Decke.weird",
+        }
+
     def test_light_with_brightness_and_color(self):
         devices = classify(
             state("Decke", "on", "true", dtype="light", state_type=BOOLEAN),

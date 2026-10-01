@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.94.3 (2026-10-01)
+### Hannah Core
+
+* Fixed: with a `hannah.v2` adapter, the conditions of a trigger on a device state ("only if", "unless") did not know the state after a Core restart until that state changed again. Core now takes over the current value an adapter reports when it starts watching a state, without firing any trigger. This needs an adapter that reports these start values. Requires `hannah-proto>=5.2.0` and `hannah-grpc-lib>=0.8.1` (Refs #390)
+* Added: the device list that Core gives to `hannah.v2` clients (`GetDevices`) now names, for each slot of a device, the identifier the adapter uses for the value behind it (for ioBroker the state ID), so a client can offer the slots when building a trigger. For devices of a `hannah.v1` adapter that is the state ID Core already knows; a slot without an identifier cannot be addressed by a trigger (Refs #391)
+
 ## 0.94.2 (2026-10-01)
 ### Telegram
 

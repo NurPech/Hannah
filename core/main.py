@@ -2088,6 +2088,11 @@ def main():
 
     # ── ioBroker-Adapter gRPC-Callbacks ──────────────────────────────────────
 
+    def _on_agent_state_initial(state_id: str, value: str) -> None:
+        # Startwert eines beobachteten States: nur der Trigger-Cache wird still vorbelegt. Registry,
+        # Bestätigungen, Anwesenheit und Auto-Handler sehen keine Änderung, denn es gab keine.
+        trigger_engine.seed_state(state_id, value)
+
     def _on_agent_state(state_id: str, value: str, _ack=None, _ts=None, canonical_key: str = ""):
         _on_state_update(state_id, value, canonical_key)
         # Route to handlers that expect slash-notation topics and plain string values
@@ -2402,6 +2407,7 @@ def main():
         ),
         get_typed_devices=typed_devices.devices,
         on_agent_state=_on_agent_state,
+        on_agent_state_initial=_on_agent_state_initial,
         on_agent_resident=_on_agent_resident,
         on_agent_text_command=_on_agent_text_command,
         on_agent_connect=_on_agent_connect,

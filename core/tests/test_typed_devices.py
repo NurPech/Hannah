@@ -4,7 +4,7 @@ import logging
 from hannah_proto.v2 import hannah_pb2 as pb
 
 from hannah.typed_devices import (
-    ORIGIN_V1, ORIGIN_V2, DeviceRegistry, Slot, TypedDevice, slot_id_for_kind, slot_value_from_pb,
+    ORIGIN_V1, ORIGIN_V2, DeviceRegistry, Slot, TypedDevice, device_info_to_pb, slot_id_for_kind, slot_value_from_pb,
 )
 
 
@@ -58,6 +58,18 @@ class TestTypedSnapshot:
         assert slots["on"].required_trust_level is None
         assert slots["brightness"].required_trust_level == 8
         assert slots["lock"].required_trust_level == 0
+
+    def test_slot_identifier_is_passed_through_to_get_devices_and_empty_stays_empty(self):
+        registry = DeviceRegistry()
+        device = _pb_device()
+        device.slots[0].identifier = "javascript.0.virtualDevice.Licht.on"
+        registry.handle_typed_snapshot([device])
+
+        slots = registry.get("d1").slots
+        assert slots["on"].identifier == "javascript.0.virtualDevice.Licht.on"
+        assert slots["brightness"].identifier == ""
+        info = device_info_to_pb(registry.get("d1"))
+        assert [s.identifier for s in info.slots] == ["javascript.0.virtualDevice.Licht.on", "", ""]
 
     def test_capability_check_by_slot_kind(self):
         registry = DeviceRegistry()

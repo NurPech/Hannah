@@ -242,6 +242,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         start_voice_enrollment: Optional[Callable[[int, int, str], tuple]] = None,  # (requestor_id, user_id, satellite_id) → (ok, msg)
         on_satellite_change: Optional[Callable[[dict], None]] = None,           # ({device: room}) bei Register/Disconnect via Proxy
         on_agent_state: Optional[Callable[[str, str, bool, int], None]] = None,      # (state_id, value, ack, ts)
+        on_agent_state_initial: Optional[Callable[[str, str], None]] = None,         # (state_id, value) — Startwert auf WatchMore (AgentStateUpdate.initial), still
         on_agent_resident: Optional[Callable[[str, Optional[str], Optional[int], pb.ResidentType, Optional[int]], None]] = None,   # (roomie_id, name, presence_state, type, mood_level) — name/presence_state/mood_level None wenn im Update nicht gesetzt (proto3 optional, #206)
         on_agent_text_command: Optional[Callable[[str], tuple[str, str]]] = None,    # (text) → (answer, intent)
         on_agent_connect: Optional[Callable[[], None]] = None,                       # called on each new adapter connection
@@ -328,6 +329,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._start_voice_enrollment = start_voice_enrollment or (lambda *_: (False, "Nicht konfiguriert."))
         self._on_satellite_change   = on_satellite_change
         self._on_agent_state        = on_agent_state
+        self._on_agent_state_initial = on_agent_state_initial
         self._on_agent_resident     = on_agent_resident
         self._on_agent_text_command = on_agent_text_command
         self._on_agent_connect           = on_agent_connect
@@ -1757,7 +1759,11 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             try:
                 for msg in request_iterator:
                     which, payload = session.decode(msg)
-                    if which == "state_update" and self._on_agent_state:
+                    if which == "state_update" and payload.initial:
+                        # Startwert auf AgentWatchMore: nur den Trigger-Cache vorbelegen, keine Transition
+                        if self._on_agent_state_initial:
+                            self._on_agent_state_initial(payload.state_id, payload.value)
+                    elif which == "state_update" and self._on_agent_state:
                         self._on_agent_state(payload.state_id, payload.value, payload.ack, payload.ts, "")
                     elif which == "legacy_state_update" and self._on_agent_state:
                         # hannah.v1: State-Update mit canonical_key (Live-Updates der Geräte-States)

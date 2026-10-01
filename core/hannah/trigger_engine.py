@@ -840,6 +840,24 @@ class TriggerEngine:
         except Exception as e:
             log.warning(f"TriggerEngine: State-Cache '{self._state_cache_path}' konnte nicht geschrieben werden: {e}")
 
+    def seed_state(self, state_id: str, raw: str) -> None:
+        """
+        Setzt den Cache-Wert eines einzelnen States still, ohne Trigger zu feuern — für den
+        Startwert, den ein hannah.v2-Adapter auf AgentWatchMore hin schickt (AgentStateUpdate.initial).
+        Anders als seed_from_snapshot() kommt hier ein State pro Nachricht, deshalb wird nur bei
+        einer Änderung geschrieben und nur auf debug geloggt.
+
+        raw: roher Wert als String (JSON-kodiert, wie von on_state_update erwartet)
+        """
+        value = self._parse(raw)
+        with self._lock:
+            if state_id in self._state_cache and self._state_cache[state_id] == value:
+                return
+            self._state_cache[state_id] = value
+            cache_copy = dict(self._state_cache)
+        self._save_state_cache(cache_copy)
+        log.debug(f"TriggerEngine: Startwert für '{state_id}' übernommen (kein Trigger gefeuert)")
+
     def seed_from_snapshot(self, state_values: dict[str, str]) -> None:
         """
         Aktualisiert den State-Cache anhand eines frischen ioBroker-Snapshots — OHNE
