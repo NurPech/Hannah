@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.94.5 (2026-10-01)
+### AutoDeploy
+
+* Fixed: AutoDeploy no longer fails to start when setting up the log shipping fails for any reason, for example because of an incompatible `hannah-grpc-lib` after a self-update. It logs a warning and runs without shipping the logs, so it can still repair itself (Refs #393)
+* Changed: log shipping now uses `hannah-grpc-lib` 0.8.1 (below 0.9.0, so that an incompatible future version cannot keep the updater from working). It talks to Hannah Core and the log collector over `hannah.v2` and falls back to `hannah.v1` for older versions
+
 ## 0.94.4 (2026-10-01)
 ### Hannah Proxy
 

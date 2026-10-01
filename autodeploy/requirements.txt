@@ -2,4 +2,4 @@ requests>=2.31
 pyyaml>=6.0
 
 # Log shipping to the Hannah log collector (#349) — imported optionally, see install_log_shipping()
-hannah-grpc-lib>=0.6.0  # 0.6.0: log collector via hannah.v1 with fallback
+hannah-grpc-lib>=0.8.1,<0.9.0  # 0.7.0: log collector via hannah.v2 with fallback; capped, a broken lib must not stop the updater

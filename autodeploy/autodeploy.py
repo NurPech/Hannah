@@ -50,8 +50,9 @@ def install_log_shipping(config: dict):
     one; without that key they're only buffered. The token is masked.
 
     The import is optional on purpose: after a self-update the new autodeploy.py is in
-    place before post_install has installed its requirements. A missing library must not
-    keep the updater from starting — it would never get the chance to repair itself."""
+    place before post_install has installed its requirements. A missing or incompatible
+    library must not keep the updater from starting — it would never get the chance to
+    repair itself. So neither the import nor setting up the shipping may fail it."""
     try:
         import hannah_grpc.logging as hannah_logging
     except ImportError:
@@ -61,12 +62,16 @@ def install_log_shipping(config: dict):
     hannah = config.get("hannah")
     address = str(hannah.get("address") or "").strip() if isinstance(hannah, dict) else ""
     token = config.get("token") or ""
-    return hannah_logging.install(
-        "autodeploy",
-        version=get_version(),
-        hannah_address=address or None,
-        secrets=[token] if token else [],
-    )
+    try:
+        return hannah_logging.install(
+            "autodeploy",
+            version=get_version(),
+            hannah_address=address or None,
+            secrets=[token] if token else [],
+        )
+    except Exception as e:  # noqa: BLE001 — any failure of the optional shipping must not stop the updater
+        log.warning("Log shipping could not be set up — disabled: %s", e)
+        return None
 
 
 def _headers(token: str) -> dict:
