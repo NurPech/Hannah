@@ -30,6 +30,9 @@ DEFAULT_CONFIG = "/etc/hannah/autodeploy.yaml"
 DEFAULT_STATE = "/var/lib/hannah/autodeploy-state.json"
 DEFAULT_DEVICE_ID_FILE = "/var/lib/hannah/autodeploy-device-id"
 
+# Optional metadata file at the top level of a release archive.
+INFO_FILE = "hannah.info"
+
 # CI-stamped by the `upload:autodeploy` job; absent in a local dev checkout.
 VERSION_FILE = Path(__file__).resolve().parent / "VERSION"
 
@@ -142,14 +145,41 @@ def _verify_sha256(path: Path, expected: str) -> bool:
 # Deployment
 # ---------------------------------------------------------------------------
 
+def _read_installer_only(src: Path) -> set[str]:
+    """Top-level names a release archive marks as installer-only in its hannah.info.
+
+    The file is line based `key=value`; `installer_only` may repeat, other keys are
+    ignored. Entries are plain file names, anything with a path separator is dropped.
+    """
+    info = src / INFO_FILE
+    if not info.is_file():
+        return set()
+    names = set()
+    for line in info.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition("=")
+        name = value.strip()
+        if sep and key.strip() == "installer_only" and name not in ("", ".", "..") \
+                and "/" not in name and "\\" not in name:
+            names.add(name)
+    return names
+
+
 def _extract_and_copy(archive: Path, install_dir: Path) -> None:
-    """Extract tar.gz to a temp dir, then merge into install_dir."""
+    """Extract tar.gz to a temp dir, then merge into install_dir.
+
+    Entries the archive lists as installer-only in hannah.info (and hannah.info
+    itself) are left out, they belong to the installer, not to a shared install_dir.
+    """
     with tempfile.TemporaryDirectory(prefix="autodeploy-") as tmp:
         with tarfile.open(archive, "r:gz") as tar:
             tar.extractall(tmp)
         src = Path(tmp)
         install_dir.mkdir(parents=True, exist_ok=True)
+        skip = _read_installer_only(src) | {INFO_FILE}
         for item in src.iterdir():
+            if item.name in skip:
+                log.debug("Skipping installer-only entry %s", item.name)
+                continue
             dst = install_dir / item.name
             if item.is_dir():
                 if dst.exists():

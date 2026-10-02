@@ -4,6 +4,15 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.94.6 (2026-10-02)
+### AutoDeploy
+
+* Fixed: AutoDeploy no longer copies files into a component's install directory that only belong to the first installation (example config, systemd unit). A release archive can list them in an optional `hannah.info` file (`installer_only=<file name>`), AutoDeploy skips these and `hannah.info` itself. Archives without `hannah.info` are deployed as before (Refs #382)
+
+### Hannah Proxy
+
+* Fixed: the proxy release archive now ships a `hannah.info`, so AutoDeploy keeps `config.example.yaml` and `hannah-proxy.service` out of a shared install directory such as `/usr/local/bin`. Copies left there by earlier updates are not removed automatically and can be deleted by hand (Refs #382)
+
 ## 0.94.5 (2026-10-01)
 ### AutoDeploy
 
