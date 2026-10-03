@@ -18,6 +18,7 @@ import grpc
 from werkzeug.security import generate_password_hash
 
 from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied
+from hannah.log_shipping import TRANSCRIPT
 from hannah.typed_devices import device_info_to_pb, slot_value_from_pb
 from hannah.unknown_fields import collect_unknown_fields
 from hannah.satellite_manager import SatelliteManager, SatellitePermissionError
@@ -28,12 +29,12 @@ from hannah_grpc.translate import translate
 from hannah.models.user import User
 from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import (
-    ProtocolVersionInterceptor, OutdatedComponentInterceptor, read_proto_version,
+    ProtocolVersionInterceptor, OutdatedComponentInterceptor, read_caller, read_proto_version,
 )
 from hannah import grpc_v1
 from hannah.link_tokens import LinkTokenStore, LOOKUP_EXPIRED, LOOKUP_OK
 from hannah.component_registry import (
-    ComponentRegistry, KIND_CHANNEL, KIND_LOG_COLLECTOR, EVENT_REGISTERED,
+    ComponentRegistry, ComponentTracker, KIND_CHANNEL, KIND_LOG_COLLECTOR, EVENT_REGISTERED,
 )
 from hannah_proto.interceptor.compat_interceptor import CompatVersionInterceptor
 
@@ -101,6 +102,8 @@ class _ChannelSub:
         self.display_name: str = ""
         self.link_url_template: str = ""  # empty = service cannot link accounts
         self.connected_since: int = 0
+        # Which instance of which component holds this stream (x-component, x-component-id, #398)
+        self.caller = None
         self._queue: queue.Queue = queue.Queue()
 
     def put(self, command: pb.ChannelCommand):
@@ -126,6 +129,8 @@ class _LogCollectorSub:
         self.host: str = ""
         self.port: int = 0
         self.version: str = ""
+        # Which instance of which component holds this stream (x-component, x-component-id, #398)
+        self.caller = None
         self._queue: queue.Queue = queue.Queue()
 
     def put(self, command: pb.LogCollectorCommand):
@@ -434,12 +439,19 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         # Connected components (channel adapters, #334), one per (kind, name) — a new
         # registration displaces the old one
         self._registry = ComponentRegistry()
+        # All components talking to Core, whatever the way they connected (#398)
+        self._components = ComponentTracker(self._registry)
         self._link_tokens = LinkTokenStore()
 
     @property
     def registry(self) -> ComponentRegistry:
         """Connected components — e.g. for main.py to follow the log collector (#341)."""
         return self._registry
+
+    @property
+    def components(self) -> ComponentTracker:
+        """Which components in which version are connected right now (#398)."""
+        return self._components
 
     # ------------------------------------------------------------------
     # Public: proxy helpers (called from main.py)
@@ -741,7 +753,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         user_id = self._user_from_request(request.source_service, request.source_user_id)
         log.info(
             f"[grpc] SubmitText von {request.source_service}:{request.source_user_id}"
-            f" (user={user_id or 'anonym'}) — {request.text!r}"
+            f" (user={user_id or 'anonym'}) — {request.text!r}",
+            extra=TRANSCRIPT,
         )
         # #220: source_service/source_user_id wurden bisher nur für _user_from_request()
         # gelesen und danach verworfen — jetzt zusätzlich als Activity-Log-Kanal durchgereicht.
@@ -1939,6 +1952,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         der Anmeldung.
         """
         sub = _ChannelSub()
+        sub.caller = read_caller(dict(context.invocation_metadata() or ()))
 
         def _drain():
             try:
@@ -2039,6 +2053,15 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         return pb.GetChannelsResponse(channels=channels)
 
     # ------------------------------------------------------------------
+    # Component liveness (#398)
+
+    def Heartbeat(self, _request, _context):
+        """Liveness signal from a component. Nothing to do here: the component names itself in
+        the call metadata, and the OutdatedComponentInterceptor entered it into the registry
+        (and refreshed its last sighting) before this handler runs."""
+        return pb.HeartbeatResponse()
+
+    # ------------------------------------------------------------------
     # Infrastructure (#335)
 
     def LogCollectorConnect(self, request_iterator, context):
@@ -2052,6 +2075,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         Nicht zu verwechseln mit CollectorConnect (Wakeword-Aufnahmen).
         """
         sub = _LogCollectorSub()
+        sub.caller = read_caller(dict(context.invocation_metadata() or ()))
         peer = context.peer() or ""
 
         def _drain():
@@ -2405,6 +2429,25 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
 # ------------------------------------------------------------------
 # Server lifecycle
 
+# Worker threads of the synchronous server. Threads are created on demand, so a larger pool
+# costs nothing until it is used. Every component holds at least a discovery stream (and the
+# long-lived streams of Proxy, Adapter, Timer, Telegram, ... come on top), 32 got tight with
+# a dozen components (#398). The server warns at 80 % of the pool, see OutdatedComponentInterceptor.
+DEFAULT_MAX_WORKERS = 64
+
+# Server-side keepalive (#398): without it a peer that vanished without closing the TCP
+# connection (power cut, WLAN gone) keeps its streams "open" forever, and the registry would
+# keep the component. A ping every 30 s, no answer within 10 s ends the connection, so a dead
+# peer is gone well before the 90 s a component may stay silent. Pings also go out while no call
+# is running (a component may only hold its discovery stream), without limit.
+KEEPALIVE_OPTIONS = [
+    ("grpc.keepalive_time_ms", 30_000),
+    ("grpc.keepalive_timeout_ms", 10_000),
+    ("grpc.keepalive_permit_without_calls", 1),
+    ("grpc.http2.max_pings_without_data", 0),
+]
+
+
 class GrpcServer:
     def __init__(self, cfg: dict, servicer: HannahServicer, outdated_notifier=None):
         self._host = cfg.get("host", "0.0.0.0")
@@ -2412,6 +2455,7 @@ class GrpcServer:
         self._server: Optional[grpc.Server] = None
         self._servicer = servicer
         self._outdated_notifier = outdated_notifier
+        self._max_workers = int(cfg.get("max_workers", DEFAULT_MAX_WORKERS))
         if "enforce_protocol_version" in cfg:
             # #359: seit Core zwei Generationen parallel bedient (hannah.v2 N,
             # hannah.v1 N−1), regelt der versionierte Methodenpfad die Kompatibilität. Der Key darf in
@@ -2435,11 +2479,12 @@ class GrpcServer:
         # they use away from Core. An explicit `false` in config.yaml still wins.
         enforce_compat = cfg.get("enforce_compat_version", True)
         self._compat_interceptor = CompatVersionInterceptor(enforce=enforce_compat)
-        # #358: pro RPC gratis erkennbar (Pfad + x-proto-version, siehe
-        # OutdatedComponentInterceptor) — ohne Notifier (z.B. in Tests) einfach aus.
-        self._outdated_interceptor = (
-            OutdatedComponentInterceptor(outdated_notifier, legacy_prefix=grpc_v1.V1_PREFIX)
-            if outdated_notifier is not None else None
+        # #358, #398: every RPC shows the caller (path + x-proto-version, x-component*, see
+        # OutdatedComponentInterceptor): the notifier gets the outdated ones, the tracker all
+        # of them and counts their streams.
+        self._outdated_interceptor = OutdatedComponentInterceptor(
+            outdated_notifier, legacy_prefix=grpc_v1.V1_PREFIX,
+            tracker=getattr(servicer, "components", None), stream_limit=self._max_workers,
         )
 
     def start(self):
@@ -2451,12 +2496,12 @@ class GrpcServer:
         # StreamSatelliteAudio-Captures parallel liefen: neue Streams wurden am
         # Transport zwar angenommen, ihr Handler bekam aber nie einen freien
         # Worker zugeteilt und lieferte dadurch nie Daten, ohne jeden Fehler (#229).
-        interceptors = [self._version_interceptor, self._compat_interceptor]
-        if self._outdated_interceptor is not None:
-            interceptors.append(self._outdated_interceptor)
+        # Der Pool ist auf DEFAULT_MAX_WORKERS (grpc.max_workers) gewachsen (#398).
+        interceptors = [self._version_interceptor, self._compat_interceptor, self._outdated_interceptor]
         self._server = grpc.server(
-            futures.ThreadPoolExecutor(max_workers=32),
+            futures.ThreadPoolExecutor(max_workers=self._max_workers),
             interceptors=interceptors,
+            options=KEEPALIVE_OPTIONS,
         )
         pb_grpc.add_HannahServiceServicer_to_server(self._servicer, self._server)
         grpc_v1.add_v1_servicer_to_server(self._servicer, self._server)

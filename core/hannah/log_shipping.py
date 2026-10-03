@@ -32,6 +32,7 @@ _METADATA_LOGGERS = (
     "hannah.ble_location",
     "hannah.voiceid",
     "hannah.activity_log",
+    "hannah.memory",
 )
 
 # Config-Schlüssel, deren Wert ein Secret ist. Der Name muss auf eines dieser Wörter

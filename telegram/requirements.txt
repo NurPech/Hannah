@@ -13,7 +13,7 @@ protobuf>=7.35.0
 hannah-proto>=5.1.0,<6   # 5.1 adds the device subtype and the climate class Telegram's menu uses
 
 # Log shipping to the Hannah log collector (#341), hannah.v2 client with N−1 fallback to hannah.v1
-hannah-grpc-lib>=0.8.0   # 0.8 translates the climate class and device subtype of hannah-proto 5.1
+hannah-grpc-lib>=0.10.0,<0.11.0   # 0.10 sends a heartbeat to Core every 30 s (needs hannah-proto 5.3)
 
 # Config
 pyyaml>=6.0

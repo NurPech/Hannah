@@ -5,9 +5,19 @@ N−1-Pfad ansprechen (hannah-proto#11, #359, #358).
 Die eigentliche Erkennung sitzt im OutdatedComponentInterceptor
 (hannah.grpc_interceptors) — der sieht bei jedem RPC, welcher Pfad gerufen
 wurde, unabhängig von Registrierungsnachrichten einzelner Komponenten. Dieses
-Modul kümmert sich nur um Entprellen (eine Mailbox-Nachricht pro Methode und
-x-proto-version, nicht bei jedem Aufruf) und Entwarnung (läuft dieselbe
-Methode später wieder über den aktuellen Pfad, gilt der Hinweis als erledigt).
+Modul kümmert sich nur um Entprellen (eine Mailbox-Nachricht pro Schlüssel, nicht
+bei jedem Aufruf) und Entwarnung (läuft derselbe Schlüssel später wieder über den
+aktuellen Pfad, gilt der Hinweis als erledigt).
+
+Schlüssel des Hinweises:
+- Sendet der Client seine Identität (x-component, x-component-version; hannah-grpc-lib ab
+  Python 0.9.0, #396): Komponente und Version. Die Nachricht nennt beide.
+- Sonst: RPC-Methode und x-proto-version. Die Nachricht nennt nur den RPC.
+Der Instanz-ID dient nicht als Schlüssel: Sie ändert sich mit jedem Neustart der Komponente
+und würde die Nachricht jedes Mal wiederholen.
+
+Welche Komponenten in welcher Version gerade verbunden sind, weiß die Component-Registry
+(hannah.component_registry.ComponentTracker, #398), nicht dieses Modul.
 """
 import logging
 import threading
@@ -16,6 +26,17 @@ from typing import Callable
 log = logging.getLogger(__name__)
 
 _TABLE = "outdated_component_notices"
+
+# Spalte "method" der Tabelle: bei einer Komponente "component:<name>" statt eines RPC-Namens
+# (RPC-Namen sind CamelCase, ein Zusammenstoß ist ausgeschlossen), "proto_version" trägt dann die
+# Komponentenversion.
+_COMPONENT_PREFIX = "component:"
+
+
+def _notice_key(method: str, proto_version: str, caller) -> tuple[str, str]:
+    if caller is not None:
+        return (f"{_COMPONENT_PREFIX}{caller.component}", caller.version)
+    return (method, proto_version)
 
 
 class OutdatedComponentNotifier:
@@ -35,10 +56,11 @@ class OutdatedComponentNotifier:
         rows = self._db().execute(f'SELECT "method", "proto_version" FROM "{_TABLE}"').fetchall()
         return {(r[0], r[1]) for r in rows}
 
-    def notify_legacy_call(self, method: str, proto_version: str) -> None:
+    def notify_legacy_call(self, method: str, proto_version: str, caller=None) -> None:
         """method: bare RPC-Name (z.B. 'ChannelConnect'). proto_version: aus dem
-        x-proto-version-Header, leer wenn der Client zu alt ist, um ihn zu senden."""
-        key = (method, proto_version)
+        x-proto-version-Header, leer wenn der Client zu alt ist, um ihn zu senden.
+        caller: hannah.grpc_interceptors.CallerIdentity, None wenn der Client keine sendet."""
+        key = _notice_key(method, proto_version, caller)
         with self._lock:
             if key in self._active:
                 return
@@ -47,33 +69,50 @@ class OutdatedComponentNotifier:
         db = self._db()
         db.execute(
             f'INSERT OR IGNORE INTO "{_TABLE}" ("method", "proto_version") VALUES (?, ?)',
-            (method, proto_version),
+            key,
         )
         db.commit()
 
+        if caller is not None:
+            who = f"Die Komponente „{caller.component}“" + (f" (Version {caller.version})" if caller.version else "")
+            what = "spricht Hannah noch über das eingefrorene alte Protokoll an."
+        else:
+            who = "Eine Komponente"
+            what = (
+                f"spricht Hannah noch über das eingefrorene alte Protokoll an "
+                f"(RPC: {method}, hannah-proto-Version: {proto_version or 'unbekannt'})."
+            )
         admins = self._user_manager.get_users_with_trust_level(10)
         content = (
-            f"Eine Komponente spricht Hannah noch über das eingefrorene alte Protokoll an "
-            f"(RPC: {method}, hannah-proto-Version: {proto_version or 'unbekannt'}). Sie "
-            f"funktioniert ab dem nächsten großen Protokoll-Update nicht mehr — bitte aktualisieren."
+            f"{who} {what} Sie funktioniert ab dem nächsten großen Protokoll-Update nicht mehr — "
+            f"bitte aktualisieren."
         )
         for admin in admins:
             self._message_manager.create_message(user_id=admin.id, content=content, source="system")
         log.info(
-            f"[outdated] Legacy-Aufruf erkannt: {method} (proto_version={proto_version!r}) — "
-            f"{len(admins)} Admin(s) benachrichtigt"
+            f"[outdated] Legacy-Aufruf erkannt: {method} (proto_version={proto_version!r}, "
+            f"Komponente={caller.component if caller else None!r}) — {len(admins)} Admin(s) benachrichtigt"
         )
 
-    def notify_current_call(self, method: str) -> None:
-        """Läuft ein Aufruf derselben Methode wieder über den aktuellen Pfad, gilt ein
-        zuvor gesetzter Hinweis als erledigt — leise, ohne zusätzliche Mailbox-Nachricht."""
+    def notify_current_call(self, method: str, caller=None) -> None:
+        """Läuft ein Aufruf wieder über den aktuellen Pfad, gilt ein zuvor gesetzter Hinweis als
+        erledigt — leise, ohne zusätzliche Mailbox-Nachricht. Gilt für dieselbe Methode und, wenn
+        der Client seine Identität sendet, für dieselbe Komponente in derselben Version (z.B. wenn
+        die Lib aktualisiert wurde, die Komponente aber nicht).
+
+        Pro Komponente, nicht pro Instanz: Laufen zwei Instanzen derselben Version und nur eine
+        spricht den aktuellen Pfad, gilt der Hinweis zunächst als erledigt und kommt mit dem
+        nächsten Legacy-Aufruf der anderen noch einmal."""
         with self._lock:
             stale = {key for key in self._active if key[0] == method}
+            if caller is not None:
+                stale |= {key for key in self._active if key == _notice_key(method, "", caller)}
             if not stale:
                 return
             self._active -= stale
 
         db = self._db()
-        db.execute(f'DELETE FROM "{_TABLE}" WHERE "method" = ?', (method,))
+        for stale_method, stale_version in stale:
+            db.execute(f'DELETE FROM "{_TABLE}" WHERE "method" = ? AND "proto_version" = ?', (stale_method, stale_version))
         db.commit()
         log.info(f"[outdated] {method} läuft wieder über das aktuelle Protokoll — Hinweis zurückgesetzt")

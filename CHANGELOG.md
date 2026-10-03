@@ -4,6 +4,35 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.95.0 (2026-10-03)
+### Hannah Core
+
+* Fixed: a log export without transcripts no longer contains what users wrote or said and Hannah's answers. Several log lines were not marked as transcripts and slipped through: text commands from Telegram and other services, Hannah's answers and spoken feedback, questions Hannah asks residents and their replies, messages for a user's mailbox, the arguments of tool calls and the recognized intent. Log lines about stored memories are now marked as metadata, as they describe a person rather than quote them. A test now flags new log lines that print user text without the mark (Refs #394)
+* Changed: the notice for components that still talk to Hannah over the frozen old protocol names the component and its version, for example "Die Komponente „telegram“ (Version 1.2.3) …", as soon as the component sends them. `hannah-grpc-lib` 0.9.0 (Python) sends them with every call, further languages follow. The notice is sent once per component and version, no longer once per RPC, and a restart of the component does not repeat it. Components without the new library behave as before. Core also logs once which component in which version connects (Refs #396)
+* Changed: Core uses `hannah-grpc-lib` 0.9 (below 0.10.0) and names itself and its version in the calls it makes (Refs #397)
+* Changed: Core requires `hannah-grpc-lib` 0.10 (below 0.11.0) and with it `hannah-proto` 5.3, the version that adds the heartbeat call components use to tell Core they are running (Refs #399)
+* Changed: Core now knows every component that is connected to it, not only the chat channels and the log collector. A component is entered at its first call and stays as long as it holds an open connection or has been heard from within the last 90 seconds (components tell Core every 30 seconds that they are running). Two instances of one component, for example two Proxies, show up as two entries, and a component that restarts is a new one. Core logs when a component appears, changes its version or is gone. Channels and the log collector are roles that hang on the component that plays them (Refs #398)
+* Changed: Core checks its connections with keepalive pings, so a component that vanished without saying goodbye (power cut, WLAN gone) is noticed after about 40 seconds instead of staying connected forever. The pool of worker threads grew from 32 to 64 (`grpc.max_workers`), because every component holds at least one connection, and Core warns in the log when the open connections use 80 % of it (Refs #398)
+
+### Telegram
+
+* Changed: Telegram names itself and its version in every call to Hannah Core, so Core can tell which version is connected and name it in its notice about outdated components. Requires `hannah-grpc-lib` 0.9 (below 0.10.0) (Refs #397)
+* Changed: Telegram tells Hannah Core every 30 seconds that it is running, so Core still knows it when it holds no open connection. Needs a Core that knows the call, an older Core is left alone after one log line. Requires `hannah-grpc-lib` 0.10 (below 0.11.0) (Refs #399)
+
+### VoiceID
+
+* Changed: VoiceID names itself and its version in its calls to Hannah Core, so Core can tell which version is connected. Requires `hannah-grpc-lib` 0.9 (below 0.10.0) (Refs #397)
+* Changed: VoiceID tells Hannah Core every 30 seconds that it is running, so Core still knows it when it holds no open connection. Needs a Core that knows the call, an older Core is left alone after one log line. Requires `hannah-grpc-lib` 0.10 (below 0.11.0) (Refs #399)
+
+### AutoDeploy
+
+* Changed: AutoDeploy names itself and its version in its calls to Hannah Core (log shipping), so Core can tell which version is connected. `hannah-grpc-lib` may now be 0.9.x. The upper bound stays, so that a broken library cannot keep the updater from working (Refs #397)
+* Changed: AutoDeploy tells Hannah Core every 30 seconds that it is running, so Core still knows it when it holds no open connection. `hannah-grpc-lib` may now be 0.10.x, the upper bound stays (Refs #399)
+
+### Hannah Proxy
+
+* Changed: the Proxy names itself and its version in every call to Hannah Core and tells Core every 30 seconds that it is running, so Core still knows it when it holds no open connection. Two Proxies show up as two instances. Needs a Core that knows the call, an older Core is left alone after one log line. Requires `hannah-grpc-lib` 0.8 (Go) (Refs #400)
+
 ## 0.94.6 (2026-10-02)
 ### AutoDeploy
 

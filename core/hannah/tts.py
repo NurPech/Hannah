@@ -62,6 +62,8 @@ import wave
 from pathlib import Path
 from typing import Callable, Optional
 
+from hannah.log_shipping import TRANSCRIPT
+
 log = logging.getLogger(__name__)
 
 _SAMPLE_RATE_CLOUD = 16000  # Polly-PCM-Output (max 16kHz)
@@ -464,7 +466,7 @@ class TTS:
         if self._cache:
             cached = self._cache.get(text)
             if cached:
-                log.debug(f"TTS aus Cache: '{text[:50]}'")
+                log.debug(f"TTS aus Cache: '{text[:50]}'", extra=TRANSCRIPT)
                 return cached, self._primary.sample_rate
 
         # 2. Primäres Backend

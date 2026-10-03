@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from hannah_proto.v2 import hannah_pb2 as pb
 
 from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied
+from hannah.log_shipping import TRANSCRIPT
 from hannah.nlu_devices import categories_of
 from hannah.typed_devices import DeviceRegistry, Slot, TypedDevice
 
@@ -330,12 +331,14 @@ class ToolAgent:
                 call_key = (func_name, call.get("function", {}).get("arguments", "{}"))
                 if call_key in called:
                     result = "Dieses Tool wurde bereits mit denselben Argumenten aufgerufen. Nutze jetzt speak um zu antworten."
-                    log.warning("[tool_agent] Duplikat-Aufruf blockiert: %s(%s)", func_name, args)
+                    log.warning("[tool_agent] Duplikat-Aufruf blockiert: %s(%s)", func_name, args, extra=TRANSCRIPT)
                 else:
                     called.add(call_key)
                     result = self._dispatch(func_name, args, spoken, user_id, trust_level)
                 result_chars = len(result) if isinstance(result, str) else len(json.dumps(result, ensure_ascii=False))
-                log.info("[tool_agent] %s(%s) → %d chars", func_name, args, result_chars)
+                log.info("[tool_agent] %s → %d chars", func_name, result_chars)
+                # Die Argumente tragen Nutzertext, z.B. den gesprochenen Text bei speak.
+                log.info("[tool_agent] %s(%s)", func_name, args, extra=TRANSCRIPT)
                 log.debug("[tool_agent] %s result: %s", func_name, result)
 
                 if func_name != "speak":

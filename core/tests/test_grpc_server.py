@@ -24,6 +24,7 @@ from hannah.weather import WeatherCache
 from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
 from hannah_proto.v2.hannah_pb2 import AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreatePresenceSourceRequest, UpdatePresenceSourceRequest, DeletePresenceSourceRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand, StartVoiceEnrollmentRequest
 from hannah.satellite_manager import SatellitePermissionError
+from hannah.grpc_interceptors import CallerIdentity
 
 def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_presence_source_records=None,create_presence_source=None,update_presence_source=None,delete_presence_source=None,get_residents=None,get_devices=None):
     return HannahServicer(
@@ -1352,6 +1353,26 @@ class TestChannels:
         assert first.get(timeout=0.1).WhichOneof("command") == "registered"
         assert first.get(timeout=0.1) is None  # close sentinel → old stream ends
 
+    def test_the_channel_role_hangs_on_the_instance_of_the_component(self):
+        """#398: Telegram is a component, "channel" is a role it plays; the role points to the
+        instance through x-component-id."""
+        servicer = _make_server()
+        servicer.components.seen(CallerIdentity("telegram", "1.0.0", "t1"))
+        servicer.components.seen(CallerIdentity("telegram", "1.0.0", "t2"))
+        context = MagicMock()
+        context.is_active.return_value = True
+        context.invocation_metadata.return_value = (
+            ("x-component", "telegram"), ("x-component-version", "1.0.0"), ("x-component-id", "t1"))
+        stream = servicer.ChannelConnect(
+            iter([pb.ChannelMessage(register=pb.ChannelRegister(service="telegram", display_name="Telegram"))]), context)
+        next(stream)
+
+        roles = {c["instance_id"]: c["roles"] for c in servicer.components.snapshot()}
+
+        assert roles == {"t1": [{"kind": KIND_CHANNEL, "name": "telegram"}], "t2": []}
+        list(stream)
+        assert {c["instance_id"]: c["roles"] for c in servicer.components.snapshot()} == {"t1": [], "t2": []}
+
 
 # ------------------------------------------------------------------
 # Infrastructure: LogCollectorConnect + SubscribeInfrastructure (#335)
@@ -1386,6 +1407,21 @@ class TestInfrastructure:
 
         assert list(stream) == []  # request iterator exhausted → stream ends
         assert servicer._registry.get(KIND_LOG_COLLECTOR, "main") is None
+
+    def test_the_log_collector_role_hangs_on_the_instance_of_the_component(self):
+        servicer = _make_server()
+        servicer.components.seen(CallerIdentity("logcollector", "0.4.0", "l1"))
+        context = MagicMock()
+        context.is_active.return_value = True
+        context.peer.return_value = "ipv4:10.0.0.9:41234"
+        context.invocation_metadata.return_value = (("x-component", "logcollector"), ("x-component-id", "l1"))
+        stream = servicer.LogCollectorConnect(
+            iter([pb.LogCollectorMessage(register=pb.LogCollectorRegister(instance="main", host="10.0.0.5", port=50060))]),
+            context,
+        )
+        next(stream)
+
+        assert servicer.components.snapshot()[0]["roles"] == [{"kind": KIND_LOG_COLLECTOR, "name": "main"}]
 
     def test_empty_host_falls_back_to_peer_address(self):
         servicer = _make_server()

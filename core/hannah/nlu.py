@@ -791,7 +791,7 @@ class NLU:
             capture_mode=intent_capture_mode,
             is_open_close=_is_open_close,
         )
-        log.debug(f"NLU: {intent}")
+        log.debug(f"NLU: {intent}", extra=TRANSCRIPT)  # Intent trägt raw_text und label
         return intent
 
     def resolve_device_in_room(

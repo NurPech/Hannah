@@ -5,6 +5,8 @@ from typing import Callable, Optional
 
 import paho.mqtt.client as mqtt
 
+from hannah.log_shipping import TRANSCRIPT
+
 log = logging.getLogger(__name__)
 
 
@@ -447,10 +449,10 @@ class MQTTHandler:
             except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
                 user_id, content, source = 0, "", ""
             if user_id and content and self._on_message_create:
-                log.info(f"Message für user_id={user_id}: {content!r} (source={source!r})")
+                log.info(f"Message für user_id={user_id}: {content!r} (source={source!r})", extra=TRANSCRIPT)
                 threading.Thread(target=self._on_message_create, args=(user_id, content, source), daemon=True).start()
             else:
-                log.warning(f"Message-Payload ungültig oder unvollständig, verworfen: {raw!r}")
+                log.warning(f"Message-Payload ungültig oder unvollständig, verworfen: {raw!r}", extra=TRANSCRIPT)
             return
 
         if topic == self._topic_announce_ssml_in:

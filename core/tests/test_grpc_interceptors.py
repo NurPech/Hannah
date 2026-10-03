@@ -6,8 +6,10 @@ from hannah_proto import PROTO_VERSION as _PROTO_VERSION
 
 from hannah.grpc_interceptors import (
     PROTO_VERSION_METADATA_KEY,
+    CallerIdentity,
     OutdatedComponentInterceptor,
     ProtocolVersionInterceptor,
+    read_caller,
     read_proto_version,
 )
 
@@ -17,8 +19,8 @@ EXPECTED_VERSION = str(_PROTO_VERSION)
 UNKNOWN_METHOD = "/hannah.HannahService/SubmitText"  # the unversioned package is gone since hannah.v2
 
 
-def _handler_call_details(method="/hannah.v2.HannahService/SubmitText", version=EXPECTED_VERSION):
-    metadata = ((PROTO_VERSION_METADATA_KEY, version),) if version is not None else ()
+def _handler_call_details(method="/hannah.v2.HannahService/SubmitText", version=EXPECTED_VERSION, extra=()):
+    metadata = (((PROTO_VERSION_METADATA_KEY, version),) if version is not None else ()) + tuple(extra)
     return MagicMock(method=method, invocation_metadata=metadata)
 
 
@@ -115,7 +117,7 @@ class TestOutdatedComponentInterceptor:
         )
 
         assert result is handler
-        notifier.notify_legacy_call.assert_called_once_with("ChannelConnect", "3.2.0")
+        notifier.notify_legacy_call.assert_called_once_with("ChannelConnect", "3.2.0", None)
         notifier.notify_current_call.assert_not_called()
 
     def test_current_path_reports_recovery_not_a_new_notice(self):
@@ -128,7 +130,7 @@ class TestOutdatedComponentInterceptor:
             _handler_call_details(method="/hannah.v2.HannahService/ChannelConnect", version=EXPECTED_VERSION),
         )
 
-        notifier.notify_current_call.assert_called_once_with("ChannelConnect")
+        notifier.notify_current_call.assert_called_once_with("ChannelConnect", None)
         notifier.notify_legacy_call.assert_not_called()
 
     def test_missing_proto_version_header_passed_as_empty_string(self):
@@ -141,7 +143,41 @@ class TestOutdatedComponentInterceptor:
             _handler_call_details(method=f"{LEGACY_PREFIX}AgentConnect", version=None),
         )
 
-        notifier.notify_legacy_call.assert_called_once_with("AgentConnect", "")
+        notifier.notify_legacy_call.assert_called_once_with("AgentConnect", "", None)
+
+    def test_caller_identity_from_the_headers_is_passed_on_the_legacy_path(self):
+        """#396 — hannah-grpc-lib sagt, wer ruft."""
+        notifier = MagicMock()
+        interceptor = OutdatedComponentInterceptor(notifier, legacy_prefix=LEGACY_PREFIX)
+        extra = (("x-component", "telegram"), ("x-component-version", "1.2.3"), ("x-component-id", "abc123"))
+
+        interceptor.intercept_service(
+            MagicMock(return_value=_unary_handler()),
+            _handler_call_details(method=f"{LEGACY_PREFIX}ChannelConnect", version="3", extra=extra),
+        )
+
+        notifier.notify_legacy_call.assert_called_once_with(
+            "ChannelConnect", "3", CallerIdentity("telegram", "1.2.3", "abc123"))
+
+    def test_caller_identity_is_passed_on_the_current_path_too(self):
+        notifier = MagicMock()
+        interceptor = OutdatedComponentInterceptor(notifier, legacy_prefix=LEGACY_PREFIX)
+
+        interceptor.intercept_service(
+            MagicMock(return_value=_unary_handler()),
+            _handler_call_details(method="/hannah.v2.HannahService/ChannelConnect", extra=(("x-component", "telegram"),)),
+        )
+
+        notifier.notify_current_call.assert_called_once_with("ChannelConnect", CallerIdentity("telegram", "", ""))
+
+    def test_version_headers_without_a_component_name_are_no_identity(self):
+        assert read_caller({"x-component-version": "1.2.3", "x-component-id": "abc"}) is None
+        assert read_caller({"x-component": "  "}) is None
+
+    def test_identity_values_from_outside_are_cut_to_a_bounded_length(self):
+        caller = read_caller({"x-component": "x" * 500, "x-component-version": "1" * 500, "x-component-id": "a" * 500})
+
+        assert len(caller.component) == len(caller.version) == len(caller.instance_id) == 64
 
     def test_unimplemented_method_is_not_reported(self):
         """handler is None (Methode existiert nicht mehr) — kein Fall für #358, das

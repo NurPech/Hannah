@@ -65,6 +65,7 @@ from hannah.alarms import AlarmManager, format_duration
 from hannah.messages import MessageManager
 from hannah.outdated_components import OutdatedComponentNotifier
 from hannah.__version__ import VERSION as HANNAH_VERSION
+from hannah_grpc import identity as hannah_identity
 
 # Asset-IDs, die Core per play_asset anfordern könnte (#170) — Grundlage für die
 # Relevanzliste, die hannah_asset auf dem Satelliten reaktiv statt blind alles im
@@ -1025,7 +1026,7 @@ def main():
                 answer_text=answer, audio_array=audio_array, sample_rate=sample_rate,
             )
             if answer:
-                log.info(f"[{_source}] Antwort ({intent_name}): {answer!r}")
+                log.info(f"[{_source}] Antwort ({intent_name}): {answer!r}", extra=TRANSCRIPT)
             return answer, intent_name
 
         phrase_reply = trigger_engine.match_phrase(text, source_device=device)
@@ -1155,7 +1156,8 @@ def main():
 
         log.info(
             f"[textcmd] Text: '{text}' → Intent: {intent.name} | "
-            f"Raum: {intent.room} | Gerät: {intent.device} | Wert: {intent.value} | SpeakerUser: {speaker_user_id}"
+            f"Raum: {intent.room} | Gerät: {intent.device} | Wert: {intent.value} | SpeakerUser: {speaker_user_id}",
+            extra=TRANSCRIPT,
         )
 
         if intent.category_candidates:
@@ -2057,7 +2059,7 @@ def main():
                     _begin_playback(device, tts_pcm, sample_rate)
                     log.info(f"[{device}] TTS: {len(tts_pcm)} Bytes @ {sample_rate} Hz")
             else:
-                log.warning(f"[{device}] TTS: synthesize() lieferte kein Ergebnis für Antwort: {answer!r}")
+                log.warning(f"[{device}] TTS: synthesize() lieferte kein Ergebnis für Antwort: {answer!r}", extra=TRANSCRIPT)
         elif not answer:
             log.debug(f"[{device}] Keine Antwort (z.B. Ignored) — kein TTS")
         else:
@@ -2352,9 +2354,9 @@ def main():
         _user_manager.dump_present_users()
 
     def _on_agent_ask_resident(correlation_id: str, room: str, question: str) -> None:
-        log.info(f"[grpc/ask] corr={correlation_id!r} room={room!r} question={question!r}")
+        log.info(f"[grpc/ask] corr={correlation_id!r} room={room!r} question={question!r}", extra=TRANSCRIPT)
         def _answer_callback(answer: str) -> None:
-            log.info(f"[grpc/ask] Antwort corr={correlation_id!r}: {answer!r}")
+            log.info(f"[grpc/ask] Antwort corr={correlation_id!r}: {answer!r}", extra=TRANSCRIPT)
             grpc_servicer.agent_resident_answered(correlation_id, answer)
         _ask_fn(room, question, _answer_callback)
 
@@ -2766,7 +2768,7 @@ def main():
         Aufnahme kontaminiert. Alarme laufen bewusst NICHT über diese Funktion,
         siehe _dispatch_alarm_tts (#308).
         """
-        log.info(f"[{satellite_device}] Feedback: {'✓' if is_success else '✗'} — {text}")
+        log.info(f"[{satellite_device}] Feedback: {'✓' if is_success else '✗'} — {text}", extra=TRANSCRIPT)
 
         if _device_dnd.get(satellite_device):
             log.info(f"[{satellite_device}] Feedback unterdrückt (DND aktiv).")
@@ -2843,6 +2845,9 @@ def main():
 
     # Before the server starts, so no log collector can register unnoticed (#341)
     log_shipping.follow_registry(log_shipper, grpc_servicer.registry)
+    # Core has no stream to itself, so it enters itself into the component registry (#398); the
+    # instance ID is the one hannah-grpc-lib names in Core's own calls
+    grpc_servicer.components.register_permanent("core", HANNAH_VERSION, hannah_identity.instance_id())
     outdated_notifier = OutdatedComponentNotifier(get_db, _user_manager, message_manager)
     grpc_srv = GrpcServer(cfg.get("grpc", {}), grpc_servicer, outdated_notifier=outdated_notifier)
     grpc_srv.start()
