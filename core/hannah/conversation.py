@@ -108,8 +108,15 @@ class ConversationContext:
                     intent.device_id = ctx.device_id
                     log.debug(f"[{source}] Kontext: Gerät '{ctx.device}' ergänzt")
             if intent.category_filter is None and ctx.category_filter:
-                intent.category_filter = ctx.category_filter
-                log.debug(f"[{source}] Kontext: Kategorie '{ctx.category_filter}' ergänzt")
+                # Ist ein Gerät im Spiel (genannt, im Satz mehrdeutig oder eben aus dem Kontext
+                # geerbt), meint der User genau dieses: eine Kategorie aus einem früheren Befehl
+                # passt nicht dazu — "Computer an" nach "Licht an" ist kein Licht (#355).
+                has_device = bool(
+                    intent.device or intent.device_id or intent.device_key or intent.device_candidates
+                )
+                if not has_device:
+                    intent.category_filter = ctx.category_filter
+                    log.debug(f"[{source}] Kontext: Kategorie '{ctx.category_filter}' ergänzt")
 
     def inherit_action(self, source: str, intent: Intent) -> bool:
         """

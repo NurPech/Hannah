@@ -96,6 +96,15 @@ def device_dot(dev) -> str:
     return "⚫"
 
 
+def escape_markdown(text: str) -> str:
+    """Schützt Zeichen, die in Telegrams Markdown (`parse_mode="Markdown"`) eine Formatierung
+    beginnen (`_`, `*`, Backtick, `[`). Namen und Werte kommen aus den Adaptern; ein einzelner
+    Unterstrich in `link_quality` ohne Gegenstück lässt Telegram die ganze Nachricht ablehnen."""
+    for char in "_*`[":
+        text = text.replace(char, "\\" + char)
+    return text
+
+
 def _number(value) -> Optional[float]:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -106,7 +115,7 @@ def device_status_text(dev) -> str:
         label = _contact_noun(dev)
     else:
         label = _CLASS_LABELS.get(dev.device_class, "Gerät")
-    parts = [f"*{dev.name}* ({label})"]
+    parts = [f"*{escape_markdown(dev.name)}* ({label})"]
 
     for slot in dev.slots:
         value = slot_value(slot)
@@ -143,12 +152,12 @@ def device_status_text(dev) -> str:
         elif kind == hannah_pb2.SLOT_KIND_VOC and number is not None:
             parts.append(f"VOC: {number:.2f} ppm")
         elif kind == hannah_pb2.SLOT_KIND_MODE:
-            parts.append(f"Modus: {value}")
+            parts.append(f"Modus: {escape_markdown(str(value))}")
         elif kind == hannah_pb2.SLOT_KIND_FAN_SPEED:
-            parts.append(f"Lüfter: {value}")
+            parts.append(f"Lüfter: {escape_markdown(str(value))}")
         elif kind in (hannah_pb2.SLOT_KIND_GENERIC_NUMBER, hannah_pb2.SLOT_KIND_GENERIC_BOOL,
                       hannah_pb2.SLOT_KIND_GENERIC_TEXT):
-            parts.append(f"{slot.label or slot.slot_id}: {value}")
+            parts.append(f"{escape_markdown(slot.label or slot.slot_id)}: {escape_markdown(str(value))}")
     return "\n".join(parts)
 
 

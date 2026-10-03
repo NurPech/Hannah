@@ -47,6 +47,76 @@ class TestFillIntentDevice:
         assert intent.device is None
 
 
+class TestFillIntentCategory:
+    """#355 — "Computer an" nach "Licht an" lief intern mit category_filter = Licht:
+    fill_intent() hat die Kategorie aus dem Kontext geerbt, obwohl ein Gerät genannt war."""
+
+    def _ctx_after_light_on(self):
+        ctx = ConversationContext(ttl=120.0)
+        ctx.update_from_intent("sat01", Intent(
+            name="TurnOn", room="OG Zimmer Süd", room_id="og zimmer süd",
+            category_filter="Licht",
+        ))
+        return ctx
+
+    def _ctx_after_computer_on(self):
+        ctx = self._ctx_after_light_on()
+        ctx.update_from_intent("sat01", Intent(
+            name="TurnOn", room="OG Zimmer Süd", room_id="og zimmer süd",
+            device="Computer", device_id="javascript.0.virtualDevice.Computer",
+        ))
+        return ctx
+
+    def test_device_named_does_not_inherit_category(self):
+        ctx = self._ctx_after_light_on()
+        intent = Intent(name="TurnOn", device="Computer", device_id="javascript.0.virtualDevice.Computer")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.device == "Computer"
+        assert intent.category_filter is None
+        assert intent.room_id == "og zimmer süd"
+
+    def test_device_from_context_does_not_bring_a_stale_category(self):
+        """"Und wieder aus" nach "Computer an": das Gerät kommt aus dem Kontext, die Kategorie
+        Licht stammt aus einem früheren Befehl und gehört nicht zum Computer."""
+        ctx = self._ctx_after_computer_on()
+        intent = Intent(name="TurnOff")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.device == "Computer"
+        assert intent.category_filter is None
+
+    def test_ambiguous_device_does_not_inherit_category(self):
+        ctx = self._ctx_after_light_on()
+        intent = Intent(name="TurnOn", device_candidates=[("a.Seite1", "Seite1"), ("a.Seite2", "Seite2")])
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.category_filter is None
+
+    def test_device_key_does_not_inherit_category(self):
+        ctx = self._ctx_after_light_on()
+        intent = Intent(name="TurnOn", device_key="decke seite")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.category_filter is None
+
+    def test_without_a_device_the_category_is_still_inherited(self):
+        """"Und die Küche auch?" nach "Licht an": kein Gerät, die Kategorie bleibt."""
+        ctx = self._ctx_after_light_on()
+        intent = Intent(name="Unknown", room="Küche", room_id="küche")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.category_filter == "Licht"
+
+    def test_category_named_is_kept(self):
+        ctx = self._ctx_after_computer_on()
+        intent = Intent(name="TurnOff", category_filter="Stecker")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.category_filter == "Stecker"
+        assert intent.device is None
+
+
 class TestFillIntentSatelliteRoom:
     """#370 — "Licht an" ohne Raumangabe hat Geräte im "Balkon" geschaltet statt im
     tatsächlichen Raum des Satelliten ("OG Zimmer Süd"): fill_intent() hatte den Raum

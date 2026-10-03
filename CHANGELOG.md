@@ -4,6 +4,15 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.95.1 (2026-10-03)
+### Hannah Core
+
+* Fixed: a command that names a device no longer takes over the category of the command before. "Computer an" after "Licht an" was handled as a command for the device "Computer" in the category "Licht", which is wrong (a computer is no light) and carried on into the following commands. Now a device that is named, ambiguous or taken over from the last command keeps the category of an earlier command out. Commands without a device keep working as before: "Und die Küche auch?" after "Licht an" still means the lights (Refs #355)
+
+### Telegram
+
+* Fixed: the detail view of a device in the house menu opens again for devices with values Hannah has no name for (for example Zigbee2MQTT devices). Names and values with an underscore, such as `link_quality`, made Telegram refuse the whole message, so the button did nothing (Refs #401)
+
 ## 0.95.0 (2026-10-03)
 ### Hannah Core
 

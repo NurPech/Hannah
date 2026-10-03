@@ -115,6 +115,33 @@ class TestStatusText:
 
         assert "Zähler: 7" in device_menu.device_status_text(dev)
 
+    def test_underscores_in_slot_names_are_escaped(self):
+        # Zigbee2MQTT-Slots heißen link_quality, send_payload, ...; ein Unterstrich ohne Gegenstück
+        # (hier fünf) lässt Telegram die ganze Nachricht ablehnen ("can't find end of the entity")
+        names = ["link_quality", "send_payload", "brightness_step", "brightness_move", "state_toggle"]
+        dev = _device("Flur Keller 1", pb.DEVICE_CLASS_LIGHT, [
+            _slot("on", pb.SLOT_KIND_ON, False, writable=True),
+            *[_slot(name, pb.SLOT_KIND_GENERIC_NUMBER, 1) for name in names],
+        ])
+
+        text = device_menu.device_status_text(dev)
+
+        assert [line for line in text.splitlines() if "_" in line and "\\_" not in line] == []
+        assert "link\\_quality: 1" in text and "state\\_toggle: 1" in text
+
+    def test_markdown_characters_in_names_and_values_are_escaped(self):
+        dev = _device("Lampe *1* [alt]", pb.DEVICE_CLASS_GENERIC, [
+            _slot("effect", pb.SLOT_KIND_GENERIC_TEXT, "a_b `c`"),
+        ])
+
+        text = device_menu.device_status_text(dev)
+
+        assert text.splitlines()[0].startswith("*Lampe \\*1\\* \\[alt]*")
+        assert "effect: a\\_b \\`c\\`" in text
+
+    def test_escaping_leaves_plain_text_alone(self):
+        assert device_menu.escape_markdown("Küche 1: an") == "Küche 1: an"
+
 
 class TestControlRows:
     def _labels(self, rows):
