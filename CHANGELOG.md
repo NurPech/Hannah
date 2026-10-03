@@ -4,6 +4,17 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.95.2 (2026-10-03)
+### Hannah Core
+
+* Added: for every voice command from a satellite Core writes one `latency` log line with the time each stage took in milliseconds: `audio_ms` (length of the recording), `total_ms`, and, for the stages that ran, `voiceid_ms`, `stt_ms`, `nlu_ms`, `exec_ms` (switching devices, including the wait for their confirmation), `llm_ms` and `tts_ms`. `other_ms` is the rest no stage covers. This replaces guessing where a slow answer loses its time, for example `{unit="hannah.service"} |= "latency device="` in Loki (Refs #402)
+* Added: for every request to the language model Core writes one `llm_call` log line: `ms` (the whole wait), `prompt_tokens`, `completion_tokens`, `tok_s` (tokens per second over the whole wait, so including loading and reading the prompt, a lower bound of the real speed), `content_chars` (what came back as text) and, if the model reports it, `reasoning_chars` (thinking). If `completion_tokens` is far above what `content_chars` explains, the model produced tokens that never reach the answer. With the native Ollama client the line also has `load_ms`, `prefill_ms` and `decode_ms`. This tells apart a slow model, a long prompt and a model that has to be loaded first (Refs #403)
+* Added: the setting `llm.reasoning_effort` in `config.yaml` switches off the "thinking" of the language model. Models like gemma4 write long thoughts nobody hears before they answer, which made a single request to the model take up to 25 seconds; with `reasoning_effort: none` a request takes about one to three seconds. Without the setting nothing changes and nothing is sent. With `provider: openai_compat` (also Ollama through `/v1`) the values `none`, `low`, `medium` and `high` are passed on as they are, with `provider: ollama` only `none` works. Providers that do not know the setting refuse it, so it is only for models that support thinking (Refs #406)
+
+### Hannah Proxy
+
+* Added: for every voice command the Proxy writes one `latency` log line with the length of the recording (`audio_ms`), the time Hannah Core needed to answer (`submit_ms`), the time it took to send the answer to the satellite (`tts_send_ms`, paced to the speed of playback, so it is about as long as the answer) and `total_ms`. Together with the line from Core this shows how long a command takes from the end of the recording on (Refs #402)
+
 ## 0.95.1 (2026-10-03)
 ### Hannah Core
 

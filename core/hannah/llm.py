@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
@@ -66,6 +67,36 @@ def prepare_prompt(raw: str, iobroker: "IoBrokerClient | None" = None) -> str:
     return raw
 
 log = logging.getLogger(__name__)
+
+
+def _log_call(model: str, kind: str, seconds: float, **fields) -> None:
+    """Eine Zeile pro LLM-Aufruf (#403): Dauer plus das, was das Backend an Token-Zahlen
+    liefert. Felder ohne Wert fehlen in der Zeile."""
+    parts = [f"model={model}", f"kind={kind}", f"ms={round(seconds * 1000)}"]
+    parts += [f"{key}={value}" for key, value in fields.items() if value is not None]
+    log.info("llm_call " + " ".join(parts))
+
+
+def _openai_fields(data: dict, message: dict, seconds: float) -> dict:
+    """Felder für _log_call aus einer OpenAI-kompatiblen Antwort. tok_s rechnet über die
+    ganze Wartezeit (inkl. Laden und Prefill) und ist damit eine Untergrenze der Decode-Rate.
+    Liegt completion_tokens weit über dem, was content_chars hergibt, hat das Modell Tokens
+    erzeugt, die nie in der Antwort ankommen (Denken)."""
+    usage = data.get("usage") or {}
+    completion = usage.get("completion_tokens")
+    reasoning = message.get("reasoning") or message.get("reasoning_content")
+    return {
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": completion,
+        "tok_s": round(completion / seconds, 1) if completion and seconds > 0 else None,
+        "content_chars": len(message.get("content") or ""),
+        "reasoning_chars": len(reasoning) if reasoning else None,
+    }
+
+
+def _ns_to_ms(value) -> int | None:
+    return round(value / 1_000_000) if value is not None else None
+
 
 DEFAULT_FALLBACK = "Das kann ich leider nicht beantworten."
 _CLASSIFY_PROMPT = (
@@ -183,13 +214,17 @@ class OpenAICompatibleLLM(LLMClient):
         api_key: str = "",
         timeout: float = 10.0,
         max_tokens: int = 300,
+        reasoning_effort: str = "",
     ) -> None:
         self._url       = base_url.rstrip("/") + "/chat/completions"
         self._model     = model
         self._api_key   = api_key
         self._timeout   = timeout
         self._max_tokens = max_tokens
-        log.info("LLM: OpenAICompatibleLLM → %s (model=%s)", base_url, model)
+        # Leer = nicht mitschicken (Standard): Anbieter ohne den Parameter lehnen ihn ab.
+        self._reasoning_effort = reasoning_effort
+        log.info("LLM: OpenAICompatibleLLM → %s (model=%s%s)", base_url, model,
+                 f", reasoning_effort={reasoning_effort}" if reasoning_effort else "")
 
     def chat(
         self,
@@ -208,19 +243,23 @@ class OpenAICompatibleLLM(LLMClient):
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
+        payload: dict = {
+            "model":      self._model,
+            "messages":   messages,
+            "max_tokens": self._max_tokens,
+        }
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
+
         try:
-            resp = requests.post(
-                self._url,
-                json={
-                    "model":      self._model,
-                    "messages":   messages,
-                    "max_tokens": self._max_tokens,
-                },
-                headers=headers,
-                timeout=self._timeout,
-            )
+            t0 = time.monotonic()
+            resp = requests.post(self._url, json=payload, headers=headers, timeout=self._timeout)
+            elapsed = time.monotonic() - t0
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            data = resp.json()
+            message = data["choices"][0]["message"]
+            _log_call(self._model, "chat", elapsed, **_openai_fields(data, message, elapsed))
+            return message["content"].strip()
         except requests.exceptions.Timeout:
             log.warning("LLM-Anfrage: Timeout nach %.1fs", self._timeout)
             return None
@@ -241,12 +280,21 @@ class OpenAICompatibleLLM(LLMClient):
         }
         if tools:
             payload["tools"] = tools
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
 
         try:
+            t0 = time.monotonic()
             resp = requests.post(self._url, json=payload, headers=headers, timeout=(10, self._timeout))
+            elapsed = time.monotonic() - t0
             resp.raise_for_status()
-            choice = resp.json()["choices"][0]
+            data = resp.json()
+            choice = data["choices"][0]
             msg = choice["message"]
+            _log_call(
+                self._model, "tools", elapsed,
+                tool_calls=len(msg.get("tool_calls") or []), **_openai_fields(data, msg, elapsed),
+            )
             return {
                 "content":      msg.get("content") or "",
                 "tool_calls":   msg.get("tool_calls") or [],
@@ -270,12 +318,20 @@ class OllamaLLM(LLMClient):
     base_url: "http://localhost:11434"
     """
 
-    def __init__(self, base_url: str, model: str, timeout: float = 10.0, max_tokens: int = 300) -> None:
+    def __init__(
+        self, base_url: str, model: str, timeout: float = 10.0, max_tokens: int = 300,
+        reasoning_effort: str = "",
+    ) -> None:
         self._url        = base_url.rstrip("/") + "/api/chat"
         self._model      = model
         self._timeout    = timeout
         self._max_tokens = max_tokens
-        log.info("LLM: OllamaLLM → %s (model=%s)", base_url, model)
+        # Die native API kennt nur "denken an/aus" (think): "none" schaltet es ab.
+        self._think_off  = reasoning_effort == "none"
+        if reasoning_effort and not self._think_off:
+            log.warning("LLM: reasoning_effort=%s wird vom Provider ollama nicht unterstützt (nur \"none\") "
+                        "— ignoriert", reasoning_effort)
+        log.info("LLM: OllamaLLM → %s (model=%s%s)", base_url, model, ", think=false" if self._think_off else "")
 
     def chat(
         self,
@@ -290,15 +346,33 @@ class OllamaLLM(LLMClient):
             messages.extend(history)
         messages.append({"role": "user", "content": user_message})
 
+        payload: dict = {"model": self._model, "messages": messages, "stream": False,
+                         "options": {"num_predict": self._max_tokens}}
+        if self._think_off:
+            payload["think"] = False
+
         try:
-            resp = requests.post(
-                self._url,
-                json={"model": self._model, "messages": messages, "stream": False,
-                      "options": {"num_predict": self._max_tokens}},
-                timeout=self._timeout,
-            )
+            t0 = time.monotonic()
+            resp = requests.post(self._url, json=payload, timeout=self._timeout)
+            elapsed = time.monotonic() - t0
             resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
+            data = resp.json()
+            message = data["message"]
+            # Die native API liefert die Zeiten selbst (Nanosekunden): Laden, Prefill, Decode.
+            thinking = message.get("thinking")
+            decode_ns = data.get("eval_duration")
+            completion = data.get("eval_count")
+            _log_call(
+                self._model, "chat", elapsed,
+                prompt_tokens=data.get("prompt_eval_count"), completion_tokens=completion,
+                load_ms=_ns_to_ms(data.get("load_duration")),
+                prefill_ms=_ns_to_ms(data.get("prompt_eval_duration")),
+                decode_ms=_ns_to_ms(decode_ns),
+                tok_s=round(completion / (decode_ns / 1e9), 1) if completion and decode_ns else None,
+                content_chars=len(message.get("content") or ""),
+                reasoning_chars=len(thinking) if thinking else None,
+            )
+            return message["content"].strip()
         except requests.exceptions.Timeout:
             log.warning("LLM-Anfrage: Timeout nach %.1fs", self._timeout)
             return None
@@ -330,9 +404,11 @@ def load(cfg: dict) -> LLMClient:
     timeout   = float(cfg.get("timeout", 10.0))
     max_tokens = int(cfg.get("max_tokens", 300))
     model     = cfg.get("model", "llama3.2")
+    reasoning_effort = str(cfg.get("reasoning_effort") or "").strip()
 
     if provider == "ollama":
-        return OllamaLLM(base_url=base_url, model=model, timeout=timeout, max_tokens=max_tokens)
+        return OllamaLLM(base_url=base_url, model=model, timeout=timeout, max_tokens=max_tokens,
+                         reasoning_effort=reasoning_effort)
 
     return OpenAICompatibleLLM(
         base_url=base_url,
@@ -340,4 +416,5 @@ def load(cfg: dict) -> LLMClient:
         api_key=cfg.get("api_key", ""),
         timeout=timeout,
         max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
     )

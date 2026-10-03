@@ -29,6 +29,7 @@ from hannah.utils.activity_db import init_activity_db
 from hannah.residents import Roomie, Guest, Pet, Resident, AWAY_PRESENCE_STATE, HOME_PRESENCE_STATE, NIGHT_PRESENCE_STATE
 from hannah import audio as audio_mod
 from hannah import config as config_mod
+from hannah import latency
 from hannah import responses
 from hannah import log_shipping
 from hannah.log_shipping import TRANSCRIPT
@@ -1036,11 +1037,13 @@ def main():
         # Smalltalk-Modus: LLM-Classifier vor NLU schalten
         if conv_ctx.is_smalltalk_active(_source):
             history = conv_ctx.get_llm_history(_source)
-            verdict = llm.classify(text, history=history)
+            with latency.stage("llm"):
+                verdict = llm.classify(text, history=history)
             if verdict == "SMALLTALK":
                 log.debug(f"[{_source}] Classifier → SMALLTALK (Modus aktiv)")
                 sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
-                answer = llm.chat(text, system_prompt=sp, history=history)
+                with latency.stage("llm"):
+                    answer = llm.chat(text, system_prompt=sp, history=history)
                 if answer is None:
                     answer = DEFAULT_FALLBACK
                 conv_ctx.add_llm_exchange(_source, text, answer)
@@ -1107,11 +1110,12 @@ def main():
                 offline: list[str] = []
                 unsupported: list[str] = []
                 name = _requester_name(speaker_user_id)
-                count = iobroker.execute(
-                    orig, trust_level=trust_level, denied=denied,
-                    requester_name=name, wait_confirm=True, offline=offline,
-                    unsupported=unsupported,
-                )
+                with latency.stage("exec"):
+                    count = iobroker.execute(
+                        orig, trust_level=trust_level, denied=denied,
+                        requester_name=name, wait_confirm=True, offline=offline,
+                        unsupported=unsupported,
+                    )
                 conv_ctx.update_from_intent(_source, orig)
                 if denied:
                     return _logged(_denied_answer(denied, count, name), "Routine", orig)
@@ -1123,7 +1127,8 @@ def main():
                 return _logged(responses.success("OK.", name), "Routine", orig)
             conv_ctx.clear_clarification(_source)
 
-        intent = nlu.parse(text)
+        with latency.stage("nlu"):
+            intent = nlu.parse(text)
 
         # Satelliten-Fallback-Raum vorab ermitteln — bei Query-Intents bewusst nicht,
         # dort soll ohne Raumangabe im Text die globale Abfrage greifen statt des
@@ -1349,9 +1354,10 @@ def main():
         elif intent.name == "Smalltalk":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
-            answer = tool_agent.run(
-                text, system_prompt=sp, history=history, user_id=speaker_user_id, trust_level=trust_level,
-            )
+            with latency.stage("llm"):
+                answer = tool_agent.run(
+                    text, system_prompt=sp, history=history, user_id=speaker_user_id, trust_level=trust_level,
+                )
             if answer:
                 conv_ctx.add_llm_exchange(_source, text, answer)
                 conv_ctx.set_smalltalk_active(_source, True)
@@ -1363,9 +1369,10 @@ def main():
         elif intent.name == "Unknown":
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             history = conv_ctx.get_llm_history(_source)
-            answer = tool_agent.run(
-                text, system_prompt=sp, history=history, user_id=speaker_user_id, trust_level=trust_level,
-            )
+            with latency.stage("llm"):
+                answer = tool_agent.run(
+                    text, system_prompt=sp, history=history, user_id=speaker_user_id, trust_level=trust_level,
+                )
             if answer:
                 conv_ctx.add_llm_exchange(_source, text, answer)
             else:
@@ -1375,11 +1382,12 @@ def main():
             offline: list[str] = []
             unsupported: list[str] = []
             name = _requester_name(speaker_user_id)
-            count = iobroker.execute(
-                intent, trust_level=trust_level, denied=denied,
-                requester_name=name, wait_confirm=True, offline=offline,
-                unsupported=unsupported,
-            )
+            with latency.stage("exec"):
+                count = iobroker.execute(
+                    intent, trust_level=trust_level, denied=denied,
+                    requester_name=name, wait_confirm=True, offline=offline,
+                    unsupported=unsupported,
+                )
             if count > 0:
                 conv_ctx.set_smalltalk_active(_source, False)
             if denied:
@@ -1976,6 +1984,16 @@ def main():
         return resampled.tobytes(), 16000
 
     def _handle_satellite_audio(device: str, pcm_bytes: bytes) -> tuple[str, str, str, bytes, int]:
+        """Misst die Stufen-Zeiten der Äußerung (#402) und verarbeitet sie in _process_satellite_audio."""
+        timer = latency.start(device, len(pcm_bytes))
+        result = None
+        try:
+            result = _process_satellite_audio(device, pcm_bytes)
+            return result
+        finally:
+            timer.finish(result[2] if result else "Error")
+
+    def _process_satellite_audio(device: str, pcm_bytes: bytes) -> tuple[str, str, str, bytes, int]:
         """
         Verarbeitet eine vollständige Satellit-Aufnahme via Go-Proxy:
         Raw PCM → STT → NLU → TTS → (transcript, answer, intent_name, tts_pcm, sample_rate)
@@ -1984,7 +2002,8 @@ def main():
         der das Feld nicht mehr befüllt.
         """
         _touch_activity(device)
-        speaker_user_id = voiceid_client.identify(pcm_bytes)
+        with latency.stage("voiceid"):
+            speaker_user_id = voiceid_client.identify(pcm_bytes)
         if is_hannah_self(speaker_user_id):
             log.info(f"[{device}] Audio als Hannahs eigene Stimme erkannt ({speaker_user_id}) — verworfen (#216).")
             return "", "", "Ignored", b"", 0
@@ -2021,7 +2040,8 @@ def main():
                 log.warning(f"[{device}] Debug-Aufnahme fehlgeschlagen: {e}")
 
         try:
-            transcript, _ = stt.transcribe(audio_array)
+            with latency.stage("stt"):
+                transcript, _ = stt.transcribe(audio_array)
         except Exception as e:
             log.error(f"[{device}] STT fehlgeschlagen: {e}")
             return "", "Ich konnte dich leider nicht verstehen.", "Unknown", b"", 0
@@ -2045,7 +2065,8 @@ def main():
         tts_pcm = b""
         sample_rate = 0
         if tts.enabled and answer:
-            result = tts.synthesize(answer)
+            with latency.stage("tts"):
+                result = tts.synthesize(answer)
             if result:
                 tts_pcm, sample_rate = result
                 tts_pcm, sample_rate = _resample_to_16k(tts_pcm, sample_rate)

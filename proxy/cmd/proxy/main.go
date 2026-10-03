@@ -32,6 +32,9 @@ import (
 // version is injected at build time via -ldflags="-X main.version=<tag>".
 var version = "dev"
 
+// pcmBytesPerMs converts satellite audio (16 kHz, 16-bit, mono) from bytes to milliseconds.
+const pcmBytesPerMs = 32
+
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "path to config.yaml")
 	flag.Parse()
@@ -88,14 +91,37 @@ func main() {
 	// Wire: audio session complete → Hannah gRPC pipeline → TTS back to satellite.
 	// Speaker identification happens on Hannah's side now (#210), not here.
 	udpServer.OnAudio(func(device string, pcm []byte) {
+		start := time.Now()
+		var submit, ttsSend time.Duration
+		ok := false
+		// One line per utterance (Refs #402). submit_ms is the SubmitSatelliteAudio call, i.e.
+		// the Core's whole pipeline plus gRPC. tts_send_ms is paced to playback speed by
+		// SendTTSChunk, so it is roughly the length of the answer, not a delay; it is only
+		// present when TTS was sent.
+		defer func() {
+			attrs := []any{
+				"device", device,
+				"ok", ok,
+				"audio_ms", len(pcm) / pcmBytesPerMs,
+				"submit_ms", submit.Milliseconds(),
+			}
+			if ttsSend > 0 {
+				attrs = append(attrs, "tts_send_ms", ttsSend.Milliseconds())
+			}
+			attrs = append(attrs, "total_ms", time.Since(start).Milliseconds())
+			slog.Info("latency", attrs...)
+		}()
+
 		udpServer.SendStatus(device, "processing")
 
 		resp, err := hannahClient.SubmitSatelliteAudio(ctx, device, pcm)
+		submit = time.Since(start)
 		if err != nil {
 			slog.Error("SubmitSatelliteAudio failed", "device", device, "err", err)
 			udpServer.SendStatus(device, "idle")
 			return
 		}
+		ok = true
 
 		slog.Info("pipeline result",
 			"device", device,
@@ -108,7 +134,9 @@ func main() {
 
 		if len(resp.AudioPcm) > 0 {
 			udpServer.SendStatus(device, "speaking")
+			ttsStart := time.Now()
 			udpServer.SendTTS(device, resp.AudioPcm, int(resp.SampleRate))
+			ttsSend = time.Since(ttsStart)
 		}
 		udpServer.SendStatus(device, "idle")
 	})

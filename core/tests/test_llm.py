@@ -1,8 +1,10 @@
-from unittest.mock import patch
+import logging
+import re
+from unittest.mock import MagicMock, patch
 
 import requests
 
-from hannah.llm import DummyLLM, LLMClient, OllamaLLM, OpenAICompatibleLLM
+from hannah.llm import DummyLLM, LLMClient, OllamaLLM, OpenAICompatibleLLM, load
 
 
 class _StubLLM(LLMClient):
@@ -132,3 +134,206 @@ class TestOllamaLLMChatFailure:
 
         with patch("hannah.llm.requests.post", side_effect=requests.exceptions.ConnectionError):
             assert llm.chat("Hallo") is None
+
+
+def _response(payload: dict):
+    resp = MagicMock()
+    resp.json.return_value = payload
+    return resp
+
+
+def _llm_call_line(caplog) -> str:
+    lines = [r.getMessage() for r in caplog.records if r.name == "hannah.llm" and r.getMessage().startswith("llm_call ")]
+    assert len(lines) == 1
+    return lines[0]
+
+
+class TestLlmCallLine:
+    """#403 — eine llm_call-Zeile pro Aufruf, damit sich Wartezeit in Laden, Prefill, Decode
+    und Denken aufteilen lässt."""
+
+    def test_openai_chat_logs_usage(self, caplog):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="gemma4:e4b")
+        payload = {
+            "choices": [{"message": {"content": "Hallo Leonie."}}],
+            "usage": {"prompt_tokens": 2100, "completion_tokens": 40},
+        }
+
+        with caplog.at_level(logging.INFO, logger="hannah.llm"), \
+                patch("hannah.llm.requests.post", return_value=_response(payload)):
+            assert llm.chat("Hallo") == "Hallo Leonie."
+
+        line = _llm_call_line(caplog)
+        assert re.fullmatch(
+            r"llm_call model=gemma4:e4b kind=chat ms=\d+ prompt_tokens=2100 completion_tokens=40 "
+            r"tok_s=[\d.]+ content_chars=13",
+            line,
+        )
+
+    def test_openai_tools_logs_tool_calls_and_reasoning(self, caplog):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="gemma4:e4b")
+        payload = {
+            "choices": [{
+                "message": {"content": "", "tool_calls": [{"id": "1"}, {"id": "2"}], "reasoning": "abc" * 10},
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 500},
+        }
+
+        with caplog.at_level(logging.INFO, logger="hannah.llm"), \
+                patch("hannah.llm.requests.post", return_value=_response(payload)):
+            result = llm.chat_with_tools([{"role": "user", "content": "x"}], [])
+
+        assert len(result["tool_calls"]) == 2
+        line = _llm_call_line(caplog)
+        assert "kind=tools" in line
+        assert "tool_calls=2" in line
+        assert "completion_tokens=500" in line
+        assert "reasoning_chars=30" in line
+
+    def test_openai_without_usage_still_logs_duration(self, caplog):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="m")
+        payload = {"choices": [{"message": {"content": "Ok."}}]}
+
+        with caplog.at_level(logging.INFO, logger="hannah.llm"), \
+                patch("hannah.llm.requests.post", return_value=_response(payload)):
+            assert llm.chat("Hallo") == "Ok."
+
+        line = _llm_call_line(caplog)
+        assert re.fullmatch(r"llm_call model=m kind=chat ms=\d+ content_chars=3", line)
+
+    def test_ollama_native_logs_load_prefill_decode(self, caplog):
+        llm = OllamaLLM(base_url="http://localhost:11434", model="gemma4:e4b")
+        payload = {
+            "message": {"content": "Hallo.", "thinking": "denk"},
+            "prompt_eval_count": 2000, "eval_count": 50,
+            "load_duration": 8_000_000_000, "prompt_eval_duration": 4_000_000_000,
+            "eval_duration": 5_000_000_000,
+        }
+
+        with caplog.at_level(logging.INFO, logger="hannah.llm"), \
+                patch("hannah.llm.requests.post", return_value=_response(payload)):
+            assert llm.chat("Hallo") == "Hallo."
+
+        line = _llm_call_line(caplog)
+        assert "prompt_tokens=2000" in line
+        assert "completion_tokens=50" in line
+        assert "load_ms=8000" in line
+        assert "prefill_ms=4000" in line
+        assert "decode_ms=5000" in line
+        assert "tok_s=10.0" in line
+        assert "reasoning_chars=4" in line
+
+    def test_failed_call_logs_no_line(self, caplog):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="m")
+
+        with caplog.at_level(logging.INFO, logger="hannah.llm"), \
+                patch("hannah.llm.requests.post", side_effect=requests.exceptions.Timeout):
+            assert llm.chat("Hallo") is None
+
+        assert not [r for r in caplog.records if r.getMessage().startswith("llm_call ")]
+
+
+def _sent_payload(post: MagicMock) -> dict:
+    return post.call_args.kwargs["json"]
+
+
+_OPENAI_OK = {"choices": [{"message": {"content": "Ok."}}]}
+_OLLAMA_OK = {"message": {"content": "Ok."}}
+
+
+class TestReasoningEffort:
+    """#406 — llm.reasoning_effort wird nur mitgeschickt, wenn es gesetzt ist."""
+
+    def test_openai_chat_default_sends_no_parameter(self):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="m")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)) as post:
+            llm.chat("Hallo")
+
+        assert "reasoning_effort" not in _sent_payload(post)
+
+    def test_openai_chat_sends_parameter_when_set(self):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="m", reasoning_effort="none")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)) as post:
+            llm.chat("Hallo")
+
+        assert _sent_payload(post)["reasoning_effort"] == "none"
+
+    def test_openai_tools_default_sends_no_parameter(self):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="m")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)) as post:
+            llm.chat_with_tools([{"role": "user", "content": "x"}], [])
+
+        assert "reasoning_effort" not in _sent_payload(post)
+
+    def test_openai_tools_sends_parameter_when_set(self):
+        llm = OpenAICompatibleLLM(base_url="http://localhost:11434/v1", model="m", reasoning_effort="low")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)) as post:
+            llm.chat_with_tools([{"role": "user", "content": "x"}], [])
+
+        assert _sent_payload(post)["reasoning_effort"] == "low"
+
+    def test_ollama_native_default_sends_no_think(self):
+        llm = OllamaLLM(base_url="http://localhost:11434", model="m")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OLLAMA_OK)) as post:
+            llm.chat("Hallo")
+
+        assert "think" not in _sent_payload(post)
+
+    def test_ollama_native_none_turns_thinking_off(self):
+        llm = OllamaLLM(base_url="http://localhost:11434", model="m", reasoning_effort="none")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OLLAMA_OK)) as post:
+            llm.chat("Hallo")
+
+        assert _sent_payload(post)["think"] is False
+
+    def test_ollama_native_other_value_is_ignored_with_warning(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="hannah.llm"):
+            llm = OllamaLLM(base_url="http://localhost:11434", model="m", reasoning_effort="high")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OLLAMA_OK)) as post:
+            llm.chat("Hallo")
+
+        assert "think" not in _sent_payload(post)
+        assert any("reasoning_effort=high" in r.getMessage() for r in caplog.records)
+
+    def test_load_passes_option_to_openai_compat(self):
+        llm = load({"enabled": True, "provider": "openai_compat", "base_url": "http://h:11434/v1",
+                    "model": "m", "reasoning_effort": " none "})
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)) as post:
+            llm.chat("Hallo")
+
+        assert _sent_payload(post)["reasoning_effort"] == "none"
+
+    def test_load_without_option_sends_nothing(self):
+        llm = load({"enabled": True, "provider": "openai_compat", "base_url": "http://h:11434/v1", "model": "m"})
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)) as post:
+            llm.chat("Hallo")
+
+        assert "reasoning_effort" not in _sent_payload(post)
+
+    def test_load_empty_option_sends_nothing(self):
+        llm = load({"enabled": True, "provider": "openai_compat", "base_url": "http://h:11434/v1",
+                    "model": "m", "reasoning_effort": None})
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)) as post:
+            llm.chat("Hallo")
+
+        assert "reasoning_effort" not in _sent_payload(post)
+
+    def test_load_passes_option_to_native_ollama(self):
+        llm = load({"enabled": True, "provider": "ollama", "base_url": "http://h:11434",
+                    "model": "m", "reasoning_effort": "none"})
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OLLAMA_OK)) as post:
+            llm.chat("Hallo")
+
+        assert _sent_payload(post)["think"] is False

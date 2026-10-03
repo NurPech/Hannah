@@ -155,7 +155,15 @@ llm:
   timeout: 60             # Sekunden bis LLM-Timeout
   max_tokens: 2048
 
-  context_ttl: 120.0      # Sekunden bis der Konversations-Kontext (Multi-Turn) verfällt
+  # Soll das Modell vor der Antwort "nachdenken"? Manche Modelle (z.B. gemma4) schreiben erst
+  # lange Gedanken, die niemand hört, und jede Antwort dauert dadurch Sekunden länger.
+  # reasoning_effort: none   → Nachdenken aus, Antworten kommen deutlich schneller
+  # Weglassen                → wie bisher, Hannah schickt dazu nichts mit
+  # Weitere Werte: low | medium | high (weniger/mehr Nachdenken). Bei provider: ollama geht nur "none".
+  # Nur für Modelle/Anbieter, die das kennen, andere lehnen den Eintrag ab.
+  # reasoning_effort: none
+
+  context_ttl: 120.0     # Sekunden bis der Konversations-Kontext (Multi-Turn) verfällt
   history_turns: 3        # Wie viele vergangene Turns maximal in den Kontext einfließen
 
   # Antwort, wenn llm.enabled: false ist (DummyLLM) — kein Modell-Aufruf, fester Text.
