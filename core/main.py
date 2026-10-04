@@ -1037,15 +1037,21 @@ def main():
         # Smalltalk-Modus: LLM-Classifier vor NLU schalten
         if conv_ctx.is_smalltalk_active(_source):
             history = conv_ctx.get_llm_history(_source)
+            # Classifier und Antwort teilen sich den Prompt-Anfang des Tool-Agents (#407), damit
+            # Ollama seinen Prompt-Cache zwischen den Aufrufen behält.
+            sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             with latency.stage("llm"):
-                verdict = llm.classify(text, history=history)
+                verdict = tool_agent.classify(text, system_prompt=sp, history=history)
             if verdict == "SMALLTALK":
                 log.debug(f"[{_source}] Classifier → SMALLTALK (Modus aktiv)")
-                sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
                 with latency.stage("llm"):
-                    answer = llm.chat(text, system_prompt=sp, history=history)
-                if answer is None:
-                    answer = DEFAULT_FALLBACK
+                    if llm.supports_tools:
+                        answer = tool_agent.run(
+                            text, system_prompt=sp, history=history, user_id=speaker_user_id, trust_level=trust_level,
+                        )
+                    else:
+                        answer = llm.chat(text, system_prompt=sp, history=history)
+                answer = answer or DEFAULT_FALLBACK
                 conv_ctx.add_llm_exchange(_source, text, answer)
                 return _logged(answer, "Smalltalk")
             if verdict == "NOT_ADDRESSED":

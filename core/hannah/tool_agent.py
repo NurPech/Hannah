@@ -9,11 +9,13 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from hannah_proto.v2 import hannah_pb2 as pb
 
 from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied
+from hannah.llm import CLASSIFY_PROMPT, parse_classification
 from hannah.log_shipping import TRANSCRIPT
 from hannah.nlu_devices import categories_of
 from hannah.typed_devices import DeviceRegistry, Slot, TypedDevice
@@ -26,6 +28,22 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _MAX_ITERATIONS = 5
+
+# Manche Modelle (gemma4 ohne Denken) schreiben den speak-Aufruf als Text, z.B. speak("Hallo.")
+# oder speak(text="Hallo."), statt das Tool aufzurufen.
+_TEXT_SPEAK = re.compile(r"""^\s*speak\s*\(\s*(?:text\s*=\s*)?(["'])(.*)\1\s*\)\s*$""", re.DOTALL)
+
+
+def _unwrap_text_speak(content: str) -> str:
+    """Gibt den Text aus einem als Text geschriebenen speak-Aufruf zurück. Ohne das würde Hannah
+    den Aufruf samt Klammern und Anführungszeichen vorlesen."""
+    match = _TEXT_SPEAK.match(content or "")
+    return match.group(2).strip() if match else content
+
+
+# Letzte Nachricht des Classifier-Aufrufs (#407). Dieselben Kriterien wie CLASSIFY_PROMPT, nur
+# als Anweisung hinter dem Prompt-Anfang des Agents statt als eigener System-Prompt.
+_CLASSIFY_INSTRUCTION = "[Anweisung an dich, keine Äußerung des Nutzers] Ruf KEIN Tool auf.\n" + CLASSIFY_PROMPT
 
 C = pb.DeviceClass
 K = pb.SlotKind
@@ -263,6 +281,54 @@ class ToolAgent:
             },
         }
 
+    @staticmethod
+    def _messages(text: str, system_prompt: str, history: list[dict] | None) -> list[dict]:
+        """Die Nachrichten eines Agent-Aufrufs: System-Prompt plus Tool-Regeln, Historie, Nutzertext.
+        run() und classify() bauen sie gleich auf, damit Ollama den Anfang des Prompts aus dem
+        Cache nimmt (#407). Datum und Uhrzeit hängen deshalb am Ende der letzten Nachricht und
+        nicht im System-Prompt: Ein Text, der sich jede Minute ändert, würde sonst alles dahinter
+        (Tools, Historie) aus dem Cache werfen."""
+        _now = datetime.datetime.now()
+        _WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+        _TOOL_RULES = (
+            "\n\nRegeln für Tool-Nutzung:"
+            "\n- Nutze das speak-Tool um deine Antwort auszugeben."
+            "\n- Rufe nie dasselbe Tool zweimal hintereinander auf."
+            "\n- Nach dem Sammeln aller nötigen Informationen: speak aufrufen und danach stoppen."
+        )
+        _NOW_NOTE = (
+            f"\n\n[Aktuelles Datum/Uhrzeit: {_WEEKDAYS_DE[_now.weekday()]}, {_now.strftime('%d.%m.%Y')}, "
+            f"{_now.strftime('%H:%M')} Uhr]"
+        )
+
+        messages: list[dict] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt + _TOOL_RULES})
+        else:
+            messages.append({"role": "system", "content": _TOOL_RULES.lstrip()})
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": text + _NOW_NOTE})
+        return messages
+
+    def classify(self, text: str, system_prompt: str = "", history: list[dict] | None = None) -> str:
+        """Wie LLMClient.classify ("COMMAND" / "SMALLTALK" / "NOT_ADDRESSED"), aber mit demselben
+        Prompt-Anfang wie run() (#407): gleiche System-Nachricht, gleiche Tools, gleiche Historie;
+        die Klassifizier-Anweisung hängt als letzte Nachricht dahinter. Ollama merkt sich nur den
+        Anfang des zuletzt gelesenen Prompts, ein eigener Classifier-Prompt würde ihn bei jedem
+        Wechsel zwischen Classifier und Agent wegwerfen und den großen Agent-Prompt jedes Mal
+        neu einlesen lassen. Ein LLM ohne Function-Calling nimmt den alten Classifier-Weg."""
+        if not self._llm.supports_tools:
+            return self._llm.classify(text, history=history)
+        messages = self._messages(text, system_prompt, history)
+        messages.append({"role": "user", "content": _CLASSIFY_INSTRUCTION})
+        response = self._llm.chat_with_tools(messages, self._tools)
+        if response.get("error"):
+            return parse_classification(None)
+        if response.get("tool_calls"):
+            return "COMMAND"  # wollte ein Tool nutzen, also geht es um Geräte
+        return parse_classification(response.get("content"))
+
     def run(
         self,
         text: str,
@@ -281,24 +347,7 @@ class ToolAgent:
         spoken: list[str] = []
         called: set[tuple[str, str]] = set()
 
-        _now = datetime.datetime.now()
-        _WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-        _TOOL_RULES = (
-            f"\n\nAktuelles Datum/Uhrzeit: {_WEEKDAYS_DE[_now.weekday()]}, {_now.strftime('%d.%m.%Y')}, {_now.strftime('%H:%M')} Uhr"
-            "\n\nRegeln für Tool-Nutzung:"
-            "\n- Nutze das speak-Tool um deine Antwort auszugeben."
-            "\n- Rufe nie dasselbe Tool zweimal hintereinander auf."
-            "\n- Nach dem Sammeln aller nötigen Informationen: speak aufrufen und danach stoppen."
-        )
-
-        messages: list[dict] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt + _TOOL_RULES})
-        else:
-            messages.append({"role": "system", "content": _TOOL_RULES.lstrip()})
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": text})
+        messages = self._messages(text, system_prompt, history)
 
         for i in range(_MAX_ITERATIONS):
             payload_chars = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
@@ -308,7 +357,7 @@ class ToolAgent:
             tool_calls: list[dict] = response.get("tool_calls") or []
 
             if not tool_calls:
-                final = response.get("content", "")
+                final = _unwrap_text_speak(response.get("content", ""))
                 return "\n".join(spoken) if spoken else final
 
             # Assistent-Nachricht mit tool_calls in History aufnehmen

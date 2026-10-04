@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.95.3 (2026-10-04)
+### Hannah Core
+
+* Changed: while the microphone stays open after an answer (smalltalk window), Core classifies the next sentence (command, smalltalk, not meant for Hannah) with the same start of the prompt as the tool agent, and a smalltalk answer goes through the tool agent as well, instead of a plain chat request. Ollama keeps what it has read of the start of a prompt, but only of the last one; the old requests alternated between three different prompts, so the large prompt was read again every time. On the Mac Mini with a prompt of the usual size an answer takes about 1.6 instead of 4.2 seconds and the classification a bit longer (2.5 instead of 1.2 seconds), about a quarter less per sentence. The classification also got more reliable (24 of 27 test sentences right instead of 19). Providers without function calling (`provider: ollama`) keep the old path (Refs #407)
+* Changed: the tool agent no longer writes the date and time into the system prompt but at the end of the last message. A text that changes every minute made Ollama read everything behind it again (tools, history) as soon as the minute changed (Refs #407)
+* Fixed: if a model writes the answer as text `speak("…")` instead of calling the tool (gemma4 without thinking does that), Hannah no longer reads the call out loud (Refs #407)
+
 ## 0.95.2 (2026-10-03)
 ### Hannah Core
 

@@ -1,3 +1,4 @@
+import datetime
 import json
 from unittest.mock import MagicMock, patch
 
@@ -148,7 +149,8 @@ class TestToolAgentRun:
         assert messages[0]["role"] == "system"
         assert messages[0]["content"].startswith("Du bist Hannah.")
         assert messages[1]["content"] == "Hallo"
-        assert messages[-1] == {"role": "user", "content": "text"}
+        assert messages[-1]["role"] == "user"
+        assert messages[-1]["content"].startswith("text")
 
     def test_tool_result_appended_to_messages(self):
         dev = _typed("dev-decke", "Decke", _slot(K.SLOT_KIND_ON, True))
@@ -478,3 +480,140 @@ class TestToolAgentTrustLevel:
         agent.run("schließ die Haustür auf")
 
         assert sent == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ToolAgent.classify() (#407)
+
+
+class TestToolAgentClassify:
+    @staticmethod
+    def _agent(content="SMALLTALK", tool_calls=None, error=False):
+        llm = MagicMock()
+        llm.supports_tools = True
+        response = _llm_response(content=content, tool_calls=tool_calls)
+        if error:
+            response["error"] = True
+        llm.chat_with_tools.return_value = response
+        return llm, ToolAgent(llm, _make_iobroker())
+
+    def test_shares_the_prompt_start_with_run(self):
+        llm, agent = self._agent()
+        history = [{"role": "user", "content": "Hallo"}, {"role": "assistant", "content": "Hi"}]
+
+        with patch("hannah.tool_agent.datetime") as fake:
+            fake.datetime.now.return_value = datetime.datetime(2026, 10, 4, 1, 30)
+            agent.run("Was läuft?", system_prompt="Du bist Hannah.", history=history)
+            agent.classify("Was läuft?", system_prompt="Du bist Hannah.", history=history)
+
+        run_messages, run_tools = llm.chat_with_tools.call_args_list[0][0]
+        classify_messages, classify_tools = llm.chat_with_tools.call_args_list[1][0]
+        assert classify_messages[:-1] == run_messages
+        assert classify_tools == run_tools
+        assert classify_messages[-1]["role"] == "user"
+        assert "COMMAND" in classify_messages[-1]["content"]
+        assert "NOT_ADDRESSED" in classify_messages[-1]["content"]
+
+    @pytest.mark.parametrize("content,expected", [
+        ("COMMAND", "COMMAND"),
+        ("SMALLTALK", "SMALLTALK"),
+        ("NOT_ADDRESSED", "NOT_ADDRESSED"),
+        (" not_addressed\n", "NOT_ADDRESSED"),
+        ("Das weiß ich nicht.", "SMALLTALK"),
+    ])
+    def test_the_verdict_comes_from_the_answer(self, content, expected):
+        _, agent = self._agent(content=content)
+
+        assert agent.classify("Text") == expected
+
+    def test_an_empty_answer_means_command(self):
+        _, agent = self._agent(content="")
+
+        assert agent.classify("Text") == "COMMAND"
+
+    def test_a_tool_call_means_command(self):
+        _, agent = self._agent(content="", tool_calls=[_tool_call("get_active_devices", {})])
+
+        assert agent.classify("Text") == "COMMAND"
+
+    def test_a_failed_request_means_command(self):
+        # chat_with_tools() liefert bei einem Fehlschlag den Fallback-Text; der darf nicht als
+        # SMALLTALK-Antwort durchgehen, sonst läuft der Befehl in einen ebenso scheiternden zweiten Aufruf.
+        _, agent = self._agent(content="Das kann ich leider nicht beantworten.", error=True)
+
+        assert agent.classify("Text") == "COMMAND"
+
+    def test_an_llm_without_function_calling_uses_the_old_classifier(self):
+        llm = MagicMock()
+        llm.supports_tools = False
+        llm.classify.return_value = "NOT_ADDRESSED"
+        agent = ToolAgent(llm, _make_iobroker())
+        history = [{"role": "user", "content": "Hallo"}]
+
+        assert agent.classify("Text", system_prompt="Du bist Hannah.", history=history) == "NOT_ADDRESSED"
+        llm.classify.assert_called_once_with("Text", history=history)
+        llm.chat_with_tools.assert_not_called()
+
+
+class TestToolAgentPromptStart:
+    """#407 — der Anfang des Prompts bleibt von Minute zu Minute gleich, sonst nützt Ollama der Cache nichts."""
+
+    def test_the_date_is_not_part_of_the_system_prompt(self):
+        llm = MagicMock()
+        llm.chat_with_tools.return_value = _llm_response(content="OK")
+        agent = ToolAgent(llm, _make_iobroker())
+
+        with patch("hannah.tool_agent.datetime") as fake:
+            fake.datetime.now.return_value = datetime.datetime(2026, 10, 4, 1, 30)  # ein Sonntag
+            agent.run("Wie spät ist es?", system_prompt="Du bist Hannah.")
+
+        messages = llm.chat_with_tools.call_args[0][0]
+        assert "Datum" not in messages[0]["content"]
+        assert messages[-1]["content"].startswith("Wie spät ist es?")
+        assert "Sonntag, 04.10.2026, 01:30 Uhr" in messages[-1]["content"]
+
+    def test_everything_but_the_last_message_is_the_same_a_minute_later(self):
+        llm = MagicMock()
+        llm.chat_with_tools.return_value = _llm_response(content="OK")
+        agent = ToolAgent(llm, _make_iobroker())
+        history = [{"role": "user", "content": "Hallo"}, {"role": "assistant", "content": "Hi"}]
+
+        with patch("hannah.tool_agent.datetime") as fake:
+            fake.datetime.now.return_value = datetime.datetime(2026, 10, 4, 1, 30)
+            agent.run("Frage", system_prompt="Du bist Hannah.", history=history)
+            fake.datetime.now.return_value = datetime.datetime(2026, 10, 4, 1, 31)
+            agent.run("Frage", system_prompt="Du bist Hannah.", history=history)
+
+        first, second = (c[0][0] for c in llm.chat_with_tools.call_args_list)
+        assert first[:-1] == second[:-1]
+        assert first[-1] != second[-1]
+
+
+class TestSpeakWrittenAsText:
+    """#407 — gemma4 schreibt ohne Denken den speak-Aufruf teils als Text statt ihn aufzurufen."""
+
+    @pytest.mark.parametrize("content,expected", [
+        ('speak("Hallo Leonie.")', "Hallo Leonie."),
+        ("speak('Es ist zwölf Uhr.')", "Es ist zwölf Uhr."),
+        ('speak(text="Das Licht ist an.")', "Das Licht ist an."),
+        ('  speak( text = "Mit Leerzeichen." )\n', "Mit Leerzeichen."),
+        ('speak("Sie sagte: \\"Hallo\\".")', 'Sie sagte: \\"Hallo\\".'),
+        ('speak("Zwei Sätze. Der zweite auch.")', "Zwei Sätze. Der zweite auch."),
+    ])
+    def test_the_text_is_taken_out_of_the_call(self, content, expected):
+        llm = MagicMock()
+        llm.chat_with_tools.return_value = _llm_response(content=content)
+
+        assert ToolAgent(llm, _make_iobroker()).run("Hi") == expected
+
+    @pytest.mark.parametrize("content", [
+        "Ich kann speak nicht benutzen.",
+        'Er sagte speak("so") und ging.',
+        "speak ist ein Tool.",
+        "",
+    ])
+    def test_other_answers_stay_as_they_are(self, content):
+        llm = MagicMock()
+        llm.chat_with_tools.return_value = _llm_response(content=content)
+
+        assert ToolAgent(llm, _make_iobroker()).run("Hi") == content

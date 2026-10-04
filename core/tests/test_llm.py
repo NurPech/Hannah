@@ -337,3 +337,39 @@ class TestReasoningEffort:
             llm.chat("Hallo")
 
         assert _sent_payload(post)["think"] is False
+
+
+class TestSupportsTools:
+    """#407 — nur der OpenAI-kompatible Client kann Function-Calling, der Rest delegiert an chat()."""
+
+    def test_only_the_openai_compatible_client_supports_tools(self):
+        assert OpenAICompatibleLLM(base_url="http://h:11434/v1", model="m").supports_tools is True
+        assert OllamaLLM(base_url="http://h:11434", model="m").supports_tools is False
+        assert DummyLLM().supports_tools is False
+
+
+class TestToolCallFailure:
+    def test_a_timeout_is_marked_as_error(self):
+        llm = OpenAICompatibleLLM(base_url="http://h:11434/v1", model="m")
+
+        with patch("hannah.llm.requests.post", side_effect=requests.exceptions.Timeout):
+            result = llm.chat_with_tools([{"role": "user", "content": "x"}], [])
+
+        assert result["error"] is True
+        assert result["tool_calls"] == []
+
+    def test_another_failure_is_marked_as_error(self):
+        llm = OpenAICompatibleLLM(base_url="http://h:11434/v1", model="m")
+
+        with patch("hannah.llm.requests.post", side_effect=requests.exceptions.ConnectionError):
+            result = llm.chat_with_tools([{"role": "user", "content": "x"}], [])
+
+        assert result["error"] is True
+
+    def test_a_normal_answer_has_no_error_flag(self):
+        llm = OpenAICompatibleLLM(base_url="http://h:11434/v1", model="m")
+
+        with patch("hannah.llm.requests.post", return_value=_response(_OPENAI_OK)):
+            result = llm.chat_with_tools([{"role": "user", "content": "x"}], [])
+
+        assert "error" not in result

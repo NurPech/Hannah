@@ -99,7 +99,7 @@ def _ns_to_ms(value) -> int | None:
 
 
 DEFAULT_FALLBACK = "Das kann ich leider nicht beantworten."
-_CLASSIFY_PROMPT = (
+CLASSIFY_PROMPT = (
     "Antworte ausschließlich mit COMMAND, SMALLTALK oder NOT_ADDRESSED — kein anderes Wort.\n"
     "COMMAND: der Nutzer will ein Gerät steuern ODER nach dem Status von Geräten oder Sensoren fragen "
     "(z.B. Licht, Heizung, Steckdose, Musik, Temperatur, Rolladen — auch Statusabfragen wie 'Welche Lichter sind an?').\n"
@@ -112,8 +112,27 @@ _CLASSIFY_PROMPT = (
 )
 
 
+def parse_classification(raw: str | None) -> str:
+    """Wertet die Antwort eines Classifier-Aufrufs aus: "COMMAND" (→ NLU), "SMALLTALK" (→ LLM)
+    oder "NOT_ADDRESSED" (#159). Keine Antwort (None/leer) → "COMMAND": NLU funktioniert ohne
+    LLM, SMALLTALK würde nur in einen zweiten, ebenso scheiternden Aufruf laufen (#318)."""
+    if not raw:
+        log.warning("LLM-Classifier ohne Antwort — Fallback auf COMMAND (NLU)")
+        return "COMMAND"
+    result = raw.upper()
+    if "NOT_ADDRESSED" in result:
+        return "NOT_ADDRESSED"
+    if "COMMAND" in result:
+        return "COMMAND"
+    return "SMALLTALK"
+
+
 class LLMClient(ABC):
     """Gemeinsame Schnittstelle für alle LLM-Backends."""
+
+    # True, wenn chat_with_tools() echtes Function-Calling kann. Der Default delegiert nur an
+    # chat() und verliert dabei die Nutzer-Nachrichten der Historie.
+    supports_tools = False
 
     @abstractmethod
     def chat(
@@ -135,18 +154,8 @@ class LLMClient(ABC):
         Äußerung erkennbar nicht an Hannah gerichtet, z.B. Fremdgespräch im offenen
         Smalltalk-Follow-up-Mic-Fenster) zurück. history: optionaler Gesprächsverlauf
         (#159), damit die Entscheidung den bisherigen Dialogkontext einbeziehen kann.
-        LLM-Fehlschlag (None/leer) → "COMMAND": NLU funktioniert ohne LLM, SMALLTALK
-        würde nur in einen zweiten, ebenso scheiternden chat()-Call laufen (#318)."""
-        raw = self.chat(text, system_prompt=_CLASSIFY_PROMPT, history=history)
-        if not raw:
-            log.warning("LLM-Classifier ohne Antwort — Fallback auf COMMAND (NLU)")
-            return "COMMAND"
-        result = raw.upper()
-        if "NOT_ADDRESSED" in result:
-            return "NOT_ADDRESSED"
-        if "COMMAND" in result:
-            return "COMMAND"
-        return "SMALLTALK"
+        LLM-Fehlschlag (None/leer) → "COMMAND", siehe parse_classification()."""
+        return parse_classification(self.chat(text, system_prompt=CLASSIFY_PROMPT, history=history))
 
     def match(self, text: str, category: str) -> bool:
         """True wenn 'text' inhaltlich zur Kategorie passt (z.B. 'Zustimmung', 'Verneinung')."""
@@ -206,6 +215,8 @@ class OpenAICompatibleLLM(LLMClient):
 
     Alle Antworten sind blocking (requests) — passt zur synchronen Hannah-Pipeline.
     """
+
+    supports_tools = True
 
     def __init__(
         self,
@@ -302,10 +313,10 @@ class OpenAICompatibleLLM(LLMClient):
             }
         except requests.exceptions.Timeout:
             log.warning("LLM tool call: Timeout nach %.1fs", self._timeout)
-            return {"content": DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop"}
+            return {"content": DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop", "error": True}
         except Exception as exc:
             log.error("LLM tool call fehlgeschlagen: %s", exc)
-            return {"content": DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop"}
+            return {"content": DEFAULT_FALLBACK, "tool_calls": [], "finish_reason": "stop", "error": True}
 
 
 class OllamaLLM(LLMClient):
