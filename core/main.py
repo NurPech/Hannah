@@ -723,18 +723,10 @@ def main():
 
         # Raum-Fallback: zugewiesener Raum aus SatelliteManager
         if satellite_room and intent.room is None:
-            intent.room    = satellite_room
-            intent.room_id = satellite_room
             log.debug(f"[{device}] Raum-Fallback: '{satellite_room}'")
-            # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
-            # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
-            # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
-            # völlig anderen Raum gematcht worden sein.
-            device_key, dev = nlu.resolve_device_in_room(intent.raw_text, satellite_room)
-            intent.device_key = device_key
-            intent.device      = dev.name if dev else None
-            intent.device_id   = dev.id if dev else None
-            intent.candidates  = []
+            # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend —
+            # die Geräte-Auflösung mit dem Fallback-Raum macht die NLU nachträglich (#411).
+            nlu.apply_room_fallback(intent, satellite_room)
 
         log.info(
             f"[{device}] Intent: {intent.name} | "
@@ -1152,18 +1144,10 @@ def main():
         # Raum-Fallback: zugewiesener Raum des Satelliten, falls kein Raum im Text genannt wurde
         # (analog zum UDP-direkt-Pfad in pipeline() — ging im gRPC/Proxy-Pfad verloren)
         if satellite_room and intent.room is None:
-            intent.room    = satellite_room
-            intent.room_id = satellite_room
             log.debug(f"[{device}] Raum-Fallback: '{satellite_room}'")
-            # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend
-            # (#274-Analogon) — jetzt mit dem per Satelliten-Fallback bekannten Raum
-            # wiederholen, sonst kann ein gleichnamiges/ähnliches Gerät aus einem
-            # völlig anderen Raum gematcht worden sein.
-            device_key, dev = nlu.resolve_device_in_room(intent.raw_text, satellite_room)
-            intent.device_key = device_key
-            intent.device      = dev.name if dev else None
-            intent.device_id   = dev.id if dev else None
-            intent.candidates  = []
+            # Ohne Raum im Text lief die Geräte-Suche in parse() raumübergreifend —
+            # die Geräte-Auflösung mit dem Fallback-Raum macht die NLU nachträglich (#411).
+            nlu.apply_room_fallback(intent, satellite_room)
 
         log.info(
             f"[textcmd] Text: '{text}' → Intent: {intent.name} | "

@@ -534,6 +534,95 @@ class TestUnknownDeviceNameWithoutCategory:
         assert intent.device_id is None
 
 
+class TestApplyRoomFallback:
+    """#411 — Satelliten-Raum als Fallback: ein genanntes Gerät, das nicht im Raum des
+    Satelliten liegt, durfte bisher nicht stillschweigend zum Raum-Bulk werden ("Computer
+    an" schaltete alle 7 Geräte im OG Zimmer Süd). Dieselben Regeln wie bei gesprochenem
+    Raum (#261/#301), ohne dass parse() den Raum als room_key bekommt."""
+
+    SAT_ROOM = "og_zimmer_sued"
+
+    @pytest.fixture
+    def nlu_rooms(self):
+        rooms = {"og_zimmer_sued": "OG Zimmer Süd", "buero": "Büro", "kueche": "Küche",
+                 "bad": "Bad"}
+        devices = {
+            "og_zimmer_sued": {
+                "seite1": _make_device("seite1", "og_zimmer_sued", category="blind"),
+                "seite2": _make_device("seite2", "og_zimmer_sued", category="blind"),
+                "lampe": _make_device("lampe", "og_zimmer_sued", category="light"),
+            },
+            "buero": {
+                "computer": _make_device("computer", "buero", category="media"),
+                "lampe": _make_device("lampe", "buero", category="light"),
+            },
+            "kueche": {"nachtlicht": _make_device("nachtlicht", "kueche", category="light")},
+            "bad": {"nachtlicht": _make_device("nachtlicht", "bad", category="light")},
+        }
+        return NLU(cfg={"turn_on_words": ["an"], "turn_off_words": ["aus"]},
+                   rooms=rooms, devices=devices)
+
+    def _fallback(self, nlu, text):
+        intent = nlu.parse(text)
+        assert intent.room is None, "Testannahme: kein Raum im Text"
+        nlu.apply_room_fallback(intent, self.SAT_ROOM)
+        return intent
+
+    def test_device_in_other_room_is_kept_and_room_follows_the_device(self, nlu_rooms):
+        """Der eigentliche Bug: 'Computer an' am Satelliten im OG Zimmer Süd, Computer
+        steht im Büro → genau dieses eine Gerät, kein Bulk."""
+        intent = self._fallback(nlu_rooms, "computer an")
+        assert intent.name == "TurnOn"
+        assert intent.device_id == "buero.computer"
+        assert intent.room_id == "buero"
+        assert intent.room == "Büro"
+
+    def test_device_in_satellite_room_wins_over_same_name_elsewhere(self, nlu_rooms):
+        """#274-Analogon: 'Lampe' gibt es im Büro und im Satelliten-Raum → die nebenan
+        darf nicht gewinnen."""
+        intent = self._fallback(nlu_rooms, "lampe an")
+        assert intent.device_id == "og_zimmer_sued.lampe"
+        assert intent.room_id == self.SAT_ROOM
+        assert intent.candidates == []
+
+    def test_device_in_several_other_rooms_keeps_room_question(self, nlu_rooms):
+        intent = self._fallback(nlu_rooms, "nachtlicht an")
+        assert intent.name == "TurnOn"
+        assert intent.device_id is None
+        assert {c[0] for c in intent.candidates} == {"kueche", "bad"}
+
+    def test_unknown_device_name_is_rejected_not_bulked(self, nlu_rooms):
+        """Gerätename-Versuch ("vorne"), der zu nichts im Satelliten-Raum passt."""
+        intent = self._fallback(nlu_rooms, "setze den rollladen vorne auf 0 prozent")
+        assert intent.name == "DeviceNotFound"
+        assert intent.device_id is None
+        assert intent.room_id == self.SAT_ROOM
+        assert intent.value is None
+
+    def test_fuzzy_match_in_satellite_room_asks_when_ambiguous(self, nlu_rooms):
+        intent = self._fallback(nlu_rooms, "setze den rollladen seit auf 0 prozent")
+        assert intent.device_id is None
+        assert {d for _, d in intent.device_candidates} == {"seite1", "seite2"}
+
+    def test_category_bulk_without_device_name_still_works(self, nlu_rooms):
+        intent = self._fallback(nlu_rooms, "schliesse die rollladen")
+        assert intent.name == "SetLevel"
+        assert intent.device_id is None
+        assert intent.device_candidates == []
+        assert intent.room_id == self.SAT_ROOM
+
+    def test_wildcard_alles_still_bulks(self, nlu_rooms):
+        intent = self._fallback(nlu_rooms, "alles aus")
+        assert intent.name == "TurnOff"
+        assert intent.device_id is None
+
+    def test_non_device_intent_only_gets_the_room(self, nlu_rooms):
+        """Zeit & Co. sind keine Geräte-Befehle — kein DeviceNotFound wegen Restwörtern."""
+        intent = self._fallback(nlu_rooms, "wie spaet ist es")
+        assert intent.name == "TimeQuery"
+        assert intent.room_id == self.SAT_ROOM
+
+
 class TestCategoryAwareDispatch:
     """#272 — Wörter wie 'hoch'/'runter' sind je Kategorie unterschiedlich belegt
     (Rolladen: öffnen/schließen; Klima: Lüfterstufe). Die Dispatch-Tabelle wertet nur

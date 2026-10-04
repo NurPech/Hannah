@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.95.4 (2026-10-04)
+### Hannah Core
+
+* Fixed: a device that is named at a satellite but does not stand in the satellite's room is no longer dropped. "Computer an" in a room without a computer switched on every device of that room (seven of them, including a Kodi that did not answer, so the answer took three seconds); now it switches the one device, wherever it stands. If the name fits devices in several other rooms, Hannah asks for the room. A device in the satellite's own room still wins over one of the same name next door. If the name fits no device at all ("Rolladen vorne" with no such blind), Hannah says she does not know it, or asks when two devices come close, instead of switching the whole category in the room. A command without a device name ("Licht aus") still switches everything of that kind in the room. This was already so when a room is spoken, but not when it comes from the satellite (Refs #411)
+
 ## 0.95.3 (2026-10-04)
 ### Hannah Core
 

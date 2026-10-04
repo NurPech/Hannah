@@ -59,6 +59,11 @@ _DEVICE_NAME_STOPWORDS = {
     # als nicht gefundener Gerätename gewertet, statt als beabsichtigtes Raum-Bulk.
     "alles", "alle",
 }
+# Intents, die ein Gerät oder eine Gerätegruppe schalten — nur für diese ist ein
+# unbekannter Gerätename beim Raum-Fallback ein "nicht gefunden" (#411).
+_DEVICE_COMMAND_INTENTS = frozenset({
+    "TurnOn", "TurnOff", "SetLevel", "SetColor", "SetTemperature", "SetMode", "SetFanSpeed",
+})
 _DEVICE_FUZZY_CUTOFF = 0.75
 _DEVICE_FUZZY_MIN_LEN = 3
 
@@ -813,6 +818,63 @@ class NLU:
         joined = " ".join(tokens)
         device_key, device, _ = self._find_device(joined, room_key)
         return device_key, device
+
+    def _room_of_device(self, device_id: str) -> Optional[str]:
+        for room_key, devs in self._devices.items():
+            if any(d.id == device_id for d in devs.values()):
+                return room_key
+        return None
+
+    def apply_room_fallback(self, intent: Intent, room_key: str) -> None:
+        """Wendet den Fallback-Raum (Raum des Satelliten) auf einen Intent an, bei dem im
+        Text kein Raum genannt wurde (#411).
+
+        parse() kennt diesen Raum nicht und darf ihn auch nicht als room_key bekommen: ein
+        gesprochener Raum zählt dort als Gerätekontext (no_device_context), an dem Zeit,
+        Wetter, Schlafen, DND u.v.m. hängen. Deshalb läuft die raumabhängige Geräte-Logik
+        hier nachträglich, dafür mit denselben Regeln wie bei gesprochenem Raum:
+
+        - Gerät im Fallback-Raum gefunden → gewinnt gegen einen Treffer aus einem anderen
+          Raum (#274-Analogon: gleichnamiges Gerät nebenan).
+        - Nicht dort, aber eindeutig in genau einem anderen Raum → dieses Gerät, der Raum
+          des Intents ist dann dessen Raum. Mehrere andere Räume → Raum-Rückfrage.
+        - Nirgends, aber ein Gerätename-Versuch erkennbar (#261/#301) → Fuzzy-Suche im
+          Fallback-Raum, bei keinem Treffer DeviceNotFound statt stillem Raum-Bulk.
+        - Gar kein Gerätename-Versuch ("Licht aus") → bewusster Raum-/Kategorie-Bulk."""
+        room_name = self._rooms.get(room_key, room_key)
+        parsed_device_id = intent.device_id
+        intent.room, intent.room_id = room_name, room_key
+
+        text = self._split_compounds(intent.raw_text)
+        normalized = _STRIP_CHARS.sub(" ", text.lower())
+        tokens = [t for t in normalized.split() if t not in _FILLER]
+        device_key, device, _ = self._find_device(" ".join(tokens), room_key)
+
+        if device:
+            intent.device_key, intent.device, intent.device_id = device_key, device.name, device.id
+            intent.candidates = []
+            return
+
+        if parsed_device_id is not None:
+            other_room = self._room_of_device(parsed_device_id)
+            if other_room is not None:
+                intent.room, intent.room_id = self._rooms.get(other_room, other_room), other_room
+            return
+        if intent.candidates:
+            return
+
+        if intent.name not in _DEVICE_COMMAND_INTENTS:
+            return
+        leftover = self._leftover_device_tokens(tokens, room_name, intent.category_filter)
+        if not leftover:
+            return
+        matches = self._fuzzy_find_devices(leftover, room_key, intent.category_filter)
+        if len(matches) == 1:
+            intent.device_key, intent.device, intent.device_id = matches[0].key, matches[0].name, matches[0].id
+        elif len(matches) >= 2:
+            intent.device_candidates = [(d.id, d.name) for d in matches]
+        else:
+            intent.name, intent.value, intent.unit, intent.is_open_close = "DeviceNotFound", None, None, False
 
     def _leftover_device_tokens(
         self, tokens: list[str], room_name: Optional[str], category_filter: Optional[str],
