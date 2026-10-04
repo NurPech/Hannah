@@ -64,6 +64,8 @@ _DEVICE_NAME_STOPWORDS = {
 _DEVICE_COMMAND_INTENTS = frozenset({
     "TurnOn", "TurnOff", "SetLevel", "SetColor", "SetTemperature", "SetMode", "SetFanSpeed",
 })
+# Fugenelemente zwischen Raumname und Kategoriewort in Komposita ("Küche-n-licht"); "" = ohne.
+_COMPOUND_LINKING_ELEMENTS = ("", "n", "s", "en", "es", "e")
 _DEVICE_FUZZY_CUTOFF = 0.75
 _DEVICE_FUZZY_MIN_LEN = 3
 
@@ -367,7 +369,8 @@ class NLU:
     def _split_compounds(self, text: str) -> str:
         """Trennt deutsche Komposita aus Raumteil + Kategorie.
 
-        "Schlafzimmerlicht" → "Schlafzimmer Licht"
+        "Schlafzimmerlicht" → "Schlafzimmer Licht", "Küchenlicht" → "Küche Licht"
+        (mit Fugenelement, siehe _COMPOUND_LINKING_ELEMENTS)
 
         Verwendet alle Einzelwörter aus bekannten Raumnamen als Prefixe und
         alle category_words-Keys als Suffixe, damit der Rest der NLU wie
@@ -386,11 +389,16 @@ class NLU:
             split_done = False
             for rk in room_keywords:
                 if w.startswith(rk) and len(w) > len(rk):
-                    suffix = w[len(rk):]
-                    if suffix in category_keywords:
-                        result.append(word[:len(rk)])
-                        result.append(word[len(rk):])
-                        split_done = True
+                    rest = w[len(rk):]
+                    for link in _COMPOUND_LINKING_ELEMENTS:
+                        if not rest.startswith(link):
+                            continue
+                        if rest[len(link):] in category_keywords:
+                            result.append(word[:len(rk)])
+                            result.append(word[len(rk) + len(link):])
+                            split_done = True
+                            break
+                    if split_done:
                         break
             if not split_done:
                 result.append(word)

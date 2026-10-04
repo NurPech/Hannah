@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.95.5 (2026-10-04)
+### Hannah Core
+
+* Fixed: "Küchenlicht an" asked "Which device do you mean — Ceiling light 1 or Ceiling light 2?" instead of switching the lights of the kitchen. Hannah splits a room and a device kind that are spoken as one word ("Schlafzimmerlicht" → "Schlafzimmer Licht"), but not when German puts a linking letter between them ("Küche**n**licht"). The word then stayed whole, counted as a device name that Hannah did not know, and was matched to the two ceiling lights. Linking letters (n, s, e, en, es) are now taken into account, so "Küchenlicht an" is the same as "Küche Licht an" (Refs #415)
+* Fixed: the log and the activity log called the answer to a question from Hannah ("Which device do you mean?") a "Routine", a name left over from the time before routines became triggers. The answer is now logged with the command it carried out (TurnOn, SetLevel, ...), like every other command (Refs #416)
+
 ## 0.95.4 (2026-10-04)
 ### Hannah Core
 

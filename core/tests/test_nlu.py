@@ -709,3 +709,34 @@ class TestCategoryAwareDispatch:
         room_candidates = [(cat, label) for cat, label, *_ in intent.category_candidates]
         resolved = resolve_clarification_answer("die Klimaanlage", room_candidates)
         assert resolved == ("climate", "Klimaanlage")
+
+
+class TestRoomCategoryCompoundWithLinkingElement:
+    """Komposita Raum + Kategorie mit Fugenelement ("Küchenlicht") werden getrennt wie
+    "Schlafzimmerlicht" — sonst bleibt "küchenlicht" als Restwort übrig und der
+    Fuzzy-Geräte-Match (#301) hält es für einen Gerätenamen (Rückfrage Deckenlicht1/2)."""
+
+    @pytest.fixture
+    def nlu_kitchen(self):
+        rooms = {"kueche": "Küche", "schlafzimmer": "Schlafzimmer"}
+        devices = {
+            "kueche": {
+                "deckenlicht1": _make_device("deckenlicht1", "kueche", category="light"),
+                "deckenlicht2": _make_device("deckenlicht2", "kueche", category="light"),
+            },
+        }
+        return NLU(cfg={"turn_on_words": ["an"]}, rooms=rooms, devices=devices)
+
+    def test_split_with_linking_n(self, nlu_kitchen):
+        assert nlu_kitchen._split_compounds("Küchenlicht an") == "Küche licht an"
+
+    def test_split_without_linking_element_unchanged(self, nlu_kitchen):
+        assert nlu_kitchen._split_compounds("Schlafzimmerlicht an") == "Schlafzimmer licht an"
+
+    def test_kuechenlicht_is_room_category_bulk(self, nlu_kitchen):
+        intent = nlu_kitchen.parse("Küchenlicht an")
+        assert intent.name == "TurnOn"
+        assert intent.room_id == "kueche"
+        assert intent.category_filter == "light"
+        assert intent.device_candidates == []
+        assert intent.device_id is None
