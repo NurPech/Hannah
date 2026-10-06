@@ -129,6 +129,9 @@ class _LogCollectorSub:
         self.host: str = ""
         self.port: int = 0
         self.version: str = ""
+        # UDP port of the collector's syslog receiver on `host`, 0 = none (#417). Only a
+        # hannah.v2 collector can announce one.
+        self.syslog_port: int = 0
         # Which instance of which component holds this stream (x-component, x-component-id, #398)
         self.caller = None
         self._queue: queue.Queue = queue.Queue()
@@ -210,6 +213,7 @@ def _to_endpoint(kind: str, handle: _LogCollectorSub) -> pb.ServiceEndpoint:
         host=handle.host,
         port=handle.port,
         version=handle.version,
+        syslog_port=handle.syslog_port,
     )
 
 
@@ -2116,13 +2120,15 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         sub.host = register.host or _peer_host(peer)
         sub.port = register.port
         sub.version = register.version
+        sub.syslog_port = register.syslog_port
         old = self._registry.register(KIND_LOG_COLLECTOR, register.instance, sub)
         if old is not None:
             log.warning(f"[grpc] Log-Collector {register.instance!r} neu angemeldet — bestehende Verbindung wird verdrängt")
             old.close()
+        syslog = f", syslog={sub.syslog_port}" if sub.syslog_port else ""
         log.info(
             f"[grpc] Log-Collector registriert: {register.instance!r}"
-            f" ({sub.host}:{sub.port}, version={register.version!r})"
+            f" ({sub.host}:{sub.port}, version={register.version!r}{syslog})"
         )
         sub.put(pb.LogCollectorCommand(registered=pb.LogCollectorRegistered()))
 

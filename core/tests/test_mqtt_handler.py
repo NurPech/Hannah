@@ -199,3 +199,17 @@ class TestConnect:
 
         handler._client.connect_async.assert_called_once_with("127.0.0.1", 1, keepalive=60)
         handler._client.loop_start.assert_called_once()
+
+
+class TestPublishSyslogTarget:
+    """#417: Syslog-Ziel der Satelliten, retained wie hannah/server."""
+
+    def test_is_retained_on_the_syslog_topic(self):
+        handler = MQTTHandler({}, {})
+        handler._client = MagicMock()
+
+        handler.publish_syslog_target('{"host": "10.0.0.5", "port": 5514}')
+
+        handler._client.publish.assert_called_once_with(
+            "hannah/syslog", '{"host": "10.0.0.5", "port": 5514}', qos=1, retain=True,
+        )

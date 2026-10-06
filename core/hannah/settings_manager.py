@@ -120,6 +120,15 @@ DEFAULT_PRESENCE_SETTINGS: dict = {
 }
 
 
+# Syslog-Ziel der Satelliten (#417): Läuft der Log-Collector nicht (oder meldet er keinen
+# Syslog-Empfänger), geht diese Adresse per MQTT an die Satelliten, zum Beispiel direkt der
+# Alloy-Stack. Leerer Host = kein Fallback, die Satelliten senden dann nichts.
+DEFAULT_SYSLOG_SETTINGS: dict = {
+    "fallback_host": "",
+    "fallback_port": 514,
+}
+
+
 class SettingsManager:
     def __init__(self, db: Callable):
         self._db = db
@@ -195,6 +204,10 @@ class SettingsManager:
         if not self.get_settings_dict("presence"):
             cat = self.ensure_category("presence")
             for name, value in DEFAULT_PRESENCE_SETTINGS.items():
+                self.create_setting(cat, name, value)
+        if not self.get_settings_dict("syslog"):
+            cat = self.ensure_category("syslog")
+            for name, value in DEFAULT_SYSLOG_SETTINGS.items():
                 self.create_setting(cat, name, value)
 
     def run_data_migrations(self) -> None:

@@ -237,6 +237,13 @@ class MQTTHandler:
         self._client.publish(topic, payload, qos=1, retain=True)
         log.info(f"Discovery → {topic}: {payload}")
 
+    def publish_syslog_target(self, payload: str, topic: str = "hannah/syslog"):
+        """Syslog-Ziel der Satelliten (#417), retained: {"host": ..., "port": ...}, bei Host ""
+        und Port 0 gibt es keins. Bewusst kein leeres Payload — das löscht die retained Message,
+        was verbundene Satelliten nie erfahren."""
+        self._client.publish(topic, payload, qos=1, retain=True)
+        log.info(f"Syslog-Ziel → {topic}: {payload}")
+
     def publish_raw(self, topic: str, payload: str):
         self._client.publish(topic, payload, qos=1)
         log.debug(f"→ {topic}: {payload!r}")

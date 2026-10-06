@@ -33,6 +33,7 @@ from hannah import latency
 from hannah import responses
 from hannah import log_shipping
 from hannah.log_shipping import TRANSCRIPT
+from hannah.syslog_target import SyslogTarget
 from hannah.car_tracker import CarManager, CarTracker
 from hannah.car_registry import CarRegistry
 from hannah.ble_tags import BleTagManager
@@ -1880,6 +1881,16 @@ def main():
             _refresh_watch_more()
         return ok
 
+    # Syslog-Ziel der Satelliten (#417): erst beim Start des gRPC-Servers angelegt, aber die
+    # Settings-Änderung unten muss es schon kennen — der Closure löst es zur Laufzeit auf.
+    syslog_target: Optional[SyslogTarget] = None
+
+    def _update_setting_value(*args, **kwargs):
+        ok = settings_manager.update_setting_value(*args, **kwargs)
+        if ok and syslog_target is not None:
+            syslog_target.refresh()  # ein geänderter Fallback gilt sofort
+        return ok
+
     trigger_engine = TriggerEngine(
         db=get_db,
         announce_fn=process_announcement,
@@ -2468,7 +2479,7 @@ def main():
         delete_alarm=alarm_manager.delete_alarm,
         get_categories=settings_manager.get_categories,
         get_settings_records=settings_manager.get_settings,
-        update_setting_value=settings_manager.update_setting_value,
+        update_setting_value=_update_setting_value,
         get_ble_tag_records=ble_tag_manager.get_tag_records,
         create_ble_tag=ble_tag_manager.create_tag,
         update_ble_tag=ble_tag_manager.update_tag,
@@ -2856,6 +2867,13 @@ def main():
 
     # Before the server starts, so no log collector can register unnoticed (#341)
     log_shipping.follow_registry(log_shipper, grpc_servicer.registry)
+    # Where the satellites send their syslog: the collector's receiver, else the fallback (#417)
+    syslog_target = SyslogTarget(
+        grpc_servicer.registry,
+        lambda: settings_manager.get_settings_dict("syslog"),
+        mqtt_handler.publish_syslog_target,
+    )
+    syslog_target.start()
     # Core has no stream to itself, so it enters itself into the component registry (#398); the
     # instance ID is the one hannah-grpc-lib names in Core's own calls
     grpc_servicer.components.register_permanent("core", HANNAH_VERSION, hannah_identity.instance_id())
@@ -2879,6 +2897,7 @@ def main():
     stop.wait()
 
     residents.announce_offline()
+    syslog_target.stop()
     grpc_srv.stop()
     udp_server.stop()
     mqtt_handler.disconnect()

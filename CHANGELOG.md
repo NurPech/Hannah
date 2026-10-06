@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.96.0 (2026-10-06)
+### Hannah Core
+
+* Added: Core tells the satellites where to send their logs (syslog) through the retained MQTT topic `hannah/syslog`, with `{"host": …, "port": …}`: the syslog receiver of the log collector while one is connected, otherwise the fallback from the settings `syslog.fallback_host` and `syslog.fallback_port` (for example your own log stack, empty by default; without a fallback the topic says `{"host": "", "port": 0}` and the satellites send nothing). A collector that disappears is replaced by the fallback only after ten seconds, so a short restart does not switch every satellite twice; a collector that connects counts at once. Satellites with the matching firmware pick the address up from there, older ones keep the address entered on their own page. Needs a log collector that announces its syslog receiver (Refs #417)
+
 ## 0.95.5 (2026-10-04)
 ### Hannah Core
 

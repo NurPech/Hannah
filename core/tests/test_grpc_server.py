@@ -1377,10 +1377,11 @@ class TestChannels:
 # ------------------------------------------------------------------
 # Infrastructure: LogCollectorConnect + SubscribeInfrastructure (#335)
 
-def _register_log_collector(servicer, instance="main", host="10.0.0.5", port=50060, peer="ipv4:10.0.0.9:41234"):
+def _register_log_collector(servicer, instance="main", host="10.0.0.5", port=50060, peer="ipv4:10.0.0.9:41234",
+                            syslog_port=0):
     sub = _LogCollectorSub()
     servicer._register_log_collector(sub, pb.LogCollectorRegister(
-        instance=instance, host=host, port=port, version="0.1.0",
+        instance=instance, host=host, port=port, version="0.1.0", syslog_port=syslog_port,
     ), peer)
     return sub
 
@@ -1428,6 +1429,36 @@ class TestInfrastructure:
         _register_log_collector(servicer, host="", peer="ipv4:10.0.0.9:41234")
         stream = _subscribe_infrastructure(servicer)
         assert _endpoints(next(stream)) == [(pb.SERVICE_KIND_LOG_COLLECTOR, "main", "10.0.0.9", 50060)]
+
+    def test_syslog_port_of_the_collector_reaches_the_subscribers(self):
+        """#417: der Collector meldet den UDP-Port seines Syslog-Empfängers, Core reicht ihn weiter."""
+        servicer = _make_server()
+        stream = _subscribe_infrastructure(servicer)
+        next(stream)  # empty snapshot
+
+        _register_log_collector(servicer, syslog_port=5514)
+
+        assert next(stream).available.service.syslog_port == 5514
+        late = next(_subscribe_infrastructure(servicer))
+        assert [s.syslog_port for s in late.snapshot.services] == [5514]
+
+    def test_collector_without_a_syslog_receiver_announces_port_zero(self):
+        servicer = _make_server()
+        sub = _register_log_collector(servicer)
+
+        assert sub.syslog_port == 0
+        assert next(_subscribe_infrastructure(servicer)).snapshot.services[0].syslog_port == 0
+
+    def test_hannah_v1_collector_has_no_syslog_port(self):
+        """hannah.v1 is frozen and has no field for it: its registration reaches the registry as 0."""
+        from hannah_proto.v1 import hannah_pb2 as v1pb
+        from hannah_grpc.translate import translate
+        register = translate(v1pb.LogCollectorRegister(instance="main", host="10.0.0.5", port=50060), "v2")
+        servicer = _make_server()
+        sub = _LogCollectorSub()
+        servicer._register_log_collector(sub, register, "ipv4:10.0.0.9:41234")
+
+        assert sub.syslog_port == 0
 
     def test_peer_host_parsing(self):
         assert _peer_host("ipv4:10.0.0.9:41234") == "10.0.0.9"

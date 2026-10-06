@@ -171,6 +171,7 @@ Kein TLS auf UDP (zu teuer für ESP32, im LAN akzeptabel).
 | Topic | Zweck |
 |---|---|
 | `hannah/server` (retained) | Discovery: Proxy-Host:Port |
+| `hannah/syslog` (retained) | Core → Satelliten: Syslog-Ziel `{"host", "port"}` — UDP-Syslog-Empfänger des Log-Collectors, sonst Fallback aus den Settings (`syslog.fallback_host`/`_port`); `{"host": "", "port": 0}` = kein Ziel (#417) |
 | `hannah/announce` / `hannah/announceSSML` | Extern → Core: Raum-Announcement (Text/SSML) |
 | `hannah/notification` | Extern → Core: System-Notification (severity: alert/notify/info) |
 | `hannah/message` | Extern → Core: neue Message für die passive Mailbox eines Users (`user_id`, `content`, `source` — #234) |

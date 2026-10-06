@@ -7,6 +7,7 @@ from hannah.settings_manager import (
     DEFAULT_AUTOMATION_WORDS,
     DEFAULT_NLU_SETTINGS,
     DEFAULT_PRESENCE_SETTINGS,
+    DEFAULT_SYSLOG_SETTINGS,
     DEFAULT_VOICE_ENROLLMENT_SETTINGS,
     SettingsManager,
 )
@@ -124,6 +125,21 @@ class TestSeedDefaults:
 
         assert manager.get_settings_dict("presence") == {"grace_period_seconds": 60}
 
+    def test_seeds_syslog_fallback_without_a_host(self, manager):
+        """#417: Ohne gesetzten Fallback-Host senden die Satelliten nichts, wenn der Collector fehlt."""
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("syslog") == DEFAULT_SYSLOG_SETTINGS
+        assert DEFAULT_SYSLOG_SETTINGS["fallback_host"] == ""
+
+    def test_does_not_overwrite_existing_syslog_values(self, manager):
+        cat_id = manager.ensure_category("syslog")
+        manager.create_setting(cat_id, "fallback_host", "10.0.0.7")
+
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("syslog") == {"fallback_host": "10.0.0.7"}
+
     def test_idempotent_on_repeated_calls(self, manager):
         manager.seed_defaults()
         manager.seed_defaults()
@@ -132,10 +148,12 @@ class TestSeedDefaults:
         assert manager.get_settings_dict("automations") == DEFAULT_AUTOMATION_WORDS
         assert manager.get_settings_dict("voice_enrollment") == DEFAULT_VOICE_ENROLLMENT_SETTINGS
         assert manager.get_settings_dict("presence") == DEFAULT_PRESENCE_SETTINGS
+        assert manager.get_settings_dict("syslog") == DEFAULT_SYSLOG_SETTINGS
         # + llm.system_prompt
         assert len(manager.get_settings()) == (
             len(DEFAULT_NLU_SETTINGS) + len(DEFAULT_AUTOMATION_WORDS)
-            + len(DEFAULT_VOICE_ENROLLMENT_SETTINGS) + len(DEFAULT_PRESENCE_SETTINGS) + 1
+            + len(DEFAULT_VOICE_ENROLLMENT_SETTINGS) + len(DEFAULT_PRESENCE_SETTINGS)
+            + len(DEFAULT_SYSLOG_SETTINGS) + 1
         )
 
 
