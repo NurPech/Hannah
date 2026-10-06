@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.97.1 (2026-10-06)
+### Satellite Firmware
+
+* Fixed: a restart that the satellite's own web page triggers (saving the settings, uploading a firmware on the update page, writing the memory with `POST /nvs`) is no longer reported as a restart by the watchdog. The upload counts as `ota`, the other two as `remote`, like the restarts from Hannah. Before, Hannah logged `Grund=watchdog` for them, and an alert on watchdog restarts went off whenever you flashed a satellite by hand (Refs #419)
+
 ## 0.97.0 (2026-10-06)
 ### Satellite Firmware
 

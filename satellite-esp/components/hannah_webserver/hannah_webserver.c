@@ -658,6 +658,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         "</body></html>");
 
     vTaskDelay(pdMS_TO_TICKS(500));
+    /* Bewusster Neustart von außen: ohne Marker meldet die Diagnose (#165) ihn als "watchdog" (#419). */
+    hannah_net_mark_restart_source("remote");
     esp_restart();
     return ESP_OK;
 }
@@ -758,6 +760,8 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "OTA erfolgreich → %s. Neustart.", update_part->label);
     httpd_resp_sendstr(req, "Firmware erfolgreich geflasht. Neustart in 3 Sekunden…");
     vTaskDelay(pdMS_TO_TICKS(3000));
+    /* Wie beim automatischen OTA (hannah_ota): sonst meldet die Diagnose (#165) "watchdog" (#419). */
+    hannah_net_mark_restart_source("ota");
     esp_restart();
     return ESP_OK;
 }
@@ -1115,6 +1119,7 @@ static esp_err_t nvs_post_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "NVS per POST /nvs aktualisiert. Neustart.");
     vTaskDelay(pdMS_TO_TICKS(500));
+    hannah_net_mark_restart_source("remote");  /* sonst "watchdog" in der Diagnose (#419) */
     esp_restart();
     return ESP_OK;
 }

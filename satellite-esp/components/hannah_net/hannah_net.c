@@ -890,9 +890,11 @@ static void *mbedtls_spiram_calloc(size_t n, size_t size)
 
 /* Refs #86 Punkt 2 — hilft nachträglich zu verifizieren, ob ein Reset durch den
  * Netzwerk-Watchdog tatsächlich greift statt an einem Brownout/Panic zu liegen.
- * Nur für "harte" Reset-Gründe relevant — die vier bewussten esp_restart()-Aufrufer
- * (Watchdog/remote/OTA/heap) liefern hier alle denselben Wert (ESP_RST_SW), siehe
- * diag_init() unten für die eigentliche Unterscheidung. */
+ * Nur für "harte" Reset-Gründe relevant — die bewussten esp_restart()-Aufrufer
+ * (Watchdog/remote/OTA/heap, dazu die Neustarts des Webservers: Einstellungen, Upload,
+ * POST /nvs) liefern hier alle denselben Wert (ESP_RST_SW), siehe diag_init() unten für
+ * die eigentliche Unterscheidung. Wer bewusst neu startet, muss vorher
+ * hannah_net_mark_restart_source() rufen — der Reset ohne Marker gilt als Watchdog. */
 static const char *reset_reason_str(esp_reset_reason_t r)
 {
     switch (r) {
