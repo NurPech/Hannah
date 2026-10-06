@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.97.2 (2026-10-06)
+### Satellite Firmware
+
+* Fixed: when it connects to the WiFi, the satellite now takes the access point with the best signal. Until now it took the first one it found for the network name, which could be a far one, and it stayed there: one satellite sat at −70 dBm with a link of 1 to 6 Mbit/s next to two others at −34 and −48 dBm on the near access point, and could not download a firmware update. The choice is made when the satellite connects, that is after a start and after the connection was lost. It does not move to a better access point while it stays connected, that is still open (Refs #420)
+
 ## 0.97.1 (2026-10-06)
 ### Satellite Firmware
 

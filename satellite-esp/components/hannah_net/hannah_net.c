@@ -805,8 +805,17 @@ static void wifi_driver_init(void)
 static void wifi_start_sta(void)
 {
     const hannah_config_t *cfg = hannah_config_get();
+    /* Alle Kanäle scannen und den AP mit dem besten Signal nehmen (#293, #420). Der
+     * ESP-IDF-Standard WIFI_FAST_SCAN nimmt den ersten AP der SSID, den er findet, auch einen
+     * weit entfernten — und ein laufendes Roaming gibt es nicht, der Satellit bliebe dort.
+     * Gilt für jedes spätere esp_wifi_connect() (Wiederverbinden, AP-Recovery) mit, die
+     * Config wird nur hier gesetzt. */
     wifi_config_t wifi_cfg = {
-        .sta = { .threshold.authmode = WIFI_AUTH_WPA2_PSK },
+        .sta = {
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .scan_method        = WIFI_ALL_CHANNEL_SCAN,
+            .sort_method        = WIFI_CONNECT_AP_BY_SIGNAL,
+        },
     };
     strncpy((char *)wifi_cfg.sta.ssid,     cfg->wifi_ssid, sizeof(wifi_cfg.sta.ssid)     - 1);
     strncpy((char *)wifi_cfg.sta.password, cfg->wifi_pass, sizeof(wifi_cfg.sta.password) - 1);
