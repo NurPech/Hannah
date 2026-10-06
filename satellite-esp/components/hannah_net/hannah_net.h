@@ -133,6 +133,15 @@ void hannah_net_set_play_asset_callback(hannah_net_play_asset_cb_t cb);
 typedef void (*hannah_net_notifications_pending_cb_t)(bool pending);
 void hannah_net_set_notifications_pending_callback(hannah_net_notifications_pending_cb_t cb);
 
+/* Syslog-Ziel-Callback: wird aufgerufen wenn hannah/syslog empfangen wird (retained, von Core
+ * gepflegt — #418). Payload {"host": "...", "port": 5514}; host "" und port 0 heißt: kein Ziel
+ * (Core sendet bewusst kein leeres Payload, das löscht die retained Message, was verbundene
+ * Satelliten nie erfahren). host zeigt nur während des Callbacks auf gültigen Speicher.
+ * Cache-and-replay wie notifications_pending, falls der Callback erst nach hannah_net_init()
+ * registriert wird. Ein Payload, das kein JSON ist, wird ignoriert (das letzte Ziel bleibt). */
+typedef void (*hannah_net_syslog_target_cb_t)(const char *host, uint16_t port);
+void hannah_net_set_syslog_target_callback(hannah_net_syslog_target_cb_t cb);
+
 /* Wartet bis SNTP die Systemzeit synchronisiert hat oder timeout_ms abläuft.
  * Gibt true zurück wenn die Zeit erfolgreich synchronisiert wurde.
  * Im AP-Modus oder wenn SNTP noch nicht gestartet wurde: sofort false. */

@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.97.0 (2026-10-06)
+### Satellite Firmware
+
+* Changed: the satellite takes the address for its syslog (the log lines it sends over the network) from Hannah instead of from its settings page. Core announces it through the retained MQTT topic `hannah/syslog` (the syslog receiver of the log collector, or the fallback from Hannah's settings); a new address is used at once without a restart, and "no target" stops the sending. The "Syslog" fields of the settings page are gone, it shows the target Hannah gave. An address saved on the satellite earlier stays in its memory but is no longer used, and until Core has announced a target no syslog goes out. An older firmware keeps sending to the address it has (Refs #418)
+
 ## 0.96.0 (2026-10-06)
 ### Hannah Core
 

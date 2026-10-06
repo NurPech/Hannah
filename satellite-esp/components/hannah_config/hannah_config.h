@@ -26,8 +26,8 @@ typedef struct {
     bool     tls_skip_verify;  /* Skip TLS certificate validation (insecure, for self-signed certs) */
     char     seed[64];         /* one-time pairing token written by WebFlash; cleared after "paired" ACK */
     char     nvs_token[128];   /* shared secret for the inbound POST /nvs endpoint (Refs #36) */
-    char     syslog_host[64];  /* Syslog-UDP-Empfänger, IPv4-Literal (keine DNS-Auflösung im Log-Hot-Path) — leer = deaktiviert */
-    uint16_t syslog_port;      /* Standard 514 */
+    /* Das Syslog-Ziel steht nicht mehr hier: Core verteilt es per MQTT (hannah/syslog, #418).
+     * Die NVS-Schlüssel syslog_host/syslog_port früherer Versionen werden nicht mehr gelesen. */
 } hannah_config_t;
 
 /* Lädt Einstellungen aus NVS — sdkconfig-Werte als Fallback beim Erststart. */

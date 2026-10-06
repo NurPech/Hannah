@@ -21,6 +21,8 @@
 #include "esp_flash.h"
 #include "cJSON.h"
 #include "lwip/sockets.h"
+#include "lwip/netdb.h"
+#include "esp_timer.h"
 #include <fcntl.h>
 
 #include "hannah_config.h"
@@ -69,10 +71,9 @@ static vprintf_like_t   s_orig_vprintf = NULL;
 
 /* ── Syslog (fire-and-forget UDP, RFC 5424) ─────────────────────────────────
  * Läuft additiv zum Ringpuffer, nicht als Ersatz — für den Fall, dass jemand
- * das Gerät nicht rechtzeitig unter /log erwischt (siehe #175). Host ist
- * bewusst nur als IPv4-Literal erlaubt: die Auflösung läuft trotzdem nicht im
- * Hot-Path (s.u.), aber DNS wäre ein weiterer Fehlerkanal ohne echten Nutzen
- * hier.
+ * das Gerät nicht rechtzeitig unter /log erwischt (siehe #175). Das Ziel
+ * kommt von Core per MQTT (hannah/syslog, #418), ein IPv4-Literal oder ein
+ * Hostname; die Auflösung läuft im Syslog-Task, nie im Hot-Path (s.u.).
  *
  * WICHTIG (#177 — Postmortem eines Boot-Loops): eine erste Version rief
  * socket()/fcntl()/sendto() direkt aus log_capture() heraus auf — das läuft
@@ -85,7 +86,8 @@ static vprintf_like_t   s_orig_vprintf = NULL;
  * ein eigener Task mit eigenem, ausreichend bemessenem Stack macht die
  * eigentliche Socket-Arbeit. */
 #define SYSLOG_QUEUE_LEN   16
-#define SYSLOG_TASK_STACK  4096
+#define SYSLOG_TASK_STACK  6144   /* getaddrinfo() beim Wechsel des Ziels braucht mehr als sendto() */
+#define SYSLOG_RETRY_US    (10 * 1000 * 1000)  /* nicht auflösbarer Hostname: alle 10 s neu versuchen */
 
 typedef struct {
     int  len;
@@ -94,12 +96,25 @@ typedef struct {
 
 static QueueHandle_t s_syslog_queue = NULL;
 
+/* Syslog-Ziel (#418): kommt nicht mehr aus der NVS-Config, sondern von Core per MQTT
+ * (hannah/syslog), siehe on_syslog_target(). Host und Port gehören zusammen und werden vom
+ * MQTT-Task geschrieben, vom Syslog-Task gelesen: unter dem Spinlock, kurz kopieren. `gen`
+ * zählt jede Änderung, damit der Syslog-Task nur dann neu auflöst.
+ * s_syslog_active ist das einzige, was der Hot-Path (syslog_enqueue) liest — kein Lock, kein
+ * Syscall. Solange kein Ziel bekannt ist (vor dem ersten MQTT-Connect, oder "kein Ziel"),
+ * werden Zeilen verworfen, nicht gestaut. */
+static portMUX_TYPE  s_syslog_mux = portMUX_INITIALIZER_UNLOCKED;
+static char          s_syslog_host[64];
+static uint16_t      s_syslog_port;
+static uint32_t      s_syslog_gen;
+static volatile bool s_syslog_active = false;
+
 /* Günstiger Check + Kopie in die Queue — läuft im log_capture()-Hot-Path auf
  * beliebigem Task-Stack, muss daher minimal und syscall-frei bleiben. */
 static void syslog_enqueue(const char *line, int len)
 {
     if (!s_syslog_queue) return;
-    if (hannah_config_get()->syslog_host[0] == '\0') return;
+    if (!s_syslog_active) return;
 
     syslog_item_t item;
     item.len = len < (int)sizeof(item.data) ? len : (int)sizeof(item.data) - 1;
@@ -113,36 +128,62 @@ static void syslog_task(void *arg)
 {
     int                sock        = -1;
     struct sockaddr_in addr        = {0};
-    char               host_cached[64] = {0};
-    uint16_t           port_cached     = 0;
+    bool               have_addr   = false;
+    uint32_t           gen_cached  = 0;
+    int64_t            last_try_us = 0;
     syslog_item_t      item;
 
     while (1) {
         if (xQueueReceive(s_syslog_queue, &item, portMAX_DELAY) != pdTRUE) continue;
 
         const hannah_config_t *cfg = hannah_config_get();
-        if (cfg->syslog_host[0] == '\0') continue;
 
-        if (strcmp(cfg->syslog_host, host_cached) != 0 || cfg->syslog_port != port_cached) {
+        char     host[sizeof(s_syslog_host)];
+        uint16_t port;
+        uint32_t gen;
+        portENTER_CRITICAL(&s_syslog_mux);
+        gen = s_syslog_gen;
+        port = s_syslog_port;
+        memcpy(host, s_syslog_host, sizeof(host));
+        portEXIT_CRITICAL(&s_syslog_mux);
+        if (host[0] == '\0' || port == 0) continue;   /* kein Ziel (mehr) */
+
+        /* Neues Ziel — oder ein Hostname, der beim letzten Mal nicht aufzulösen war, nach einer
+         * Pause noch einmal. Die Auflösung läuft hier im eigenen Task, nie im Log-Hot-Path. */
+        int64_t now_us = esp_timer_get_time();
+        if (gen != gen_cached || (!have_addr && now_us - last_try_us > SYSLOG_RETRY_US)) {
+            gen_cached  = gen;
+            last_try_us = now_us;
+            have_addr   = false;
+
             struct sockaddr_in a = {0};
             a.sin_family = AF_INET;
-            a.sin_port   = htons(cfg->syslog_port);
-            if (inet_aton(cfg->syslog_host, &a.sin_addr) == 0) {
-                host_cached[0] = '\0';   /* ungültig — bis zur nächsten Config-Änderung ruhig */
-                continue;
+            a.sin_port   = htons(port);
+            if (inet_aton(host, &a.sin_addr) != 0) {
+                have_addr = true;
+            } else {
+                struct addrinfo hints = {0};
+                hints.ai_family   = AF_INET;
+                hints.ai_socktype = SOCK_DGRAM;
+                struct addrinfo *res = NULL;
+                if (getaddrinfo(host, NULL, &hints, &res) == 0 && res) {
+                    a.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+                    have_addr = true;
+                }
+                if (res) freeaddrinfo(res);
             }
-            addr = a;
-            snprintf(host_cached, sizeof(host_cached), "%s", cfg->syslog_host);
-            port_cached = cfg->syslog_port;
-            if (sock < 0) {
-                sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-                if (sock >= 0) {
-                    int flags = fcntl(sock, F_GETFL, 0);
-                    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+            if (have_addr) {
+                addr = a;
+                if (sock < 0) {
+                    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+                    if (sock >= 0) {
+                        int flags = fcntl(sock, F_GETFL, 0);
+                        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+                    }
                 }
             }
         }
-        if (sock < 0) continue;
+        if (!have_addr || sock < 0) continue;
 
         /* ESP-IDF-Log-Zeilen beginnen mit einem Level-Buchstaben (E/W/I/D/V) */
         int severity;
@@ -162,6 +203,34 @@ static void syslog_task(void *arg)
             sendto(sock, pkt, send_len, 0, (struct sockaddr *)&addr, sizeof(addr));
         }
     }
+}
+
+/* Syslog-Ziel von Core (hannah/syslog, via hannah_net, #418). Läuft im MQTT-Task. Host ""
+ * oder Port 0 heißt: kein Ziel. Dasselbe Ziel noch einmal (retained, nach jedem MQTT-Reconnect)
+ * ändert nichts — kein neuer Auflösungsversuch, keine Logzeile. */
+static void on_syslog_target(const char *host, uint16_t port)
+{
+    char clean[sizeof(s_syslog_host)] = {0};
+    if (host) strncpy(clean, host, sizeof(clean) - 1);
+    if (clean[0] == '\0') port = 0;
+    if (port == 0)        clean[0] = '\0';
+
+    bool changed;
+    portENTER_CRITICAL(&s_syslog_mux);
+    changed = (port != s_syslog_port) || (strcmp(clean, s_syslog_host) != 0);
+    if (changed) {
+        memcpy(s_syslog_host, clean, sizeof(s_syslog_host));
+        s_syslog_port = port;
+        s_syslog_gen++;
+    }
+    portEXIT_CRITICAL(&s_syslog_mux);
+    if (!changed) return;
+
+    s_syslog_active = (port != 0);
+    if (port != 0)
+        ESP_LOGI(TAG, "Syslog-Ziel von Hannah: %s:%u", clean, port);
+    else
+        ESP_LOGI(TAG, "Syslog: kein Ziel (von Hannah).");
 }
 
 static int log_capture(const char *fmt, va_list args)
@@ -345,6 +414,26 @@ static esp_err_t status_handler(httpd_req_t *req)
 static esp_err_t settings_get_handler(httpd_req_t *req)
 {
     const hannah_config_t *cfg = hannah_config_get();
+
+    /* Das Syslog-Ziel von Hannah, nur zur Anzeige. Es kommt aus einer MQTT-Nachricht und landet
+     * in HTML: nur Zeichen eines Hostnamens oder einer IP durchlassen. */
+    char     syslog_host[sizeof(s_syslog_host)];
+    uint16_t syslog_port;
+    portENTER_CRITICAL(&s_syslog_mux);
+    memcpy(syslog_host, s_syslog_host, sizeof(syslog_host));
+    syslog_port = s_syslog_port;
+    portEXIT_CRITICAL(&s_syslog_mux);
+    for (char *c = syslog_host; *c; c++) {
+        bool ok = (*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                  *c == '.' || *c == '-' || *c == '_' || *c == ':';
+        if (!ok) *c = '?';
+    }
+    char syslog_desc[96];
+    if (syslog_port != 0)
+        snprintf(syslog_desc, sizeof(syslog_desc), "%s:%u", syslog_host, syslog_port);
+    else
+        snprintf(syslog_desc, sizeof(syslog_desc), "keins");
+
     char *buf = malloc(6144);
     if (!buf) return ESP_ERR_NO_MEM;
 
@@ -391,8 +480,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         "<label>Token<input type=password name=asset_token placeholder='(unverändert lassen)'></label>"
         "<label>Namespace<input name=asset_namespace value='%s' placeholder='(leer = satellite)'></label>"
         "<h3>Syslog</h3>"
-        "<label>Server (IPv4, leer = deaktiviert)<input name=syslog_host value='%s' placeholder='z.B. 192.168.1.10'></label>"
-        "<label>Port<input name=syslog_port value='%u'></label>"
+        "<p>Ziel von Hannah (Topic hannah/syslog): <b>%s</b></p>"
         "<h3>NVS Update API</h3>"
         "<label>Bearer-Token für POST /nvs<input type=password name=nvs_token "
           "placeholder='(unverändert lassen, leer = deaktiviert)'></label>"
@@ -455,7 +543,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         cfg->ota_channel,
         cfg->asset_url,
         cfg->asset_namespace,
-        cfg->syslog_host, cfg->syslog_port,
+        syslog_desc,
         cfg->tls_skip_verify ? " checked" : "",
         S_FOOT);
 
@@ -505,13 +593,6 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     form_get(body, "ota_channel", new_cfg.ota_channel, sizeof(new_cfg.ota_channel));
     form_get(body, "asset_url",   new_cfg.asset_url,   sizeof(new_cfg.asset_url));
     form_get(body, "asset_namespace", new_cfg.asset_namespace, sizeof(new_cfg.asset_namespace));
-    form_get(body, "syslog_host", new_cfg.syslog_host, sizeof(new_cfg.syslog_host));
-
-    char syslog_port_str[8] = {0};
-    if (form_get(body, "syslog_port", syslog_port_str, sizeof(syslog_port_str))) {
-        int p = atoi(syslog_port_str);
-        if (p > 0 && p < 65536) new_cfg.syslog_port = (uint16_t)p;
-    }
 
     char tok[128] = {0};
     if (form_get(body, "ota_token",   tok, sizeof(tok)) && tok[0])
@@ -1099,16 +1180,15 @@ void hannah_webserver_start(void)
         s_orig_vprintf = esp_log_set_vprintf(log_capture);
     esp_register_shutdown_handler(persist_log_to_flash);
 
+    /* Syslog-Ziel kommt per MQTT von Core (#418); ein schon empfangenes wird nachgereicht. */
+    hannah_net_set_syslog_target_callback(on_syslog_target);
+
     char ip[24];
     hannah_net_get_ip_str(ip, sizeof(ip));
     ESP_LOGI(TAG, "Webserver gestartet — http://%s/",
              hannah_net_is_ap_mode() ? "192.168.4.1" : ip);
 
-    const hannah_config_t *cfg = hannah_config_get();
-    if (cfg->syslog_host[0])
-        ESP_LOGI(TAG, "Syslog aktiv -> %s:%u", cfg->syslog_host, cfg->syslog_port);
-    else
-        ESP_LOGI(TAG, "Syslog deaktiviert (kein Server konfiguriert).");
+    ESP_LOGI(TAG, "Syslog: Ziel kommt von Hannah (hannah/syslog).");
 }
 
 void hannah_webserver_stop(void)

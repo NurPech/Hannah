@@ -105,6 +105,10 @@ static hannah_net_start_listening_cb_t    s_start_listening_cb    = NULL;
 static hannah_net_notifications_pending_cb_t s_notifications_pending_cb    = NULL;
 static bool                                  s_notifications_pending_cache = false;
 static bool                                  s_notifications_pending_cache_valid = false;
+static hannah_net_syslog_target_cb_t         s_syslog_target_cb          = NULL;
+static char                                  s_syslog_target_cache_host[64];
+static uint16_t                              s_syslog_target_cache_port  = 0;
+static bool                                  s_syslog_target_cache_valid = false;
 
 /* ── Hilfsfunktionen ─────────────────────────────────────────────────────── */
 
@@ -405,6 +409,7 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         net_activity_mark();
         esp_ota_mark_app_valid_cancel_rollback();
         esp_mqtt_client_subscribe(s_mqtt_client, "hannah/server", 0);
+        esp_mqtt_client_subscribe(s_mqtt_client, "hannah/syslog", 0);
         char topic[128];
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/mute/set",
                  hannah_config_get()->device_id);
@@ -481,6 +486,30 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                     udp_connect(host, port);
                 }
             }
+        } else if (strcmp(topic, "hannah/syslog") == 0) {
+            /* Retained, Core-gepflegt (#418): {"host": "...", "port": 5514}, "" und 0 = kein Ziel.
+             * Cache-and-replay wie notifications_pending. */
+            cJSON *sroot = cJSON_ParseWithLength(data, dlen);
+            if (!sroot) {
+                ESP_LOGW(TAG, "hannah/syslog: kein gültiges JSON, ignoriert.");
+            } else {
+                char host[sizeof(s_syslog_target_cache_host)] = {0};
+                int  port = 0;
+                const cJSON *jh = cJSON_GetObjectItemCaseSensitive(sroot, "host");
+                const cJSON *jp = cJSON_GetObjectItemCaseSensitive(sroot, "port");
+                if (cJSON_IsString(jh) && jh->valuestring) strncpy(host, jh->valuestring, sizeof(host) - 1);
+                if (cJSON_IsNumber(jp)) port = (int)jp->valuedouble;
+                cJSON_Delete(sroot);
+                if (port < 0 || port > 65535) port = 0;
+                if (s_syslog_target_cb) {
+                    s_syslog_target_cb(host, (uint16_t)port);
+                } else {
+                    memcpy(s_syslog_target_cache_host, host, sizeof(host));
+                    s_syslog_target_cache_port  = (uint16_t)port;
+                    s_syslog_target_cache_valid = true;
+                }
+            }
+
         } else if (strstr(topic, "/mute/set")) {
             bool muted = (data[0] == '1') || (strncmp(data, "true", 4) == 0);
             hannah_net_set_mute(muted);
@@ -1065,6 +1094,15 @@ void hannah_net_set_notifications_pending_callback(hannah_net_notifications_pend
     if (cb && s_notifications_pending_cache_valid) {
         cb(s_notifications_pending_cache);
         s_notifications_pending_cache_valid = false;
+    }
+}
+
+void hannah_net_set_syslog_target_callback(hannah_net_syslog_target_cb_t cb)
+{
+    s_syslog_target_cb = cb;
+    if (cb && s_syslog_target_cache_valid) {
+        cb(s_syslog_target_cache_host, s_syslog_target_cache_port);
+        s_syslog_target_cache_valid = false;
     }
 }
 
