@@ -4,6 +4,27 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.97.3 (2026-10-10)
+### Satellite Firmware
+
+* Fixed: a satellite no longer loses a little of its small internal memory every time its network connection comes back. Each time it got its IP address again (after the WiFi reconnected, which happens several times a day) it opened a new connection to the MQTT broker without closing the old one, and every leftover connection kept a few kilobytes. After about a day the memory ran low and the satellite restarted itself, which Hannah reports as a restart because of "heap". The satellite now keeps one connection and lets it reconnect by itself. It also writes its free internal memory to the log each time it gets its address again, so you can check in the log that the memory stays the same (Refs #421)
+
+### Hannah Proxy
+
+* Changed: the Proxy uses `hannah-grpc-lib` 0.9 (Go) and `hannah-proto-go` 5.4
+
+### Telegram
+
+* Changed: Telegram requires `hannah-grpc-lib` 0.11 (below 0.12.0)
+
+### VoiceID
+
+* Changed: VoiceID requires `hannah-grpc-lib` 0.11 (below 0.12.0)
+
+### AutoDeploy
+
+* Changed: `hannah-grpc-lib` may now be 0.11.x for AutoDeploy, the upper bound stays, so that a broken library cannot keep the updater from working
+
 ## 0.97.2 (2026-10-06)
 ### Satellite Firmware
 

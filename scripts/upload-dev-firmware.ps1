@@ -11,7 +11,7 @@
         HANNAH_UPDATE_BASE_URL    Base URL, e.g. https://hannah-update.example.com
 
 .EXAMPLE
-    # Build + upload to dev channel
+    # Build + upload to the default channel (satellite-esp-beta-rev5)
     .\scripts\upload-dev-firmware.ps1
 
 .EXAMPLE
@@ -21,11 +21,16 @@
 .EXAMPLE
     # Build the Rev5 config instead of the default Rev4
     .\scripts\upload-dev-firmware.ps1 -Rev rev5
+
+.EXAMPLE
+    # Build with another ESP-IDF checkout (default: the version the CI uses)
+    .\scripts\upload-dev-firmware.ps1 -IdfPath C:\esp\v6.0.1\esp-idf
 #>
 
 param(
-    [string]$Channel = "satellite-esp-dev",
+    [string]$Channel = "satellite-esp-beta-rev5",
     [string]$Rev = "rev4",
+    [string]$IdfPath = "C:\esp\v6.1\esp-idf",
     [switch]$NoBuild,
     [switch]$List,
     [string]$Delete = "",
@@ -87,8 +92,12 @@ if ($Delete) {
 
 # Build
 if (-not $NoBuild) {
-    Write-Host "Activating ESP-IDF..." -ForegroundColor Cyan
-    & "$env:UserProfile\esp\v6.0\esp-idf\export.ps1"
+    $IdfExport = Join-Path $IdfPath "export.ps1"
+    if (-not (Test-Path $IdfExport)) {
+        Write-Error "ESP-IDF not found: $IdfExport (pass -IdfPath)."; exit 1
+    }
+    Write-Host "Activating ESP-IDF ($IdfPath)..." -ForegroundColor Cyan
+    & $IdfExport
 
     $Sdkconfig = Join-Path $RepoRoot "satellite-esp\sdkconfig"
     if (Test-Path $Sdkconfig) {

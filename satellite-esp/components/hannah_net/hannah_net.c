@@ -82,6 +82,7 @@ static EventGroupHandle_t        s_net_events  = NULL;
 static TimerHandle_t             s_sntp_retry  = NULL;
 static TimerHandle_t             s_ap_recovery_retry = NULL;
 static esp_mqtt_client_handle_t  s_mqtt_client = NULL;
+static volatile bool             s_mqtt_stopped = false;  /* Client existiert, ist aber gestoppt (AP-Modus) */
 static esp_netif_t              *s_sta_netif   = NULL;
 static esp_netif_t              *s_ap_netif    = NULL;
 
@@ -663,6 +664,25 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
 
 static void mqtt_init(void)
 {
+    /* IP_EVENT_STA_GOT_IP feuert bei jeder (Re-)Assoziation und jedem DHCP-Bind,
+     * nicht einmal pro Boot. Ein Aufruf pro Ereignis legte bisher jedes Mal einen
+     * neuen Client an und ließ den vorherigen verwaist (Task, Puffer, Socket) im
+     * internen DRAM zurück (#421, Ursache der Heap-Watchdog-Neustarts aus #266).
+     * Es gibt deshalb genau einen Client: esp-mqtt verbindet über
+     * reconnect_timeout_ms selbst neu, nur ein gestoppter Client (AP-Modus)
+     * wird wieder gestartet. */
+    if (s_mqtt_client) {
+        if (s_mqtt_stopped) {
+            s_mqtt_stopped = false;
+            esp_mqtt_client_start(s_mqtt_client);
+            ESP_LOGI(TAG, "MQTT-Client wieder gestartet.");
+        } else {
+            ESP_LOGI(TAG, "IP erneut bezogen — MQTT-Client läuft bereits, kein Neuaufbau (intern frei %lu Byte).",
+                     (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        }
+        return;
+    }
+
     const hannah_config_t *cfg = hannah_config_get();
     char broker_uri[128];
     snprintf(broker_uri, sizeof(broker_uri),
@@ -721,9 +741,12 @@ static void ap_exit_setup_mode(void)
 /* Task zum Wechsel in den AP-Modus (nicht direkt aus Event-Handler aufrufen). */
 static void ap_switch_task(void *arg)
 {
-    if (s_mqtt_client) {
+    if (s_mqtt_client && !s_mqtt_stopped) {
+        /* Nur stoppen und das Handle behalten (#421): mqtt_init() startet
+         * denselben Client nach dem AP-Modus wieder, statt einen neuen
+         * anzulegen und den gestoppten zu verwaisen. */
         esp_mqtt_client_stop(s_mqtt_client);
-        s_mqtt_client = NULL;
+        s_mqtt_stopped = true;
     }
     if (s_udp_sock >= 0) { close(s_udp_sock); s_udp_sock = -1; }
     s_proxy_ready = false;
