@@ -528,3 +528,35 @@ class TestPermissions:
 
         with pytest.raises(SatellitePermissionError):
             mgr.set_satellite_smalltalk_followup("wz-esp", True, requestor_id=other_id)
+
+
+class TestSatelliteLabel:
+    """#427 — Texte, die der Core selbst erzeugt (Logzeile zum Neustart, die Grafana auswertet),
+    sollen den Anzeigenamen nennen, und wenn keiner vergeben ist, die ID statt eines leeren Namens."""
+
+    def test_returns_display_name(self, manager):
+        manager.upsert_satellite("9070690de440")
+        manager.set_satellite_display_name("9070690de440", "Test02")
+
+        assert manager.satellite_label("9070690de440") == "Test02"
+
+    def test_falls_back_to_id_without_display_name(self, manager):
+        manager.upsert_satellite("9070690de440")
+
+        assert manager.satellite_label("9070690de440") == "9070690de440"
+
+    def test_falls_back_to_id_for_empty_display_name(self, manager):
+        manager.upsert_satellite("9070690de440")
+        manager.set_satellite_display_name("9070690de440", "")
+
+        assert manager.satellite_label("9070690de440") == "9070690de440"
+
+    def test_falls_back_to_id_for_unknown_satellite(self, manager):
+        assert manager.satellite_label("unbekannt") == "unbekannt"
+
+    def test_resolve_satellite_name_still_returns_none_without_name(self, manager):
+        """Das gRPC-Feld display_name bleibt bei fehlendem Namen leer — Clients lesen das
+        als "nicht gesetzt" (kein harter Bruch)."""
+        manager.upsert_satellite("9070690de440")
+
+        assert manager.resolve_satellite_name("9070690de440") is None

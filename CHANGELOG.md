@@ -4,6 +4,23 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.98.0 (2026-10-13)
+### Hannah Core
+
+* Added: the log lines about a satellite restart and about an available core dump now end with `, Name=<display name>`, so an alert can show "Test02" instead of only the MAC address. A satellite without a display name shows its ID there, never an empty name. The older part of the line is unchanged, existing log filters keep working (Refs #427)
+* Fixed: a spoken command is no longer answered as small talk when no small talk is going on. After a small talk answer, Hannah kept an internal "small talk is active" flag. It was meant to end after two minutes of silence, but the next request on the same satellite (for example a question about a room's lights) brought the old flag back to life, even hours later. The following command then went to the language model instead of the command recognition, so "Balkon Licht an" got a friendly chat reply and the light stayed off. The same applied to the remembered room, device and last action. Once a conversation has timed out, its state is now fully reset (Refs #423)
+* Fixed: a spoken command is no longer spoiled by extra text the microphone picked up behind it, for example a series or a conversation in the background. Hannah now looks at the sentences one by one: the first command counts, and every further sentence counts only if it is a command or a follow-up itself ("And in the bathroom too."). Before, a question word in the background text could turn "Balkon Licht an" into a status question, and leftover words into "I don't know a device with that name". Texts that do not start with a command, such as small talk or questions, are left as they are (Refs #424)
+* Fixed: a follow-up like "Und im Bad auch" is no longer answered with "I don't know a device with that name". Words such as "auch", "noch" or "ebenfalls" were taken for a device name (Refs #426)
+* Changed: updated the Docker base image (Python 3.14-slim) to the latest digest
+
+### Telegram
+
+* Changed: updated the Docker base image (Python 3.14-slim) to the latest digest
+
+### VoiceID
+
+* Changed: updated the Docker base image (Python 3.14-slim) to the latest digest
+
 ## 0.97.3 (2026-10-10)
 ### Satellite Firmware
 

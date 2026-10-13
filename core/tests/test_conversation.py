@@ -171,6 +171,67 @@ class TestFillIntentSatelliteRoom:
         assert intent.room_id == "küche"
 
 
+class TestExpiredContextIsNotRevived:
+    """#423 — ein abgelaufener Kontext wurde vom nächsten schreibenden Aufruf samt altem
+    Zustand wiederbelebt: smalltalk_active von gestern schaltete einen Sprachbefehl in den
+    LLM-Classifier, obwohl der Smalltalk-Modus längst vorbei war."""
+
+    def _expired_smalltalk_ctx(self):
+        ctx = ConversationContext(ttl=0.05)
+        ctx.set_smalltalk_active("sat01", True)
+        assert ctx.is_smalltalk_active("sat01")
+        time.sleep(0.1)
+        assert not ctx.is_smalltalk_active("sat01")
+        return ctx
+
+    def test_update_from_intent_does_not_revive_smalltalk(self):
+        ctx = self._expired_smalltalk_ctx()
+        ctx.update_from_intent("sat01", Intent(name="Query", room="Balkon", room_id="balkon"))
+
+        assert not ctx.is_smalltalk_active("sat01")
+
+    def test_set_clarification_does_not_revive_smalltalk(self):
+        ctx = self._expired_smalltalk_ctx()
+        ctx.set_clarification("sat01", None, [], kind="message_playback")
+
+        assert not ctx.is_smalltalk_active("sat01")
+
+    def test_add_llm_exchange_does_not_revive_smalltalk(self):
+        ctx = self._expired_smalltalk_ctx()
+        ctx.add_llm_exchange("sat01", "hallo", "Hi.")
+
+        assert not ctx.is_smalltalk_active("sat01")
+
+    def test_record_tts_does_not_revive_smalltalk(self):
+        ctx = self._expired_smalltalk_ctx()
+        ctx.record_tts("sat01", "Es ist eine Nachricht für dich da.")
+
+        assert not ctx.is_smalltalk_active("sat01")
+
+    def test_does_not_revive_old_room_device_or_action(self):
+        ctx = ConversationContext(ttl=0.05)
+        ctx.update_from_intent("sat01", Intent(
+            name="TurnOn", room="Küche", room_id="küche",
+            device="Computer", device_id="javascript.0.virtualDevice.Computer",
+        ))
+        time.sleep(0.1)
+        ctx.update_from_intent("sat01", Intent(name="Query", category_filter="Licht"))
+
+        intent = Intent(name="Unknown")
+        ctx.fill_intent("sat01", intent)
+
+        assert intent.room_id is None
+        assert intent.device_id is None
+        assert not ctx.inherit_action("sat01", Intent(name="Unknown", room_id="bad"))
+
+    def test_smalltalk_flag_set_within_ttl_is_kept(self):
+        ctx = ConversationContext(ttl=120.0)
+        ctx.set_smalltalk_active("sat01", True)
+        ctx.update_from_intent("sat01", Intent(name="Query", room="Balkon", room_id="balkon"))
+
+        assert ctx.is_smalltalk_active("sat01")
+
+
 class TestRecordTts:
     """#253 — proaktive Announcements/Notifications laufen nie über add_llm_exchange()
     (kein User-Turn davor). record_tts() merkt sie trotzdem als Assistant-Turn in der

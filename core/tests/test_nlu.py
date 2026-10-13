@@ -740,3 +740,99 @@ class TestRoomCategoryCompoundWithLinkingElement:
         assert intent.category_filter == "light"
         assert intent.device_candidates == []
         assert intent.device_id is None
+
+
+@pytest.fixture
+def nlu_home():
+    rooms = {"balkon": "Balkon", "bad": "Bad", "schlafzimmer": "Schlafzimmer", "kueche": "Küche"}
+    devices = {
+        "balkon": {"decke": _make_device("decke", "balkon", category="light")},
+        "bad": {"licht": _make_device("licht", "bad", category="light")},
+        "schlafzimmer": {"licht": _make_device("licht", "schlafzimmer", category="light")},
+        "kueche": {"licht": _make_device("licht", "kueche", category="light")},
+    }
+    cfg = {
+        "turn_on_words": ["an"],
+        "turn_off_words": ["aus"],
+        "query_words": ["ist", "sind", "welche", "wie", "was"],
+    }
+    return NLU(cfg=cfg, rooms=rooms, devices=devices)
+
+
+class TestFillerWordIsNoDeviceName:
+    """#426 — "Und im Bad auch." wurde zu DeviceNotFound: "auch" blieb als einziges Restwort
+    übrig und wurde als erfolgloser Gerätename-Versuch gewertet."""
+
+    @pytest.mark.parametrize("text", [
+        "Und im Bad auch.",
+        "Und im Bad noch.",
+        "Und im Bad ebenfalls.",
+        "Und im Bad außerdem.",
+    ])
+    def test_filler_word_is_not_a_device_name(self, nlu_home, text):
+        intent = nlu_home.parse(text)
+
+        assert intent.name != "DeviceNotFound"
+        assert intent.room_id == "bad"
+
+    def test_a_real_unknown_device_name_is_still_rejected(self, nlu_home):
+        intent = nlu_home.parse("Schalte im Bad den Föhn an")
+
+        assert intent.name == "DeviceNotFound"
+
+
+class TestSentenceFocus:
+    """#424 — Ein klarer Steuerbefehl am Satzanfang wurde durch angehängten Text verfälscht
+    (z.B. vom STT mitgehörter Hintergrund): ein Fragewort irgendwo machte daraus eine Query,
+    Restwörter einen DeviceNotFound. Folgesätze zählen nur noch, wenn sie selbst wie ein
+    Befehl oder eine Folge-Anweisung aussehen."""
+
+    @pytest.mark.parametrize("text, room", [
+        ("Balkon Licht an. Ist die Jugend und natürlich auch den Briefkasten, der ich ab und an, "
+         "wenn ich mir sagen kann, wenn irgendwas Wichtiges ist, per auf jeden Fall an diesem Tag.",
+         "Balkon"),
+        ("Balkon an. Gegen Christoph Wagmann vielleicht eingetrichtert, was ich hier sagen soll.",
+         "Balkon"),
+        ("Schlafzimmer an. Was würde ich sogar sagen? Ne andere.", "Schlafzimmer"),
+    ])
+    def test_trailing_background_text_does_not_change_the_command(self, nlu_home, text, room):
+        intent = nlu_home.parse(text)
+
+        assert intent.name == "TurnOn"
+        assert intent.room == room
+
+    def test_dropped_sentences_are_not_part_of_raw_text(self, nlu_home):
+        intent = nlu_home.parse("Balkon an. Gegen Christoph Wagmann vielleicht eingetrichtert.")
+
+        assert intent.raw_text == "Balkon an."
+
+    def test_follow_up_sentence_is_kept(self, nlu_home):
+        text = "Mach das Licht an. Und im Bad auch."
+        intent = nlu_home.parse(text)
+
+        assert intent.name == "TurnOn"
+        assert intent.room == "Bad"
+        assert intent.raw_text == text
+
+    def test_genuine_question_is_still_a_query(self, nlu_home):
+        intent = nlu_home.parse("Ist das Licht in der Küche an?")
+
+        assert intent.name == "Query"
+
+    def test_question_first_leaves_the_text_untouched(self, nlu_home):
+        text = "Ist das Licht in der Küche an? Mach es aus."
+        intent = nlu_home.parse(text)
+
+        assert intent.raw_text == text
+
+    def test_small_talk_with_several_sentences_is_untouched(self, nlu_home):
+        text = "Ich war im Bad. Es war kalt."
+        intent = nlu_home.parse(text)
+
+        assert intent.raw_text == text
+
+    def test_single_sentence_is_untouched(self, nlu_home):
+        intent = nlu_home.parse("Küchenlicht an.")
+
+        assert intent.name == "TurnOn"
+        assert intent.raw_text == "Küchenlicht an."

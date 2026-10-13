@@ -137,6 +137,12 @@ class SatelliteManager:
         sat = Satellite.get(self._db(), device_id=device_id)
         return sat.display_name if sat and sat.display_name else None
 
+    def satellite_label(self, device_id: str) -> str:
+        """Lesbarer Name für Texte, die der Core selbst erzeugt (Logzeilen, Meldungen): der
+        Anzeigename, sonst die ID — nie leer (#427). resolve_satellite_name() bleibt für die
+        gRPC-Felder bei None, dort heißt leer "nicht gesetzt"."""
+        return self.resolve_satellite_name(device_id) or device_id
+
     def upsert_satellite(self, device_id: str) -> None:
         db = self._db()
         now = _now_sql()

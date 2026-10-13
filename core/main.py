@@ -2571,13 +2571,21 @@ def main():
             # echten neuen Report loggen, sonst feuert der Alert bei jedem
             # Core-Neustart einmal pro Satellit (#278).
             if satellite_manager.record_restart_report(device, restart_reason, restart_count):
-                log.warning(f"Satellit neu gestartet: {device}, Grund={restart_reason}, Zähler={restart_count}")
+                # Name steht bewusst hinten: die Grafana-Regel liest die Zeile per regexp, die
+                # alte Fassung (device, Grund, Zähler) matcht weiter (#427).
+                log.warning(
+                    f"Satellit neu gestartet: {device}, Grund={restart_reason}, Zähler={restart_count}, "
+                    f"Name={satellite_manager.satellite_label(device)}"
+                )
         grpc_servicer.publish_event(make_firmware_event(device, version))
         grpc_servicer.agent_firmware_event(device, version)
 
     def _on_coredump_pending(device: str, pending: bool):
         if satellite_manager.record_coredump_pending(device, pending):
-            log.warning(f"Coredump verfügbar: {device}, abrufbar via GET /debug/coredump auf dem Satelliten")
+            log.warning(
+                f"Coredump verfügbar: {device}, abrufbar via GET /debug/coredump auf dem Satelliten, "
+                f"Name={satellite_manager.satellite_label(device)}"
+            )
 
     _ota_pending: set[str] = set()
 

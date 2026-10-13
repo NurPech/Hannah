@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _STRIP_CHARS = re.compile(r"[.,!?;:()\[\]]")
+# Satzgrenze: Satzzeichen gefolgt von Leerraum ("7.30 Uhr" bleibt dadurch ein Stück).
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 _HOUR_WORDS: dict[str, int] = {
     "ein": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fuenf": 5,
@@ -58,12 +60,18 @@ _DEVICE_NAME_STOPWORDS = {
     # ohne diesen Ausschluss würde z.B. "im Wohnzimmer alles ausschalten" (#301) fälschlich
     # als nicht gefundener Gerätename gewertet, statt als beabsichtigtes Raum-Bulk.
     "alles", "alle",
+    # Füllwörter von Folgesätzen ("Und im Bad auch.") — blieben sonst als einziges Restwort
+    # übrig und wurden als nicht gefundener Gerätename gewertet (#426).
+    "auch", "noch", "ebenfalls", "ausserdem",
 }
 # Intents, die ein Gerät oder eine Gerätegruppe schalten — nur für diese ist ein
 # unbekannter Gerätename beim Raum-Fallback ein "nicht gefunden" (#411).
 _DEVICE_COMMAND_INTENTS = frozenset({
     "TurnOn", "TurnOff", "SetLevel", "SetColor", "SetTemperature", "SetMode", "SetFanSpeed",
 })
+# Intents, die ein Folgesatz mit Raum/Gerät/Kategorie haben darf, ohne ein vollständiger
+# Befehl zu sein: "Und im Bad." (Aktion kommt aus dem Kontext), "Und ist das Licht an?".
+_FOLLOW_UP_INTENTS = frozenset({"Unknown", "Query", "DeviceNotFound"})
 # Fugenelemente zwischen Raumname und Kategoriewort in Komposita ("Küche-n-licht"); "" = ohne.
 _COMPOUND_LINKING_ELEMENTS = ("", "n", "s", "en", "es", "e")
 _DEVICE_FUZZY_CUTOFF = 0.75
@@ -404,9 +412,44 @@ class NLU:
                 result.append(word)
         return " ".join(result)
 
+    def _focus_on_command(self, text: str) -> str:
+        """Behält bei einem Steuerbefehl am Satzanfang nur die Sätze, die selbst nach Befehl
+        aussehen (#424).
+
+        Der Satellit nimmt bis zur VAD-Pause auf, und das STT transkribiert mit, was im
+        Hintergrund läuft (Serie, Gespräch). Der Text ist dann "Balkon Licht an. Ist die
+        Jugend und natürlich …" — das Fragewort im Hintergrundsatz machte daraus eine Query,
+        Restwörter einen DeviceNotFound. Ein Folgesatz zählt deshalb nur, wenn er selbst
+        einen Steuerbefehl oder eine Folge-Anweisung ("Und im Bad auch.") mit Raum, Gerät
+        oder Kategorie ergibt. Beginnt der Text nicht mit einem solchen Befehl, bleibt er
+        unverändert — Smalltalk und Fragen mit mehreren Sätzen sollen nicht beschnitten
+        werden."""
+        sentences = [s for s in _SENTENCE_SPLIT.split(text.strip()) if s]
+        if len(sentences) < 2:
+            return text
+        first = self.parse(sentences[0])
+        if first.name not in _DEVICE_COMMAND_INTENTS or not self._has_target(first):
+            return text
+        kept = [sentences[0]]
+        dropped = []
+        for sentence in sentences[1:]:
+            follow = self.parse(sentence)
+            if follow.name in _DEVICE_COMMAND_INTENTS | _FOLLOW_UP_INTENTS and self._has_target(follow):
+                kept.append(sentence)
+            else:
+                dropped.append(sentence)
+        if not dropped:
+            return text
+        log.info(f"NLU: Folgesätze ohne Befehl ignoriert: {' '.join(dropped)!r}", extra=TRANSCRIPT)
+        return " ".join(kept)
+
+    @staticmethod
+    def _has_target(intent: Intent) -> bool:
+        return bool(intent.room_id or intent.device_id or intent.device_key or intent.category_filter)
+
     def parse(self, text: str) -> Intent:
-        raw = text
-        text = self._split_compounds(text)
+        raw = self._focus_on_command(text)
+        text = self._split_compounds(raw)
         normalized = _STRIP_CHARS.sub(" ", text.lower())
         tokens = [t for t in normalized.split() if t not in _FILLER]
         joined = " ".join(tokens)

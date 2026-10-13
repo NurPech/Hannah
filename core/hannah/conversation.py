@@ -76,6 +76,13 @@ class ConversationContext:
         if ctx is None:
             ctx = _SourceCtx(history=deque(maxlen=self._max_messages))
             self._ctxs[source] = ctx
+        elif not self._valid(ctx):
+            # Abgelaufen: nicht samt altem Zustand wiederbeleben (#423) — jeder schreibende
+            # Aufruf erneuert ts und hätte sonst smalltalk_active, Raum, Gerät und letzte
+            # Aktion von vor Stunden wieder gültig gemacht. Nur die History bleibt stehen,
+            # die räumt _expiry_loop über on_conversation_end ab.
+            ctx = _SourceCtx(history=ctx.history)
+            self._ctxs[source] = ctx
         return ctx
 
     # ------------------------------------------------------------------
