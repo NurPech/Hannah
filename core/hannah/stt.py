@@ -90,9 +90,12 @@ class _AzureSTT:
         self._language = cfg.get("language", "de-DE")
         if "-" not in self._language:
             self._language = self._language + "-" + self._language.upper()
+        # "interactive" statt "conversation": der Modus für Sprachbefehle endet nach der
+        # ersten Äußerung. "conversation" transkribiert alles Hörbare bis zum Ende der
+        # Aufnahme und schrieb so Hintergrundgespräche hinter den Befehl (#432).
         self._url = (
             f"https://{self._region}.stt.speech.microsoft.com"
-            "/speech/recognition/conversation/cognitiveservices/v1"
+            "/speech/recognition/interactive/cognitiveservices/v1"
         )
         log.info(f"Azure STT konfiguriert: {self._region} ({self._language})")
 

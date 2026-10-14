@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.98.1 (2026-10-14)
+### Hannah Core
+
+* Fixed: a spoken command is no longer followed by text from the background. Azure speech recognition was asked in its "conversation" mode, which writes down everything it hears until the end of the recording. A satellite that does not detect a pause then streams for the full 10 seconds, and quiet talk in the background ended up behind the command ("Licht an. Gut 25 km von Crivitz entfernt liegt der."). Azure is now asked in its "interactive" mode for voice commands, which stops after the first utterance. A second sentence spoken after a longer pause is not recognized anymore (Refs #432)
+
 ## 0.98.0 (2026-10-13)
 ### Hannah Core
 
