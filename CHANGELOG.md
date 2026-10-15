@@ -5,6 +5,11 @@
 -->
 
 
+## 0.98.2 (2026-10-15)
+### Hannah Core
+
+* Fixed: a recording without any speech (for example after a false wake-up) no longer makes Hannah wait about 30 seconds for an answer. Since 0.98.1, Azure reports "no speech at the start" for such a recording, and Hannah then asked the second speech recognition, which was not reachable and only gave up after its 30 second timeout. A recording without speech is now treated as empty right away (Refs #433)
+
 ## 0.98.1 (2026-10-14)
 ### Hannah Core
 

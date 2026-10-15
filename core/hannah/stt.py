@@ -111,6 +111,12 @@ class _AzureSTT:
         resp.raise_for_status()
         data   = resp.json()
         status = data.get("RecognitionStatus", "")
+        if status == "InitialSilenceTimeout":
+            # Der Modus "interactive" meldet das bei Aufnahmen ohne Sprache am Anfang (z.B.
+            # Fehlauslösung). Kein Fehler: ein Fallback auf Remote/Lokal würde bis zu 30 s auf den
+            # Remote-Timeout warten und auf Stille nur Text erfinden (#433).
+            log.debug("STT (azure): keine Sprache erkannt (InitialSilenceTimeout)", extra=TRANSCRIPT)
+            return "", 1.0
         if status != "Success":
             raise ValueError(f"Azure STT: RecognitionStatus={status}")
         text = data.get("DisplayText", "").strip()
