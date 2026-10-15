@@ -5,6 +5,11 @@
 -->
 
 
+## 0.98.4 (2026-10-15)
+### Hannah Core
+
+* Fixed: Hannah no longer reads the word "speak" aloud at the start of an answer. The small language model sometimes writes the tool name "speak" on its own first line and the actual answer below it, instead of calling the tool. Only the form `speak("...")` was handled so far, the other form was read out together with the answer (Refs #435)
+
 ## 0.98.3 (2026-10-15)
 ### Hannah Core
 

@@ -30,15 +30,20 @@ log = logging.getLogger(__name__)
 _MAX_ITERATIONS = 5
 
 # Manche Modelle (gemma4 ohne Denken) schreiben den speak-Aufruf als Text, z.B. speak("Hallo.")
-# oder speak(text="Hallo."), statt das Tool aufzurufen.
+# oder speak(text="Hallo."), statt das Tool aufzurufen. Oder "speak" allein auf der ersten Zeile
+# und die Antwort darunter (#435).
 _TEXT_SPEAK = re.compile(r"""^\s*speak\s*\(\s*(?:text\s*=\s*)?(["'])(.*)\1\s*\)\s*$""", re.DOTALL)
+_TEXT_SPEAK_LINE = re.compile(r"^\s*speak[ \t]*\r?\n(.+)$", re.DOTALL)
 
 
 def _unwrap_text_speak(content: str) -> str:
     """Gibt den Text aus einem als Text geschriebenen speak-Aufruf zurück. Ohne das würde Hannah
-    den Aufruf samt Klammern und Anführungszeichen vorlesen."""
+    den Aufruf samt Klammern und Anführungszeichen (oder das Wort "speak") vorlesen."""
     match = _TEXT_SPEAK.match(content or "")
-    return match.group(2).strip() if match else content
+    if match:
+        return match.group(2).strip()
+    match = _TEXT_SPEAK_LINE.match(content or "")
+    return match.group(1).strip() if match else content
 
 
 # Letzte Nachricht des Classifier-Aufrufs (#407). Dieselben Kriterien wie CLASSIFY_PROMPT, nur

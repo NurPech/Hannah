@@ -599,6 +599,10 @@ class TestSpeakWrittenAsText:
         ('  speak( text = "Mit Leerzeichen." )\n', "Mit Leerzeichen."),
         ('speak("Sie sagte: \\"Hallo\\".")', 'Sie sagte: \\"Hallo\\".'),
         ('speak("Zwei Sätze. Der zweite auch.")', "Zwei Sätze. Der zweite auch."),
+        # #435 — "speak" allein auf der ersten Zeile, die Antwort darunter
+        ("speak\nIst es das Haus, das uns etwas sagen will?", "Ist es das Haus, das uns etwas sagen will?"),
+        ("  speak \r\nMit Leerzeichen und Windows-Zeilenende.", "Mit Leerzeichen und Windows-Zeilenende."),
+        ("speak\nErster Satz.\nZweite Zeile.", "Erster Satz.\nZweite Zeile."),
     ])
     def test_the_text_is_taken_out_of_the_call(self, content, expected):
         llm = MagicMock()
@@ -610,6 +614,7 @@ class TestSpeakWrittenAsText:
         "Ich kann speak nicht benutzen.",
         'Er sagte speak("so") und ging.',
         "speak ist ein Tool.",
+        "speak\n",
         "",
     ])
     def test_other_answers_stay_as_they_are(self, content):
