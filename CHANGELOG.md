@@ -5,6 +5,11 @@
 -->
 
 
+## 0.98.3 (2026-10-15)
+### Hannah Core
+
+* Fixed: while a small talk is going on, a clear device command is no longer taken for small talk. In that mode the language model decides first whether a sentence is small talk or a command, and the small model sometimes called "Balkon an." small talk. Hannah then answered with a made-up excuse instead of switching the light. If the command recognition finds a real device command in the sentence (an action together with a room, device or category), it now wins over that decision. Sentences without a device, such as a misheard "Hey Tycoon an.", still go to the language model (Refs #434)
+
 ## 0.98.2 (2026-10-15)
 ### Hannah Core
 

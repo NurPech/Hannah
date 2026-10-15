@@ -1035,6 +1035,11 @@ def main():
             sp = prepare_prompt(llm_system_prompt, iobroker) + _speaker_context(speaker_user_id)
             with latency.stage("llm"):
                 verdict = tool_agent.classify(text, system_prompt=sp, history=history)
+            if verdict == "SMALLTALK" and nlu.is_device_command(text):
+                # Ein kleines Modell hält auch "Balkon an." für Smalltalk (#434). Erkennt die NLU
+                # einen echten Gerätebefehl, gewinnt sie.
+                log.info(f"[{_source}] Classifier → SMALLTALK, aber die NLU erkennt einen Gerätebefehl — weiter mit NLU")
+                verdict = "COMMAND"
             if verdict == "SMALLTALK":
                 log.debug(f"[{_source}] Classifier → SMALLTALK (Modus aktiv)")
                 with latency.stage("llm"):

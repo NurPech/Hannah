@@ -447,6 +447,14 @@ class NLU:
     def _has_target(intent: Intent) -> bool:
         return bool(intent.room_id or intent.device_id or intent.device_key or intent.category_filter)
 
+    def is_device_command(self, text: str) -> bool:
+        """True, wenn `text` ein echter Gerätebefehl ist: ein schaltender Intent mit Raum,
+        Gerät oder Kategorie. Für den Smalltalk-Modus (#434): Dort geht jeder Text zuerst an
+        den LLM-Classifier, und ein SMALLTALK-Urteil darf einen so eindeutigen Befehl nicht
+        mehr abfangen. "Hey Tycoon an." hat keinen Gerätebezug und zählt nicht."""
+        intent = self.parse(text)
+        return intent.name in _DEVICE_COMMAND_INTENTS and self._has_target(intent)
+
     def parse(self, text: str) -> Intent:
         raw = self._focus_on_command(text)
         text = self._split_compounds(raw)

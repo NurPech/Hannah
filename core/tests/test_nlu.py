@@ -836,3 +836,23 @@ class TestSentenceFocus:
 
         assert intent.name == "TurnOn"
         assert intent.raw_text == "Küchenlicht an."
+
+
+class TestIsDeviceCommand:
+    """#434 — im Smalltalk-Modus darf ein SMALLTALK-Urteil des LLM-Classifiers nur dann von der
+    NLU übersteuert werden, wenn sie einen echten Gerätebefehl erkennt."""
+
+    def test_room_with_action_is_a_device_command(self, nlu_home):
+        assert nlu_home.is_device_command("Balkon an.")
+
+    def test_room_and_category_is_a_device_command(self, nlu_home):
+        assert nlu_home.is_device_command("Balkon Licht an.")
+
+    def test_misheard_wake_word_without_device_is_not(self, nlu_home):
+        assert not nlu_home.is_device_command("Hey Tycoon an.")
+
+    def test_small_talk_is_not(self, nlu_home):
+        assert not nlu_home.is_device_command("Wie war dein Tag?")
+
+    def test_status_question_is_not(self, nlu_home):
+        assert not nlu_home.is_device_command("Ist das Licht im Bad an?")
