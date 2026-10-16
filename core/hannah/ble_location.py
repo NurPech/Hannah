@@ -57,6 +57,7 @@ class BleLocationEngine:
         self._last_sat: dict[str, Optional[str]] = {}
 
         self._on_change: Optional[Callable[["BleTag", Optional[str], Optional[str], int], None]] = None
+        self._on_sighting: Optional[Callable[["BleTag"], None]] = None
 
         if self._tags:
             self._start_stale_timer()
@@ -90,14 +91,26 @@ class BleLocationEngine:
         """fn(tag, room_or_None, satellite_or_None, rssi)"""
         self._on_change = fn
 
+    def set_sighting_handler(self, fn: Callable[["BleTag"], None]):
+        """fn(tag) — für jeden eingehenden Report eines bekannten Tags, nicht nur bei einem
+        Standortwechsel (dafür gibt es set_location_change_handler). Die Presence-Fusion
+        braucht jede Sichtung, um "zuletzt gesehen" aktuell zu halten."""
+        self._on_sighting = fn
+
     def on_report(self, satellite: str, mac: str, rssi: int):
         """Wird für jedes eingehende BLE-RSSI-Report aufgerufen."""
         mac = mac.lower()
-        if mac not in self._tags:
+        tag = self._tags.get(mac)
+        if tag is None:
             return
         with self._lock:
             self._reports.setdefault(mac, {})[satellite] = _Report(rssi, time.monotonic())
             self._evaluate(mac)
+        if self._on_sighting:
+            try:
+                self._on_sighting(tag)
+            except Exception as e:
+                log.error(f"BLE sighting-callback fehlgeschlagen: {e}")
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

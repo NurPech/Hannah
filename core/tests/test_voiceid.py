@@ -53,6 +53,16 @@ class TestVoiceIDClientIdentify:
         with patch("hannah.voiceid.requests.post", return_value=resp):
             assert self._client().identify(b"\x00\x00") == ""
 
+    def test_non_16k_audio_is_resampled_before_identify(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"user_id": "1", "confidence": 0.9}
+        with patch("hannah.voiceid.requests.post", return_value=resp) as post:
+            self._client().identify(bytes(48000), sample_rate=24000)
+
+        sent = post.call_args.kwargs
+        assert abs(len(sent["data"]) / 2 - 16000) < 200
+        assert sent["headers"]["X-Sample-Rate"] == "16000"
+
     def test_timeout_treated_as_anonymous(self):
         with patch("hannah.voiceid.requests.post", side_effect=requests.exceptions.Timeout):
             assert self._client().identify(b"\x00\x00") == ""
@@ -79,3 +89,26 @@ class TestVoiceIDClientEnroll:
             ok, msg = self._client().enroll("1", b"\x00\x00")
         assert ok is False
         assert msg
+
+    def test_non_16k_sample_is_resampled_before_sending(self):
+        """#439: der Dienst liest das PCM immer als 16 kHz — Azure-TTS (24 kHz) muss vorher
+        umgerechnet werden, sonst entsteht ein Profil einer verlangsamten Stimme."""
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"ok": True, "message": "enrolled"}
+        pcm_24k = bytes(48000)  # 1 s Stille bei 24 kHz
+        with patch("hannah.voiceid.requests.post", return_value=resp) as post:
+            self._client().enroll("hannah_self_azure", pcm_24k, sample_rate=24000)
+
+        sent = post.call_args.kwargs
+        assert abs(len(sent["data"]) / 2 - 16000) < 200
+        assert sent["headers"]["X-Sample-Rate"] == "16000"
+        assert sent["headers"]["X-User-ID"] == "hannah_self_azure"
+
+    def test_16k_sample_is_sent_unchanged(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"ok": True, "message": "enrolled"}
+        pcm = bytes(3200)
+        with patch("hannah.voiceid.requests.post", return_value=resp) as post:
+            self._client().enroll("1", pcm)
+
+        assert post.call_args.kwargs["data"] == pcm

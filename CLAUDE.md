@@ -433,7 +433,7 @@ Aktueller Versionsstand und Änderungshistorie: siehe `CHANGELOG.md`. Offene Bug
 - Immer mit `/loop` + `ScheduleWakeup` beobachten — **nicht** mit `Monitor`.
 - `ScheduleWakeup` funktioniert nur innerhalb eines laufenden `/loop`-Kontexts.
 - Intervall: 270s (unter 300s Cache-TTL); bei `test:esp32` eher 300s (Build dauert 5–8 min).
-- Nach Pipeline-Ende: MR-Status prüfen; bei `merged` → Release auslösen.
+- Nach Pipeline-Ende: MR-Status prüfen; bei `merged` → Post-MR-Aufräumen (Git-Workflow Punkt 14), **kein** Release. Ein Release gibt es nur auf Zuruf. Kleine Fixes sammeln sich im Milestone `next`; Claude weist nach dem Merge kurz darauf hin, was dort wartet. Ausnahmen, bei denen Claude von sich aus ein Release vorschlägt: größere in sich geschlossene Themen und Notfall-Fixes (etwas ist im Feld kaputt, auch eine Regression durch eine gerade ausgelieferte Änderung).
 - Auto-Merge nach MR-Erstellung sofort aktivieren.
 
 Siehe `## Git-Workflow` oben für Branch-/Commit-/Push-/Changelog-Regeln.

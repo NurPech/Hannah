@@ -19,7 +19,14 @@ from abc import ABC, abstractmethod
 
 import requests
 
+from hannah.audio import resample_pcm
+
 log = logging.getLogger(__name__)
+
+# Der Voice-ID-Dienst liest das PCM ungefragt als 16 kHz (X-Sample-Rate wertet er nicht aus),
+# also muss der Client vor dem Senden auf diese Rate bringen — sonst entsteht z.B. aus Azure-TTS
+# (24 kHz) ein Profil einer um das 1,5-fache verlangsamten Stimme (#439).
+VOICEID_SAMPLE_RATE = 16000
 
 # Reservierter user_id-Präfix für Hannahs eigene TTS-Stimme(n) (#216). Getrennt pro
 # Backend (z.B. "hannah_self_azure", "hannah_self_piper") statt eines gemeinsamen
@@ -71,10 +78,10 @@ class VoiceIDClient(VoiceID):
         try:
             resp = requests.post(
                 f"{self._url}/identify",
-                data=pcm,
+                data=resample_pcm(pcm, sample_rate, VOICEID_SAMPLE_RATE),
                 headers={
                     "Content-Type": "application/octet-stream",
-                    "X-Sample-Rate": str(sample_rate),
+                    "X-Sample-Rate": str(VOICEID_SAMPLE_RATE),
                 },
                 timeout=self._timeout,
             )
@@ -89,10 +96,10 @@ class VoiceIDClient(VoiceID):
         try:
             resp = requests.post(
                 f"{self._url}/enroll",
-                data=pcm,
+                data=resample_pcm(pcm, sample_rate, VOICEID_SAMPLE_RATE),
                 headers={
                     "Content-Type": "application/octet-stream",
-                    "X-Sample-Rate": str(sample_rate),
+                    "X-Sample-Rate": str(VOICEID_SAMPLE_RATE),
                     "X-User-ID": user_id,
                 },
                 timeout=self._timeout,

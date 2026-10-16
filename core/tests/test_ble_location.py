@@ -36,3 +36,48 @@ class TestTagLoading:
 
         tag = engine._tags["aa:bb:cc:dd:ee:ff"]
         assert tag.user_id == 7
+
+
+class TestSightingHandler:
+    """#437: Die Presence-Fusion braucht jede Sichtung, nicht nur Standortwechsel —
+    sonst gilt ein durchgehend gesehener Tag nach ble_staleness_seconds als weg."""
+
+    def _engine(self):
+        return BleLocationEngine(
+            {"tags": [{"mac_address": "AA:BB:CC:DD:EE:FF", "label": "leonie", "user_id": 42}]},
+            get_satellite_room=lambda _d: "Büro",
+        )
+
+    def test_sighting_fires_on_every_report_even_without_location_change(self):
+        engine = self._engine()
+        sightings, changes = [], []
+        engine.set_sighting_handler(sightings.append)
+        engine.set_location_change_handler(lambda *a: changes.append(a))
+
+        for _ in range(3):
+            engine.on_report("bu01", "aa:bb:cc:dd:ee:ff", -60)
+
+        assert [t.user_id for t in sightings] == [42, 42, 42]
+        assert len(changes) == 1  # derselbe Satellit: nur die erste Sichtung ist ein Wechsel
+
+    def test_report_of_unknown_tag_is_ignored(self):
+        engine = self._engine()
+        sightings = []
+        engine.set_sighting_handler(sightings.append)
+
+        engine.on_report("bu01", "11:22:33:44:55:66", -60)
+
+        assert sightings == []
+
+    def test_failing_sighting_handler_does_not_break_report(self):
+        engine = self._engine()
+        changes = []
+        engine.set_location_change_handler(lambda *a: changes.append(a))
+
+        def boom(_tag):
+            raise RuntimeError("x")
+
+        engine.set_sighting_handler(boom)
+        engine.on_report("bu01", "aa:bb:cc:dd:ee:ff", -60)
+
+        assert len(changes) == 1

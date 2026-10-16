@@ -51,6 +51,9 @@ class PresenceManager:
         self._lock = threading.Lock()
         self._raw: dict[int, tuple[bool, float]] = {}    # source_id -> (value, ts)
         self._pending_away_since: dict[int, float] = {}  # user_id -> ts (fehlt = nicht pending)
+        # Nur fürs Logging (#438): letzter Stand, damit nur Wechsel geloggt werden, nicht jeder Tick
+        self._last_instantaneous: dict[int, bool] = {}
+        self._last_decision: dict[int, bool] = {}
 
     # ------------------------------------------------------------------
     # Quellen-Zugriff — presence_sources ändert sich selten (Admin-UI-CRUD),
@@ -110,33 +113,64 @@ class PresenceManager:
             return
 
         decision: Optional[bool] = None
+        log_lines: list[str] = []
         with self._lock:
             strongest_home = 0.0
             strongest_away = 0.0
+            details: list[str] = []
             for s in sources:
                 raw = self._raw.get(s.id)
                 if raw is None:
+                    details.append(f"{s.source_type} {s.reference}: no signal yet")
                     continue
                 value, ts = raw
                 stale = s.source_type == "ble_tag" and (now - ts) > self._ble_staleness_seconds
                 if value and not stale:
                     strongest_home = max(strongest_home, s.home_confidence)
+                    counts = f"home {s.home_confidence}"
                 else:
                     strongest_away = max(strongest_away, s.away_confidence)
+                    counts = f"away {s.away_confidence}"
+                details.append(
+                    f"{s.source_type} {s.reference}: {'home' if value else 'away'}, "
+                    f"{now - ts:.0f}s old{', stale' if stale else ''} -> {counts}"
+                )
 
             instantaneous_home = strongest_home >= strongest_away
             if instantaneous_home:
-                self._pending_away_since.pop(user_id, None)
+                was_pending = self._pending_away_since.pop(user_id, None) is not None
                 decision = True
             else:
+                was_pending = False
                 since = self._pending_away_since.get(user_id)
                 if since is None:
                     self._pending_away_since[user_id] = now
                 elif now - since >= self._grace_period_seconds:
                     decision = False
 
+            if self._last_instantaneous.get(user_id) != instantaneous_home:
+                self._last_instantaneous[user_id] = instantaneous_home
+                if instantaneous_home:
+                    outcome = "grace period cancelled" if was_pending else "home"
+                else:
+                    outcome = f"away signal wins, grace period of {self._grace_period_seconds:g}s started"
+                log_lines.append(outcome)
+            if decision is not None and self._last_decision.get(user_id) != decision:
+                self._last_decision[user_id] = decision
+                log_lines.append(f"decided {'home' if decision else 'away'}")
+            inputs = f"strongest_home={strongest_home}, strongest_away={strongest_away}; {'; '.join(details)}"
+
+        if log_lines:
+            label = self._user_label(user_id)  # außerhalb des Locks: user_lookup ist Fremdcode
+            for outcome in log_lines:
+                log.info(f"[presence] {label}: {outcome} ({inputs})")
+
         if decision is not None:
             self._apply(user_id, decision)
+
+    def _user_label(self, user_id: int) -> str:
+        user = self._user_lookup(user_id)
+        return getattr(user, "username", None) or f"user {user_id}"
 
     def _apply(self, user_id: int, is_home: bool) -> None:
         user = self._user_lookup(user_id)

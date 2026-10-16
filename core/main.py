@@ -1698,14 +1698,17 @@ def main():
         mqtt_handler.publish_raw(f"hannah/ble/{tag.label}/location", payload)
         grpc_servicer.agent_ble_update(tag.label, tag.mac, room_str, sat_str, rssi)
 
+    def _on_ble_sighting(tag : BleTag):
         # BLE-Sichtung geht seit #294 durch die Presence-Fusion statt direkt
         # user.presence_state zu setzen — dort wird sie mit anderen Quellen (z.B. WLAN) gegeneinander gewichtet
-        # statt bedingungslos "home" zu erzwingen. Nur bei aktiver Sichtung (room gesetzt),
-        # kein explizites "weg" von hier aus (schwacher Empfang ≠ Haus verlassen).
-        if tag.user_id and room is not None:
+        # statt bedingungslos "home" zu erzwingen. Kein explizites "weg" von hier aus
+        # (schwacher Empfang ≠ Haus verlassen). Pro Report statt nur bei einem Standortwechsel,
+        # sonst gilt ein durchgehend gesehener Tag nach ble_staleness_seconds als weg (#437).
+        if tag.user_id:
             presence_manager.on_ble_sighting(tag.user_id)
 
     ble_engine.set_location_change_handler(_on_ble_location_change)
+    ble_engine.set_sighting_handler(_on_ble_sighting)
     mqtt_handler.set_ble_report_handler(ble_engine.on_report)
 
     # Satellite-Online-Tracking: diff berechnen und per-device online/offline publishen

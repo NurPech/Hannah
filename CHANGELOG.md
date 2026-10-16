@@ -5,6 +5,13 @@
 -->
 
 
+## 0.98.5 (2026-10-16)
+### Hannah Core
+
+* Fixed: the home/away status no longer flips to "away" while a Bluetooth tag is still being seen. Hannah only noted a sighting when the tag switched to another satellite, so a tag that stayed in range of one satellite counted as gone after 30 seconds. Combined with a WLAN signal that reports "away", this made the status flap between home and away. Every sighting now counts (Refs #437)
+* Added: the log now shows why the home/away status of a person changes. Whenever the combined result flips between "home" and "away", Core writes one line with every signal that went into it: each Bluetooth tag and each ioBroker state with its value, its age and whether it counts as outdated, and how strongly it weighs. The start and cancellation of the waiting time before "away" and the final decision are logged as well. Nothing is logged while the status stays the same (Refs #438)
+* Fixed: Hannah recognizes her own voice again, so she listens to herself less. She learns her voice from the speech she plays, but sent it to the voice recognition at the wrong speed: the cloud voice delivers 24 kHz, the voice recognition always reads 16 kHz, so the learned voice was slowed down and lower than what the satellite microphones hear. The recording is now converted to 16 kHz before it is sent. The voice learned so far stays wrong for a long time, so delete the profile "hannah_self_…" (`.pt` file) on the voice recognition host once after the update, then Hannah learns it again (Refs #439)
+
 ## 0.98.4 (2026-10-15)
 ### Hannah Core
 

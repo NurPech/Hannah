@@ -224,3 +224,55 @@ class TestFusion:
         pm.on_ble_sighting(user_id)
 
         assert fake.presence_state == "away"  # unverändert, kein Fehler
+
+
+class TestDecisionLogging:
+    """#438: Entscheidungen der Fusion samt aller Eingänge loggen — nur bei Wechseln,
+    nicht bei jedem Signal oder Tick."""
+
+    def _make(self, db, user_id, **kwargs):
+        fake = _FakeUser()
+        fake.username = "leonie"
+        return fake, PresenceManager(db, user_lookup=lambda uid: fake if uid == user_id else None, **kwargs)
+
+    @staticmethod
+    def _lines(caplog):
+        return [r.getMessage() for r in caplog.records if r.name == "hannah.presence_manager"]
+
+    def test_flapping_sequence_is_traceable_from_log(self, db, sources, caplog):
+        user_id = _create_user(db)
+        sources.create_source(user_id, "ble_tag", "AA:BB", 0.3, 1.0)
+        sources.create_source(user_id, "iobroker_state", "wlan.present", 1.0, 0.3)
+        fake, pm = self._make(db, user_id, grace_period_seconds=0.2, ble_staleness_seconds=0.1)
+        caplog.set_level("INFO", logger="hannah.presence_manager")
+
+        pm.on_state_update("wlan.present", "false")  # nur WLAN-Away -> Grace-Period startet
+        pm.on_ble_sighting(user_id)  # BLE 0.3 gegen WLAN-Away 0.3 -> Gleichstand, Home
+        time.sleep(0.15)
+        pm.tick()  # BLE stale -> Away gewinnt wieder, Grace-Period startet neu
+        time.sleep(0.25)
+        pm.tick()  # Grace-Period abgelaufen -> Away
+
+        lines = self._lines(caplog)
+        assert any("away signal wins, grace period of 0.2s started" in l for l in lines)
+        assert any("grace period cancelled" in l for l in lines)
+        assert any("decided away" in l for l in lines)
+        stale_line = next(l for l in lines if "ble_tag AA:BB: home, " in l and "stale -> away 1.0" in l)
+        assert "leonie" in stale_line
+        assert "iobroker_state wlan.present: away" in stale_line
+        assert "strongest_home=0.0, strongest_away=1.0" in stale_line
+
+    def test_no_further_lines_without_state_change(self, db, sources, caplog):
+        user_id = _create_user(db)
+        sources.create_source(user_id, "iobroker_state", "wlan.present", 1.0, 0.3)
+        fake, pm = self._make(db, user_id)
+        caplog.set_level("INFO", logger="hannah.presence_manager")
+
+        pm.on_state_update("wlan.present", "true")
+        first = len(self._lines(caplog))
+        pm.on_state_update("wlan.present", "true")
+        pm.tick()
+        pm.tick()
+
+        assert first == 2  # "home" + "decided home"
+        assert len(self._lines(caplog)) == first

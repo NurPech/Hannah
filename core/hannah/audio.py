@@ -43,6 +43,22 @@ def _from_raw_pcm(data: bytes, cfg: dict) -> np.ndarray:
     return from_raw_pcm(data, cfg)
 
 
+def resample_pcm(pcm: bytes, rate: int, target_rate: int = 16000) -> bytes:
+    """Resampelt mono s16le PCM von rate auf target_rate (Anti-Aliasing via PyAV/libswresample).
+    Gleiche Rate oder leere Eingabe kommen unverändert zurück."""
+    if rate == target_rate or not pcm:
+        return pcm
+    import av  # nur hier gebraucht, daher nicht beim Import von audio.py
+
+    samples = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype=np.int16).reshape(1, -1)
+    frame = av.AudioFrame.from_ndarray(samples, format="s16", layout="mono")
+    frame.sample_rate = rate
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=target_rate)
+    chunks = [bytes(f.to_ndarray()) for f in resampler.resample(frame)]
+    chunks += [bytes(f.to_ndarray()) for f in resampler.resample(None)]
+    return b"".join(chunks)
+
+
 def _bytes_to_float32(data: bytes, sample_width: int) -> np.ndarray:
     if sample_width == 2:
         samples = np.frombuffer(data, dtype=np.int16)
