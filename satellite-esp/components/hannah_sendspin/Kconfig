@@ -19,6 +19,18 @@ menu "Hannah Sendspin"
             Client gestoppt und mDNS freigegeben. Nur zur Laufzeit: ein Neustart startet
             den Client wieder. Gilt nicht, wenn schon einmal eine Verbindung bestand.
 
+    config HANNAH_SENDSPIN_WIFI_PS_NONE
+        bool "WLAN-Power-Save abschalten, solange ein Sendspin-Stream läuft"
+        default y
+        depends on HANNAH_SENDSPIN_ENABLED
+        help
+            Im Modem-Sleep (ESP-IDF-Standard) schläft der Satellit zwischen den Beacons und der
+            Access Point puffert die Pakete bis zum nächsten Beacon (rund 100 ms). Das erzeugt
+            Jitter, den der Sync-Task als "Lost sync" meldet, und hörbare Aussetzer in
+            Sync-Gruppen. Mit dieser Option bleibt das Funkmodul während des Streams wach und
+            fällt danach (Stream-Ende, Verbindungsverlust) auf den vorherigen Modus zurück.
+            Kostet nur im Stream etwas mehr Strom (Refs #448).
+
     config HANNAH_SENDSPIN_STATS_PERIOD_S
         int "Sendspin-Statistik ins Log alle N Sekunden (0 = aus)"
         default 10

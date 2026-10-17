@@ -22,6 +22,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mdns.h"
@@ -51,6 +52,43 @@ static std::atomic<float> g_sync_error{0.0f};
 // Zuletzt an Music Assistant gemeldete bzw. von dort übernommene Musik-Lautstärke (-1 = noch nichts gemeldet).
 // Ändert sich die Lautstärke an den Tasten (oder per MQTT), weicht sie hiervon ab und wird nach MA gemeldet.
 static std::atomic<int> g_music_volume_sent{-1};
+
+// --------------------------------------------------------------------------- WLAN-Power-Save
+
+#if CONFIG_HANNAH_SENDSPIN_WIFI_PS_NONE
+// Im Modem-Sleep (ESP-IDF-Standard) schläft der Satellit zwischen den Beacons und der AP puffert die Pakete bis zum
+// nächsten Beacon. Das ergibt Jitter von rund 100 ms, den der Sync-Task als "Lost sync" meldet (hannah#448). Solange
+// ein Stream läuft, bleibt das WLAN-Funkmodul deshalb wach; danach (Stream-Ende, Verbindungsverlust) gilt wieder der
+// vorherige Modus.
+static std::atomic<bool> g_ps_overridden{false};
+static wifi_ps_type_t g_ps_saved = WIFI_PS_MIN_MODEM;
+
+static void wifi_ps_streaming_on()
+{
+    bool expected = false;
+    if (!g_ps_overridden.compare_exchange_strong(expected, true)) return;  // schon umgestellt
+    if (esp_wifi_get_ps(&g_ps_saved) != ESP_OK) g_ps_saved = WIFI_PS_MIN_MODEM;
+    const esp_err_t err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "WLAN-Power-Save konnte nicht abgeschaltet werden: %s", esp_err_to_name(err));
+        g_ps_overridden = false;
+        return;
+    }
+    ESP_LOGI(TAG, "WLAN-Power-Save aus waehrend des Streams (vorher %d)", static_cast<int>(g_ps_saved));
+}
+
+static void wifi_ps_streaming_off()
+{
+    bool expected = true;
+    if (!g_ps_overridden.compare_exchange_strong(expected, false)) return;  // nichts zurückzustellen
+    const esp_err_t err = esp_wifi_set_ps(g_ps_saved);
+    if (err != ESP_OK) ESP_LOGW(TAG, "WLAN-Power-Save konnte nicht zurueckgesetzt werden: %s", esp_err_to_name(err));
+    else ESP_LOGI(TAG, "WLAN-Power-Save wieder %d", static_cast<int>(g_ps_saved));
+}
+#else
+static void wifi_ps_streaming_on() {}
+static void wifi_ps_streaming_off() {}
+#endif
 
 // --------------------------------------------------------------------------- NVS-Persistenz
 
@@ -122,9 +160,14 @@ struct PlayerListener : PlayerRoleListener {
                  static_cast<unsigned>(*p.bit_depth));
         if (*p.sample_rate != kRate || *p.channels != 1 || *p.bit_depth != 16)
             ESP_LOGW(TAG, "Unerwartetes Format, der Lautsprecher laeuft fest mit 48 kHz mono 16 Bit");
+        wifi_ps_streaming_on();
     }
 
-    void on_stream_end() override { ESP_LOGI(TAG, "Stream-Ende"); }
+    void on_stream_end() override
+    {
+        ESP_LOGI(TAG, "Stream-Ende");
+        wifi_ps_streaming_off();
+    }
 
     void on_volume_changed(uint8_t v) override
     {
@@ -263,6 +306,7 @@ static void sendspin_task(void *)
             player.update_muted(false);
         } else if (!connected && was_connected) {
             ESP_LOGW(TAG, "Verbindung zum Server verloren");
+            wifi_ps_streaming_off();  // ohne Server kommt kein Stream-Ende mehr
         }
         was_connected = connected;
         if (connected) ever_connected = true;

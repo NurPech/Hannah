@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.99.1 (2026-10-17)
+### Satellite Firmware
+
+* Changed: while music from Music Assistant plays, the satellite keeps its WLAN radio awake. Until now it dozed between the access point's beacons, which made packets arrive in bursts about 100 ms apart. Several satellites playing in sync could then briefly drop out ("Lost sync"). The radio goes back to its normal power saving mode when the music stops or the connection to Music Assistant ends (Refs #448)
+
 ## 0.99.0 (2026-10-17)
 ### Satellite Firmware
 
