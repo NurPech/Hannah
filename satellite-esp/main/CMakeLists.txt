@@ -12,6 +12,7 @@ idf_component_register(
         hannah_ble
         hannah_asset
         hannah_sd
+        hannah_sendspin
         nvs_flash
         esp_driver_gpio
         esp_wifi

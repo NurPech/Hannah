@@ -129,6 +129,17 @@ menu "Hannah Audio"
         int "Speaker DATA GPIO"
         default 21
 
+    config HANNAH_SPK_SAMPLE_RATE
+        int "Speaker Abtastrate (Hz)"
+        default 16000
+        help
+            Abtastrate des Lautsprecher-I2S. 16000 entspricht der
+            Mikrofon-Abtastrate (CONFIG_HANNAH_AUDIO_SAMPLE_RATE), TTS wird dann
+            direkt ausgegeben. Das Dreifache (48000) ist für Musik über Sendspin
+            gedacht: TTS wird dann exakt ×3 hochgerechnet, der Takt wird im
+            Betrieb nie umgeschaltet. Erlaubt sind nur diese beiden Werte
+            (Refs #440).
+
     config HANNAH_MUTE_GPIO
         int "Mute-Taster GPIO"
         default 11

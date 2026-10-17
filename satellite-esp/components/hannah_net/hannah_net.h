@@ -69,6 +69,11 @@ void hannah_net_set_volume_callback(hannah_net_volume_cb_t cb);
 /* Publiziert den aktuellen Volume-Level auf hannah/satellite/<device>/volume/state. */
 void hannah_net_publish_volume(int vol);
 
+/* Musik-Lautstärke (Sendspin, Refs #446), getrennt von der Hannah-Lautstärke oben:
+ * Callback bei hannah/satellite/<device>/music_volume/set, Status auf .../music_volume/state. */
+void hannah_net_set_music_volume_callback(hannah_net_volume_cb_t cb);
+void hannah_net_publish_music_volume(int vol);
+
 /* True wenn WiFi im AP-Setup-Modus läuft (keine STA-Verbindung). */
 bool hannah_net_is_ap_mode(void);
 

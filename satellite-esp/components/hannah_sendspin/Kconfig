@@ -1,0 +1,30 @@
+menu "Hannah Sendspin"
+
+    config HANNAH_SENDSPIN_ENABLED
+        bool "Sendspin-Player (Musik von Music Assistant)"
+        default y
+        depends on HANNAH_SPEAKER_ENABLED
+        help
+            Der Satellit meldet sich per mDNS (_sendspin._tcp) als Sendspin-Player und
+            spielt Musik von Music Assistant ab (ab MA 2.11.0). Braucht
+            CONFIG_HANNAH_SPK_SAMPLE_RATE=48000 (TTS wird dann ×3 hochgerechnet), die
+            zugehörigen Einstellungen stehen in sdkconfig.defaults (Refs #440).
+
+    config HANNAH_SENDSPIN_GIVE_UP_S
+        int "Sendspin gibt auf, wenn nach N Sekunden kein Music Assistant verbunden war (0 = nie)"
+        default 600
+        depends on HANNAH_SENDSPIN_ENABLED
+        help
+            Findet der Satellit nach dem Start so lange keinen Music Assistant, wird der
+            Client gestoppt und mDNS freigegeben. Nur zur Laufzeit: ein Neustart startet
+            den Client wieder. Gilt nicht, wenn schon einmal eine Verbindung bestand.
+
+    config HANNAH_SENDSPIN_STATS_PERIOD_S
+        int "Sendspin-Statistik ins Log alle N Sekunden (0 = aus)"
+        default 10
+        depends on HANNAH_SENDSPIN_ENABLED
+        help
+            Verbunden, Zeitsync, Sync-Fehler, freier Heap (intern und PSRAM) — als
+            Grundlage für die Messung von Heap und Last mit aktivem Wakeword.
+
+endmenu

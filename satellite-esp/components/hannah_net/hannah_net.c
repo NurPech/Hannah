@@ -99,6 +99,7 @@ static hannah_net_asset_relevant_cb_t  s_asset_relevant_cb  = NULL;
 static char s_asset_relevant_cache[512];
 static int  s_asset_relevant_cache_len = 0;
 static hannah_net_volume_cb_t          s_volume_cb          = NULL;
+static hannah_net_volume_cb_t          s_music_volume_cb    = NULL;
 static hannah_net_sampling_cb_t        s_sampling_cb        = NULL;
 static hannah_net_virtual_ptt_cb_t        s_virtual_ptt_cb        = NULL;
 static hannah_net_play_asset_cb_t         s_play_asset_cb         = NULL;
@@ -418,6 +419,9 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/volume/set",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
+        snprintf(topic, sizeof(topic), "hannah/satellite/%s/music_volume/set",
+                 hannah_config_get()->device_id);
+        esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/ota/ok",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
@@ -525,6 +529,12 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                 s_notifications_pending_cache = pending;
                 s_notifications_pending_cache_valid = true;
             }
+
+        } else if (strstr(topic, "/music_volume/set")) {
+            int vol = atoi(data);
+            if (vol < 0)   vol = 0;
+            if (vol > 100) vol = 100;
+            if (s_music_volume_cb) s_music_volume_cb(vol);
 
         } else if (strstr(topic, "/volume/set")) {
             int vol = atoi(data);
@@ -1025,7 +1035,7 @@ void hannah_net_init(void)
     }
 
     xTaskCreate(udp_receive_task, "udp_rx",   8192, NULL, 6, NULL);
-    xTaskCreate(heartbeat_task,   "heartbeat", 2048, NULL, 3, NULL);
+    xTaskCreate(heartbeat_task,   "heartbeat", 4096, NULL, 3, NULL);
     ESP_LOGI(TAG, "hannah_net initialisiert.");
 }
 
@@ -1118,6 +1128,7 @@ void hannah_net_set_asset_relevant_callback(hannah_net_asset_relevant_cb_t cb)
     }
 }
 void hannah_net_set_volume_callback(hannah_net_volume_cb_t cb)        { s_volume_cb        = cb; }
+void hannah_net_set_music_volume_callback(hannah_net_volume_cb_t cb)  { s_music_volume_cb  = cb; }
 void hannah_net_set_sampling_callback(hannah_net_sampling_cb_t cb)       { s_sampling_cb      = cb; }
 void hannah_net_set_virtual_ptt_callback(hannah_net_virtual_ptt_cb_t cb)       { s_virtual_ptt_cb        = cb; }
 void hannah_net_set_play_asset_callback(hannah_net_play_asset_cb_t cb)         { s_play_asset_cb         = cb; }
@@ -1144,6 +1155,16 @@ void hannah_net_publish_volume(int vol)
 {
     char topic[128];
     snprintf(topic, sizeof(topic), "hannah/satellite/%s/volume/state",
+             hannah_config_get()->device_id);
+    char payload[8];
+    snprintf(payload, sizeof(payload), "%d", vol);
+    hannah_net_mqtt_publish(topic, payload, 1, 1);
+}
+
+void hannah_net_publish_music_volume(int vol)
+{
+    char topic[128];
+    snprintf(topic, sizeof(topic), "hannah/satellite/%s/music_volume/state",
              hannah_config_get()->device_id);
     char payload[8];
     snprintf(payload, sizeof(payload), "%d", vol);

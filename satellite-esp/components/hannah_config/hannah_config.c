@@ -213,6 +213,32 @@ void hannah_config_save(const hannah_config_t *cfg)
     ESP_LOGI(TAG, "Config gespeichert.");
 }
 
+bool hannah_config_runtime_get_u8(const char *key, uint8_t *out)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+    const bool ok = nvs_get_u8(h, key, out) == ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+
+void hannah_config_runtime_set_u8(const char *key, uint8_t value)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "NVS open fehlgeschlagen — '%s' nicht gespeichert", key);
+        return;
+    }
+    uint8_t stored;
+    if (nvs_get_u8(h, key, &stored) != ESP_OK || stored != value) {
+        if (nvs_set_u8(h, key, value) == ESP_OK)
+            nvs_commit(h);
+        else
+            ESP_LOGW(TAG, "NVS schreiben fehlgeschlagen — '%s' nicht gespeichert", key);
+    }
+    nvs_close(h);
+}
+
 void hannah_config_clear_seed(void)
 {
     if (s_cfg.seed[0] == '\0') return;

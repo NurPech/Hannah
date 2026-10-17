@@ -4,6 +4,16 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.99.0 (2026-10-17)
+### Satellite Firmware
+
+* Fixed: the task that sends the satellite's regular heartbeat has twice as much stack memory now (4096 instead of 2048 bytes). It was close to the limit and ran over it in a test build, which made the satellite crash and restart. This costs about 2 KB of the small internal memory (Refs #443)
+* Added: a satellite remembers its volume across restarts. Until now it always came back with the default volume (80 %) after a restart, a software update or a crash, which is loud. Now it starts with the volume that was last set, whether by the buttons or from outside. The volume is saved a few seconds after the last change, so turning the buttons several times writes only once. A satellite that has never had its volume changed keeps starting with the default (Refs #445)
+* Fixed: the satellite firmware can be built size-optimized again without the compiler stopping at the code that downloads the sounds. The compiler could not tell that the names of the sounds are never longer than 39 characters and refused to build. The limit is now written into the text formats themselves. Nothing changes for running satellites (Refs #442)
+* Fixed: when the volume is set from outside over MQTT (`volume/set`), the satellite now confirms the new value on `volume/state`. Before, the state stayed at the old value although the volume had changed, so ioBroker and other clients never saw the confirmation (Refs #447)
+* Added: a satellite plays music from Music Assistant. It shows up there as its own player (Sendspin, needs Music Assistant 2.11 or newer, satellite and Music Assistant in the same network) and plays its music through the speaker; satellites can be grouped in Music Assistant and play in sync. While a spoken announcement plays, the music gets quieter and carries on in the background. A satellite that finds no Music Assistant within 10 minutes of starting stops looking until its next restart and works as before otherwise. To make room for this the firmware is now built size-optimized, and the speaker runs at a fixed 48 kHz clock, with spoken announcements converted to it (Refs #440)
+* Added: music and Hannah have separate volumes, like in a car. Music Assistant sets the music volume, Hannah's voice (announcements, alarms, sounds) keeps its own, so turning the music down no longer makes her quiet. The volume buttons on the satellite change the music while music is playing and Hannah's voice while she speaks or when nothing is playing; a music change on the buttons is reported back to Music Assistant. The existing `volume` MQTT topics stay Hannah's voice, the music has its own `music_volume/set` and `music_volume/state`. Both volumes are remembered across restarts (Refs #446)
+* Fixed: when the music volume is set from outside over MQTT (`music_volume/set`), the satellite now confirms the new value on `music_volume/state`. Before, the state stayed at the old value although the music had changed (Refs #446)
 
 ## 0.98.5 (2026-10-16)
 ### Hannah Core

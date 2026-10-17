@@ -1,7 +1,9 @@
 build/
+build-sendspin/
 sdkconfig
 sdkconfig.local
 sdkconfig.ci
+sdkconfig.sendspin
 managed_components/
 dependencies.lock
 .history

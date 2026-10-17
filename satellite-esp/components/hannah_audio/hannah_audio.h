@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -32,6 +33,47 @@ void hannah_audio_play(const uint8_t *pcm, size_t len, int sample_rate);
 
 /* TTS-Stream abgeschlossen — Speaker-Task spielt verbleibende Chunks ab. */
 void hannah_audio_play_end(void);
+
+/* Musik (Sendspin, Refs #440): mono-16-Bit-PCM mit CONFIG_HANNAH_SPK_SAMPLE_RATE
+ * auf den Lautsprecher schreiben. Skaliert mit Lautstärke und Ausgangsgain in
+ * einem Zwischenpuffer (der Eingabepuffer bleibt unverändert). Läuft eine Ansage,
+ * mischt diese Funktion sie ein und senkt die Musik dabei ab (Ducking).
+ * Rückgabe: verbrauchte Bytes (0 bei OTA-Pause oder Timeout). *frames: tatsächlich
+ * geschriebene Frames, *finish_us: geschätzte Zeit (esp_timer), zu der sie fertig
+ * gespielt sind. */
+size_t hannah_audio_music_write(const uint8_t *pcm, size_t len, uint32_t timeout_ms,
+                                uint32_t *frames, int64_t *finish_us);
+
+/* Diagnose der Musikwiedergabe (Refs #440), um Stille einzugrenzen: Zähler sind
+ * kumulativ, die Spitzenwerte gelten seit dem letzten Abruf und werden dabei
+ * zurückgesetzt (ein Aufrufer). */
+typedef struct {
+    uint32_t calls;        /* Aufrufe von hannah_audio_music_write() */
+    uint32_t fails;        /* davon ohne geschriebene Frames */
+    uint32_t frames;       /* geschriebene Musik-Frames */
+    uint32_t frames_sent;  /* vom DMA ausgegebene Frames (Musik, TTS und Stille) */
+    int16_t  in_peak;      /* größter Betrag der gelieferten Musik */
+    int16_t  out_peak;     /* größter Betrag auf dem Lautsprecher (nach Lautstärke, Ducking, Mix) */
+    int      volume;       /* Hannah-Lautstärke (Ansagen, Wecker) in Prozent */
+    int      music_volume; /* Musik-Lautstärke in Prozent */
+    bool     muted;        /* Musik stumm */
+    int      duck_percent; /* aktueller Ducking-Faktor in Prozent, 100 = unabgesenkt */
+} hannah_audio_music_stats_t;
+void hannah_audio_music_get_stats(hannah_audio_music_stats_t *out);
+
+/* Musik stumm schalten (nur die Sendspin-Wiedergabe, nicht TTS und nicht die Mikrofone). */
+void hannah_audio_music_set_muted(bool muted);
+
+/* Hannah-Lautstärke (Ansagen, Wecker, Sound-Assets) 0-100 lesen/setzen. set meldet den Wert
+ * per MQTT (.../volume/state) und zeigt ihn am LED-Ring. */
+int  hannah_audio_get_volume(void);
+void hannah_audio_set_volume(int percent);
+
+/* Musik-Lautstärke (Sendspin, Refs #446) 0-100, getrennt von der Hannah-Lautstärke. Die Tasten
+ * am Satelliten bedienen sie, solange Musik läuft und keine Ansage spricht. set meldet den Wert
+ * per MQTT (.../music_volume/state) und zeigt ihn am LED-Ring. */
+int  hannah_audio_get_music_volume(void);
+void hannah_audio_set_music_volume(int percent);
 
 /* Playback-Steuerung (stop/pause/resume via UDP-Control). */
 void hannah_audio_stop(void);    /* Speaker-Queue leeren, Streaming stoppen. */

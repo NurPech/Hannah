@@ -29,6 +29,7 @@
 #include "hannah_ble.h"
 #include "hannah_asset.h"
 #include "hannah_sd.h"
+#include "hannah_sendspin.h"
 
 static const char *TAG = "main";
 
@@ -243,6 +244,10 @@ void app_main(void)
 
     /* BLE-Scanner für Indoor-Lokalisierung */
     hannah_ble_init();
+
+    /* Sendspin-Player (Musik von Music Assistant) — nur mit
+     * CONFIG_HANNAH_SENDSPIN_ENABLED (Dev-Firmware, Refs #440), sonst leer */
+    hannah_sendspin_start();
 
     /* LED bleibt in BOOT — hannah_audio mic_task setzt LED_STATE_IDLE nach Warmup */
     ESP_LOGI(TAG, "All components initialized.");

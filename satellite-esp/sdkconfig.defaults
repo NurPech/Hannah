@@ -136,3 +136,25 @@ CONFIG_SPI_FLASH_DANGEROUS_WRITE_ALLOWED=y
 
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Sendspin-Player (Musik von Music Assistant, Refs #440)
+
+# Fester Lautsprecher-Takt 48 kHz: Musik direkt, TTS wird x3 hochgerechnet
+CONFIG_HANNAH_SPK_SAMPLE_RATE=48000
+
+# Auf Größe optimieren (statt -Og): das Image mit Sendspin war mit -Og rund 70 KB zu groß für den OTA-Slot
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Internen RAM schonen: der mDNS-Task (Stack 4 KB) ins PSRAM, dafür mehr Sockets (WebSocket-Server der Bibliothek
+# kommt zum Webserver der Firmware hinzu; mit der Standardgrenze 10 meldete httpd "error in accept (23)")
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# Nur die Player-Rolle, kein Opus (wir bieten PCM an), spart rund 0,3 MB
+# CONFIG_SENDSPIN_ENABLE_OPUS is not set
+# CONFIG_SENDSPIN_ENABLE_CONTROLLER is not set
+# CONFIG_SENDSPIN_ENABLE_METADATA is not set
+# CONFIG_SENDSPIN_ENABLE_COLOR is not set
+# CONFIG_SENDSPIN_ENABLE_ARTWORK is not set
+# CONFIG_SENDSPIN_ENABLE_VISUALIZER is not set
+# CONFIG_SENDSPIN_ENABLE_SOURCE is not set

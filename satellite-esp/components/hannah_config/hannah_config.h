@@ -44,3 +44,12 @@ void hannah_config_save(const hannah_config_t *cfg);
 
 /* Löscht den Pairing-Seed aus NVS und RAM (nach erfolgreichem Pairing aufrufen). */
 void hannah_config_clear_seed(void);
+
+/* Laufzeitwerte, die ein Neustart behalten soll (z. B. die Lautstärke, Refs #445): einzelne
+ * Schlüssel im Namespace "hannah", unabhängig von hannah_config_t und hannah_config_save().
+ * get liefert false, wenn der Schlüssel fehlt oder NVS nicht lesbar ist (Aufrufer behält dann
+ * seinen Standardwert). set schreibt sofort und sparsam: nichts, wenn der Wert schon so
+ * gespeichert ist. Nicht für häufige Schreibzugriffe aufrufen (Flash-Verschleiß), der Aufrufer
+ * entprellt. */
+bool hannah_config_runtime_get_u8(const char *key, uint8_t *out);
+void hannah_config_runtime_set_u8(const char *key, uint8_t value);

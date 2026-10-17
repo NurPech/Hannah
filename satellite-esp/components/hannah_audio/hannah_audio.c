@@ -22,9 +22,11 @@
 #include "hannah_wakeword.h"
 #include "libhannah_audio.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -47,6 +49,13 @@ static const char *TAG = "hannah_audio";
 /* Konstanten                                                            */
 
 #define SAMPLE_RATE       CONFIG_HANNAH_AUDIO_SAMPLE_RATE
+/* Abtastrate des Lautsprecher-I2S: SAMPLE_RATE (TTS direkt) oder das Dreifache
+ * (Musik über Sendspin, TTS wird ×3 hochgerechnet), siehe Kconfig (Refs #440). */
+#define SPK_RATE          CONFIG_HANNAH_SPK_SAMPLE_RATE
+#if SPK_RATE != SAMPLE_RATE && SPK_RATE != 3 * SAMPLE_RATE
+#error "CONFIG_HANNAH_SPK_SAMPLE_RATE muss CONFIG_HANNAH_AUDIO_SAMPLE_RATE oder das Dreifache sein"
+#endif
+#define SPK_UPSAMPLE      (SPK_RATE / SAMPLE_RATE)
 #define STEP_SAMPLES      WAKEWORD_STEP_SAMPLES          /* 160 (10ms)  */
 #define STEP_BYTES_MONO (STEP_SAMPLES * 2)
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
@@ -152,6 +161,43 @@ typedef enum {
 static i2s_chan_handle_t s_rx_chan    = NULL;
 static i2s_chan_handle_t s_tx_chan    = NULL;
 static RingbufHandle_t   s_spk_ringbuf = NULL;
+/* Lautsprecher-I2S: ein Schreiber zur Zeit. speaker_task (TTS) und
+ * hannah_audio_music_write() (Sendspin-Musik, Refs #440) nehmen s_spk_mutex um
+ * jeden i2s_channel_write(). Läuft Musik, schreibt nur noch music_write: die TTS
+ * legt ihre Chunks in s_mix_fifo, music_write mischt sie ein und senkt die Musik
+ * dabei ab (Ducking). Ohne Musik schreibt speaker_task direkt. */
+static SemaphoreHandle_t s_spk_mutex = NULL;
+
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+/* Ducking (Refs #440): Musik-Lautstärke während einer Ansage und die Zeiten, in denen
+ * sie ab- und wieder aufgeblendet wird. Q16-Faktor, 65536 = volle Lautstärke. */
+#define MUSIC_DUCK_PERCENT     25
+#define MUSIC_DUCK_ATTACK_MS   30
+#define MUSIC_DUCK_RELEASE_MS  500
+/* Musik gilt als aktiv, wenn music_write in dieser Zeit aufgerufen wurde. */
+#define MUSIC_ACTIVE_WINDOW_US 200000
+/* Puffer zwischen TTS und Musik, eine halbe Sekunde bei SPK_RATE (PSRAM). */
+#define MIX_FIFO_SAMPLES       (SPK_RATE / 2)
+
+static SemaphoreHandle_t s_mix_mutex      = NULL;   /* schützt s_mix_fifo, -head, -count */
+static int16_t          *s_mix_fifo       = NULL;
+static size_t            s_mix_head       = 0;
+static size_t            s_mix_count      = 0;
+static volatile int64_t  s_music_last_us  = 0;
+static int32_t           s_duck_q16       = 65536;  /* nur unter s_spk_mutex benutzt */
+/* Diagnose für hannah_audio_music_get_stats(), geschrieben in music_write unter s_spk_mutex. */
+static volatile uint32_t s_ms_calls       = 0;
+static volatile uint32_t s_ms_fails       = 0;
+static volatile uint32_t s_ms_frames      = 0;
+static volatile int16_t  s_ms_in_peak     = 0;
+static volatile int16_t  s_ms_out_peak    = 0;
+#endif
+/* Vom DMA tatsächlich ausgegebene Frames (ISR) und von uns geschriebene Frames:
+ * daraus ergibt sich, wann ein geschriebener Block fertig gespielt ist (braucht
+ * Sendspin für den Sync). Mono 16 Bit = 2 Byte pro Frame. */
+static volatile uint32_t s_spk_frames_sent    = 0;
+static uint32_t          s_spk_frames_written = 0;
+static volatile bool     s_music_muted        = false;
 static volatile bool     s_ptt_active        = false;
 /* PTT durchbricht bewusst den Hardware-Mute (#296): nur mic_task selbst
  * schreibt/liest das, kein ISR-Zugriff nötig. Mic-Stromversorgung (GPIO,
@@ -191,6 +237,49 @@ static volatile int      s_volume                 = CONFIG_HANNAH_VOLUME_DEFAULT
 static volatile bool     s_notifications_pending  = false;  /* ungelesene Messages, #234 */
 static hannah_webrtc_vad_state_t s_webrtc_vad;
 static float              s_noise_floor_ema = 0.020f; /* adaptiver Noise-Floor-Schätzer */
+/* Lautstärke im NVS merken (Refs #445): jede Änderung startet einen Timer, geschrieben wird erst
+ * nach VOLUME_SAVE_DELAY_US Ruhe, also einmal je Änderungsserie statt bei jedem Tastendruck. */
+#define VOLUME_NVS_KEY        "volume"
+#define MUSIC_VOLUME_NVS_KEY  "music_volume"
+#define VOLUME_SAVE_DELAY_US  (5 * 1000 * 1000)
+static esp_timer_handle_t s_volume_save_timer = NULL;
+static int                s_volume_saved      = -1;   /* zuletzt gespeicherter (oder beim Start geladener) Wert */
+/* Musik-Lautstärke (Sendspin, Refs #446), getrennt von s_volume (Hannah: Ansagen, Wecker, Assets). */
+static volatile int       s_music_volume       = CONFIG_HANNAH_VOLUME_DEFAULT;
+static int                s_music_volume_saved = -1;
+static void volume_changed(void);
+
+/* Welche Lautstärke die Tasten bedienen (Refs #446): die der Musik, solange Musik läuft und keine
+ * Ansage spricht; sonst (Ansage, Leerlauf) die Hannah-Lautstärke. */
+static bool keys_control_music(void)
+{
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+    return !s_speaking_active && (esp_timer_get_time() - s_music_last_us) < MUSIC_ACTIVE_WINDOW_US;
+#else
+    return false;
+#endif
+}
+
+/* Vol+/Vol-: ändert je nach Kontext die Musik- oder die Hannah-Lautstärke. */
+static void adjust_volume_by_keys(int delta)
+{
+    if (keys_control_music()) {
+        int v = s_music_volume + delta;
+        v = v > 100 ? 100 : (v < 0 ? 0 : v);
+        s_music_volume = v;
+        ESP_LOGI(TAG, "Musik-Lautstärke: %d%%", v);
+        hannah_net_publish_music_volume(v);
+        hannah_led_show_volume((uint8_t)v);
+    } else {
+        int v = s_volume + delta;
+        v = v > 100 ? 100 : (v < 0 ? 0 : v);
+        s_volume = v;
+        ESP_LOGI(TAG, "Lautstärke: %d%%", v);
+        hannah_net_publish_volume(v);
+        hannah_led_show_volume((uint8_t)v);
+    }
+    volume_changed();
+}
 static int                s_stream_frames   = 0;
 
 #if CONFIG_HANNAH_MIC_TYPE_TDM
@@ -640,18 +729,36 @@ static esp_err_t mic_init(void)
 /* I2S Speaker initialisieren (I2S1, TX, mono, MAX98357A)               */
 
 #if CONFIG_HANNAH_SPEAKER_ENABLED
+/* Läuft im Interrupt: zählt die vom DMA ausgegebenen Frames (mono, 16 Bit). */
+static IRAM_ATTR bool spk_on_sent(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
+{
+    (void)handle;
+    (void)user_ctx;
+    s_spk_frames_sent += (uint32_t)(event->size / 2);
+    return false;
+}
+
 static esp_err_t speaker_init(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         CONFIG_HANNAH_SPK_I2S_PORT, I2S_ROLE_MASTER);
+#if SPK_UPSAMPLE > 1
+    /* Musik über Sendspin braucht eine feine Zeitauflösung der Ausgabezähler
+     * (Refs #440): 32 × 120 Frames = 80 ms bei 48 kHz, 2,5 ms pro Deskriptor.
+     * Mit 8 × 640 Frames (13 ms Granularität) meldete der Spike ständig
+     * "Lost sync". Bleibt unter dem Drain-Puffer des End-Sentinels (5120 Frames). */
+    chan_cfg.dma_desc_num  = 32;
+    chan_cfg.dma_frame_num = 120;
+#else
     chan_cfg.dma_desc_num  = 8;
     chan_cfg.dma_frame_num = STEP_SAMPLES * 4;
+#endif
     chan_cfg.auto_clear    = true;
 
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &s_tx_chan, NULL));
 
     i2s_std_config_t std_cfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SPK_RATE),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
             I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
@@ -664,8 +771,13 @@ static esp_err_t speaker_init(void)
         },
     };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_tx_chan, &std_cfg));
+    /* Zählt die vom DMA tatsächlich ausgegebenen Frames (Refs #440). */
+    s_spk_frames_sent    = 0;
+    s_spk_frames_written = 0;
+    i2s_event_callbacks_t cbs = { .on_sent = spk_on_sent };
+    ESP_ERROR_CHECK(i2s_channel_register_event_callback(s_tx_chan, &cbs, NULL));
     ESP_ERROR_CHECK(i2s_channel_enable(s_tx_chan));
-    ESP_LOGI(TAG, "Speaker I2S%d: %dHz mono", CONFIG_HANNAH_SPK_I2S_PORT, SAMPLE_RATE);
+    ESP_LOGI(TAG, "Speaker I2S%d: %dHz mono", CONFIG_HANNAH_SPK_I2S_PORT, SPK_RATE);
     return ESP_OK;
 }
 #endif /* CONFIG_HANNAH_SPEAKER_ENABLED */
@@ -844,19 +956,11 @@ static void mic_task(void *arg)
         }
         if (s_vol_up_req) {
             s_vol_up_req = false;
-            int v = s_volume + CONFIG_HANNAH_VOLUME_STEP;
-            s_volume = v > 100 ? 100 : v;
-            ESP_LOGI(TAG, "Lautstärke: %d%%", s_volume);
-            hannah_net_publish_volume(s_volume);
-            hannah_led_show_volume((uint8_t)s_volume);
+            adjust_volume_by_keys(CONFIG_HANNAH_VOLUME_STEP);
         }
         if (s_vol_down_req) {
             s_vol_down_req = false;
-            int v = s_volume - CONFIG_HANNAH_VOLUME_STEP;
-            s_volume = v < 0 ? 0 : v;
-            ESP_LOGI(TAG, "Lautstärke: %d%%", s_volume);
-            hannah_net_publish_volume(s_volume);
-            hannah_led_show_volume((uint8_t)s_volume);
+            adjust_volume_by_keys(-CONFIG_HANNAH_VOLUME_STEP);
         }
 
 #if CONFIG_HANNAH_WAKEWORD_DEBUG
@@ -1337,6 +1441,119 @@ static void mic_task(void *arg)
 /* Speaker-Task                                                          */
 
 #if CONFIG_HANNAH_SPEAKER_ENABLED
+/* Schreibt unter s_spk_mutex auf den Lautsprecher-I2S und führt Buch über die
+ * geschriebenen Frames (Refs #440). Bei OTA-Pause (Kanal abgebaut) passiert
+ * nichts, *written bleibt 0. */
+static void spk_write_locked(const void *buf, size_t bytes, TickType_t timeout, size_t *written)
+{
+    *written = 0;
+    xSemaphoreTake(s_spk_mutex, portMAX_DELAY);
+    if (s_tx_chan && !s_hw_paused) {
+        i2s_channel_write(s_tx_chan, buf, bytes, written, timeout);
+        s_spk_frames_written += (uint32_t)(*written / 2);
+    }
+    xSemaphoreGive(s_spk_mutex);
+}
+
+static bool music_active(void)
+{
+    return s_mix_fifo && (esp_timer_get_time() - s_music_last_us) < MUSIC_ACTIVE_WINDOW_US;
+}
+
+/* Hängt bis zu n Samples hinten an die Mix-Warteschlange, liefert die Anzahl der
+ * angenommenen Samples (kleiner n, wenn sie voll ist). */
+static size_t mix_push(const int16_t *src, size_t n)
+{
+    xSemaphoreTake(s_mix_mutex, portMAX_DELAY);
+    const size_t room = MIX_FIFO_SAMPLES - s_mix_count;
+    if (n > room) n = room;
+    size_t tail = (s_mix_head + s_mix_count) % MIX_FIFO_SAMPLES;
+    for (size_t i = 0; i < n; i++) {
+        s_mix_fifo[tail] = src[i];
+        if (++tail == MIX_FIFO_SAMPLES) tail = 0;
+    }
+    s_mix_count += n;
+    xSemaphoreGive(s_mix_mutex);
+    return n;
+}
+
+static size_t mix_count(void)
+{
+    if (!s_mix_fifo) return 0;
+    xSemaphoreTake(s_mix_mutex, portMAX_DELAY);
+    const size_t c = s_mix_count;
+    xSemaphoreGive(s_mix_mutex);
+    return c;
+}
+
+static void mix_clear(void)
+{
+    if (!s_mix_fifo) return;
+    xSemaphoreTake(s_mix_mutex, portMAX_DELAY);
+    s_mix_head  = 0;
+    s_mix_count = 0;
+    xSemaphoreGive(s_mix_mutex);
+}
+
+/* Spielt Reste der Mix-Warteschlange direkt ab (Musik ist inzwischen gestoppt), damit
+ * die Reihenfolge der TTS stimmt. */
+static void mix_flush_direct(void)
+{
+    int16_t tmp[128];
+    while (s_mix_fifo) {
+        xSemaphoreTake(s_mix_mutex, portMAX_DELAY);
+        size_t n = s_mix_count < 128 ? s_mix_count : 128;
+        for (size_t i = 0; i < n; i++) {
+            tmp[i] = s_mix_fifo[s_mix_head];
+            if (++s_mix_head == MIX_FIFO_SAMPLES) s_mix_head = 0;
+        }
+        s_mix_count -= n;
+        xSemaphoreGive(s_mix_mutex);
+        if (n == 0) break;
+        size_t written;
+        spk_write_locked(tmp, n * sizeof(int16_t), pdMS_TO_TICKS(500), &written);
+    }
+}
+
+/* Gibt einen TTS-Chunk (schon auf SPK_RATE, Lautstärke angewendet) aus. Läuft Musik,
+ * geht er in die Mix-Warteschlange und music_write mischt ihn im Takt der Musik ein;
+ * sonst direkt auf den Lautsprecher. */
+static void tts_emit(const int16_t *buf, size_t n)
+{
+    size_t off = 0;
+    while (off < n && !s_hw_paused) {
+        if (music_active()) {
+            off += mix_push(buf + off, n - off);
+            if (off < n) vTaskDelay(pdMS_TO_TICKS(5));   /* voll: die Musik leert sie im Echtzeit-Takt */
+        } else {
+            mix_flush_direct();
+            size_t written;
+            spk_write_locked(buf + off, (n - off) * sizeof(int16_t), pdMS_TO_TICKS(500), &written);
+            break;
+        }
+    }
+}
+
+#if SPK_UPSAMPLE > 1
+/* TTS kommt mit SAMPLE_RATE, der Lautsprecher läuft mit dem SPK_UPSAMPLE-fachen:
+ * lineare Interpolation, der letzte Wert wird über Chunk-Grenzen mitgeführt. */
+static int16_t  s_up_prev = 0;
+static int16_t *s_up_buf  = NULL;
+static size_t   s_up_cap  = 0;   /* in Samples (nach dem Hochrechnen) */
+
+static void upsample_linear(const int16_t *in, size_t n, int16_t *out)
+{
+    int32_t prev = s_up_prev;
+    for (size_t i = 0; i < n; i++) {
+        int32_t cur = in[i];
+        for (int k = 1; k <= SPK_UPSAMPLE; k++)
+            *out++ = (int16_t)(prev + ((cur - prev) * k) / SPK_UPSAMPLE);
+        prev = cur;
+    }
+    s_up_prev = (int16_t)prev;
+}
+#endif
+
 static void speaker_task(void *arg)
 {
     bool was_speaking = false;
@@ -1365,6 +1582,8 @@ static void speaker_task(void *arg)
                                                    pdMS_TO_TICKS(1000));
         if (!item) {
             /* Timeout — keine neuen Chunks seit 1s → TTS abgeschlossen */
+            if (mix_count() > 0 && !music_active())
+                mix_flush_direct();   /* Musik ist gestoppt, Rest der Ansage noch in der Warteschlange */
             if (was_speaking) {
                 was_speaking = false;
                 s_speaking_active = false;
@@ -1375,11 +1594,22 @@ static void speaker_task(void *arg)
         }
 
         if (item->len == 0) {
-            /* End-Sentinel: DMA-Buffer drainieren */
-            static const uint8_t silence[8 * STEP_SAMPLES * 4 * 2] = {0};
-            size_t written;
-            i2s_channel_write(s_tx_chan, silence, sizeof(silence),
-                              &written, portMAX_DELAY);
+            /* End-Sentinel: DMA-Buffer drainieren. Läuft Musik, mischt music_write den Rest
+             * der Ansage noch ein: abwarten, bis die Mix-Warteschlange leer ist, dann
+             * bleibt nur die Wartezeit der DMA-Puffer, Stille braucht es nicht. */
+            for (int waited = 0; waited < 3000 && mix_count() > 0 && music_active(); waited += 10)
+                vTaskDelay(pdMS_TO_TICKS(10));
+            mix_flush_direct();
+            if (music_active()) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            } else {
+                static const uint8_t silence[8 * STEP_SAMPLES * 4 * 2] = {0};
+                size_t written;
+                spk_write_locked(silence, sizeof(silence), portMAX_DELAY, &written);
+            }
+#if SPK_UPSAMPLE > 1
+            s_up_prev = 0;
+#endif
             vRingbufferReturnItem(s_spk_ringbuf, item);
             was_speaking = false;
             s_speaking_active = false;
@@ -1410,9 +1640,25 @@ static void speaker_task(void *arg)
             for (size_t i = 0; i < count; i++)
                 samples[i] = (int16_t)(((int32_t)samples[i] * vol * spk_gain) / 10000);
         }
-        size_t written;
-        i2s_channel_write(s_tx_chan, item->data, item->len,
-                          &written, pdMS_TO_TICKS(500));
+#if SPK_UPSAMPLE > 1
+        const size_t n_in  = item->len / 2;
+        const size_t n_out = n_in * SPK_UPSAMPLE;
+        if (n_out > s_up_cap) {
+            int16_t *nb = realloc(s_up_buf, n_out * sizeof(int16_t));
+            if (nb) {
+                s_up_buf = nb;
+                s_up_cap = n_out;
+            }
+        }
+        if (n_out <= s_up_cap && s_up_buf) {
+            upsample_linear((const int16_t *)item->data, n_in, s_up_buf);
+            tts_emit(s_up_buf, n_out);
+        } else {
+            ESP_LOGW(TAG, "TTS-Chunk verworfen: kein Speicher für die Hochrechnung (%u Samples)", (unsigned)n_out);
+        }
+#else
+        tts_emit((const int16_t *)item->data, item->len / 2);
+#endif
         vRingbufferReturnItem(s_spk_ringbuf, item);
     }
 }
@@ -1502,10 +1748,46 @@ static void on_notifications_pending(bool pending)
         update_idle_led();
 }
 
+static void volume_save_cb(void *arg)
+{
+    (void)arg;
+    const int v = s_volume;
+    if (v != s_volume_saved) {
+        hannah_config_runtime_set_u8(VOLUME_NVS_KEY, (uint8_t)v);
+        s_volume_saved = v;
+        ESP_LOGI(TAG, "Lautstärke gespeichert: %d%%", v);
+    }
+    const int mv = s_music_volume;
+    if (mv != s_music_volume_saved) {
+        hannah_config_runtime_set_u8(MUSIC_VOLUME_NVS_KEY, (uint8_t)mv);
+        s_music_volume_saved = mv;
+        ESP_LOGI(TAG, "Musik-Lautstärke gespeichert: %d%%", mv);
+    }
+}
+
+/* Merkt eine Lautstärkeänderung zum Speichern vor (Timer neu starten, damit mehrere schnelle
+ * Änderungen nur einen Schreibvorgang ergeben). */
+static void volume_changed(void)
+{
+    if (!s_volume_save_timer) return;
+    esp_timer_stop(s_volume_save_timer);   /* ESP_ERR_INVALID_STATE, wenn er nicht lief: ok */
+    esp_timer_start_once(s_volume_save_timer, VOLUME_SAVE_DELAY_US);
+}
+
 static void on_volume_set(int vol)
 {
     s_volume = vol;
     ESP_LOGI(TAG, "Lautstärke gesetzt: %d%%", s_volume);
+    hannah_net_publish_volume(vol);
+    volume_changed();
+}
+
+static void on_music_volume_set(int vol)
+{
+    s_music_volume = vol;
+    ESP_LOGI(TAG, "Musik-Lautstärke gesetzt (MQTT): %d%%", vol);
+    hannah_net_publish_music_volume(vol);
+    volume_changed();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1513,9 +1795,39 @@ static void on_volume_set(int vol)
 
 void hannah_audio_init(void)
 {
+    /* Zuletzt eingestellte Lautstärke aus dem NVS (Refs #445); ohne gespeicherten Wert bleibt
+     * CONFIG_HANNAH_VOLUME_DEFAULT. hannah_config_init() läuft vorher (main.c). */
+    uint8_t saved_volume;
+    if (hannah_config_runtime_get_u8(VOLUME_NVS_KEY, &saved_volume) && saved_volume <= 100) {
+        s_volume = saved_volume;
+        ESP_LOGI(TAG, "Lautstärke aus NVS: %d%%", s_volume);
+    }
+    s_volume_saved = s_volume;
+    /* Musik-Lautstärke (Sendspin, Refs #446) getrennt davon; ohne Wert gilt der gleiche Standard. */
+    if (hannah_config_runtime_get_u8(MUSIC_VOLUME_NVS_KEY, &saved_volume) && saved_volume <= 100) {
+        s_music_volume = saved_volume;
+        ESP_LOGI(TAG, "Musik-Lautstärke aus NVS: %d%%", s_music_volume);
+    }
+    s_music_volume_saved = s_music_volume;
+    const esp_timer_create_args_t volume_timer_args = {
+        .callback = volume_save_cb,
+        .name     = "vol_save",
+    };
+    if (esp_timer_create(&volume_timer_args, &s_volume_save_timer) != ESP_OK)
+        ESP_LOGW(TAG, "Timer zum Speichern der Lautstärke nicht angelegt — Lautstärke bleibt nicht erhalten.");
+
 #if CONFIG_HANNAH_SPEAKER_ENABLED
     /* Internes DRAM — I2S-DMA benötigt cache-kohärenten Speicher; PSRAM ist nicht geeignet. */
     s_spk_ringbuf = xRingbufferCreate(SPK_RINGBUF_SIZE, RINGBUF_TYPE_NOSPLIT);
+    s_spk_mutex   = xSemaphoreCreateMutex();
+    /* Mix-Warteschlange für das Ducking der Sendspin-Musik (Refs #440), PSRAM: wird nur
+     * per memcpy gelesen, der DMA sieht sie nie. Ohne sie fällt die Musik auf Verwerfen
+     * während der Ansage zurück. */
+    s_mix_mutex = xSemaphoreCreateMutex();
+    s_mix_fifo  = (int16_t *)heap_caps_malloc(MIX_FIFO_SAMPLES * sizeof(int16_t),
+                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_mix_fifo)
+        ESP_LOGW(TAG, "Mix-Warteschlange: PSRAM-Allokation fehlgeschlagen — kein Ducking.");
     speaker_init();
 #endif
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
@@ -1606,6 +1918,7 @@ void hannah_audio_init(void)
     hannah_net_set_hw_mute_callback(on_hw_mute);
     hannah_net_set_notifications_pending_callback(on_notifications_pending);
     hannah_net_set_volume_callback(on_volume_set);
+    hannah_net_set_music_volume_callback(on_music_volume_set);
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
     hannah_net_set_sampling_callback(on_sampling_mode);
     hannah_net_set_virtual_ptt_callback(on_virtual_ptt);
@@ -1672,6 +1985,195 @@ void hannah_audio_play_end(void)
     xRingbufferSendComplete(s_spk_ringbuf, item);
 }
 
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+/* Skalierungspuffer für Musik: der Eingabepuffer gehört der Bibliothek und kann
+ * bei teilweisem Schreiben erneut angeboten werden, darf also nicht in place
+ * skaliert werden. Nur unter s_spk_mutex benutzt. */
+static int16_t *s_music_buf = NULL;
+static size_t   s_music_cap = 0;   /* in Samples */
+#endif
+
+size_t hannah_audio_music_write(const uint8_t *pcm, size_t len, uint32_t timeout_ms,
+                                uint32_t *frames, int64_t *finish_us)
+{
+    if (frames)    *frames    = 0;
+    if (finish_us) *finish_us = 0;
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+    if (!pcm || len < 2 || !s_spk_mutex || s_hw_paused) return 0;
+
+    s_music_last_us = esp_timer_get_time();
+    s_ms_calls++;
+
+    /* Ohne Mix-Warteschlange (PSRAM-Allokation fehlgeschlagen) hat die TTS Vorrang: der
+     * Mutex allein lässt beide blockweise abwechselnd auf den I2S schreiben, dann ist weder
+     * Musik noch Sprache zu verstehen (Refs #440). Die Musik wird dann nicht angehalten,
+     * sondern angenommen und im Echtzeit-Takt verworfen, wie ein stummer Lautsprecher:
+     * Music Assistant schickt weiter im Zeitplan der laufenden Musik, hielten wir die Daten
+     * an, liefe der Eingangspuffer der Bibliothek voll und sie trennte die Verbindung. */
+    if (s_speaking_active && !s_mix_fifo) {
+        const uint32_t drop_frames = (uint32_t)(len / 2);
+        uint32_t wait_ms = (uint32_t)((uint64_t)drop_frames * 1000 / SPK_RATE);
+        if (wait_ms > timeout_ms) wait_ms = timeout_ms;
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
+        if (frames)    *frames    = drop_frames;
+        if (finish_us) *finish_us = esp_timer_get_time();
+        return (size_t)drop_frames * 2;
+    }
+    if (xSemaphoreTake(s_spk_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        s_ms_fails++;
+        return 0;
+    }
+    if (!s_tx_chan || s_hw_paused) {
+        xSemaphoreGive(s_spk_mutex);
+        s_ms_fails++;
+        return 0;
+    }
+
+    const size_t n = len / 2;
+    if (n > s_music_cap) {
+        int16_t *nb = realloc(s_music_buf, n * sizeof(int16_t));
+        if (!nb) {
+            xSemaphoreGive(s_spk_mutex);
+            s_ms_fails++;
+            return 0;
+        }
+        s_music_buf = nb;
+        s_music_cap = n;
+    }
+    /* Lautstärke und Ausgangsgain (Rev5-Kopfraum) wie bei TTS, als Q8-Faktor. */
+    const int32_t gain_q8 = s_music_muted
+        ? 0
+        : (int32_t)(((int64_t)s_music_volume * hannah_config_get()->spk_output_gain_percent * 256) / 10000);
+    const int16_t *in = (const int16_t *)pcm;
+
+    /* Ducking: während einer Ansage (oder solange noch TTS-Samples in der Warteschlange
+     * liegen) wird die Musik auf MUSIC_DUCK_PERCENT abgesenkt, schnell hinunter, langsam
+     * wieder hinauf. Die Ansage wird im selben Takt aus der Mix-Warteschlange addiert. */
+    const int32_t duck_min     = (int32_t)(65536 * MUSIC_DUCK_PERCENT / 100);
+    const int32_t attack_step  = (65536 - duck_min) / (int32_t)(SPK_RATE * MUSIC_DUCK_ATTACK_MS / 1000);
+    int32_t release_step       = (65536 - duck_min) / (int32_t)(SPK_RATE * MUSIC_DUCK_RELEASE_MS / 1000);
+    if (release_step < 1) release_step = 1;
+
+    size_t mix_have = 0;
+    size_t mix_idx  = 0;
+    if (s_mix_fifo) {
+        xSemaphoreTake(s_mix_mutex, portMAX_DELAY);
+        mix_have = s_mix_count < n ? s_mix_count : n;
+        mix_idx  = s_mix_head;
+    }
+    const int32_t duck_target = (s_speaking_active || mix_have > 0) ? duck_min : 65536;
+    int32_t in_pk = 0, out_pk = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s_duck_q16 > duck_target) {
+            s_duck_q16 -= attack_step;
+            if (s_duck_q16 < duck_target) s_duck_q16 = duck_target;
+        } else if (s_duck_q16 < duck_target) {
+            s_duck_q16 += release_step;
+            if (s_duck_q16 > duck_target) s_duck_q16 = duck_target;
+        }
+        int32_t m = (int32_t)(((int64_t)(((int32_t)in[i] * gain_q8) >> 8) * s_duck_q16) >> 16);
+        if (i < mix_have) {
+            m += s_mix_fifo[mix_idx];
+            if (++mix_idx == MIX_FIFO_SAMPLES) mix_idx = 0;
+        }
+        if (m > INT16_MAX) m = INT16_MAX;
+        if (m < INT16_MIN) m = INT16_MIN;
+        s_music_buf[i] = (int16_t)m;
+        const int32_t a_in  = in[i] < 0 ? -(int32_t)in[i] : in[i];
+        const int32_t a_out = m < 0 ? -m : m;
+        if (a_in  > in_pk)  in_pk  = a_in;
+        if (a_out > out_pk) out_pk = a_out;
+    }
+    if (in_pk  > s_ms_in_peak)  s_ms_in_peak  = (int16_t)(in_pk  > INT16_MAX ? INT16_MAX : in_pk);
+    if (out_pk > s_ms_out_peak) s_ms_out_peak = (int16_t)(out_pk > INT16_MAX ? INT16_MAX : out_pk);
+    if (s_mix_fifo) {
+        s_mix_head   = mix_idx;
+        s_mix_count -= mix_have;
+        xSemaphoreGive(s_mix_mutex);
+    }
+
+    size_t written = 0;
+    i2s_channel_write(s_tx_chan, s_music_buf, n * sizeof(int16_t), &written, pdMS_TO_TICKS(timeout_ms));
+    written -= written % 2;
+    const uint32_t wrote_frames = (uint32_t)(written / 2);
+    s_spk_frames_written += wrote_frames;
+    s_ms_frames += wrote_frames;
+    if (wrote_frames == 0) s_ms_fails++;
+
+    /* Ist der DMA leergelaufen (Stille wurde ausgegeben), zählt "ausgegeben" mehr
+     * als "geschrieben": dann beginnt die Warteschlange neu bei 0. */
+    const uint32_t sent = s_spk_frames_sent;
+    if ((int32_t)(sent - s_spk_frames_written) > 0) s_spk_frames_written = sent;
+    const int32_t queued = (int32_t)(s_spk_frames_written - sent);
+    if (frames)    *frames    = wrote_frames;
+    if (finish_us) *finish_us = esp_timer_get_time() + (int64_t)queued * 1000000LL / SPK_RATE;
+    s_music_last_us = esp_timer_get_time();
+    xSemaphoreGive(s_spk_mutex);
+    return written;
+#else
+    (void)timeout_ms;
+    return 0;
+#endif
+}
+
+void hannah_audio_music_set_muted(bool muted)
+{
+    s_music_muted = muted;
+}
+
+void hannah_audio_music_get_stats(hannah_audio_music_stats_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->volume       = s_volume;
+    out->music_volume = s_music_volume;
+    out->muted        = s_music_muted;
+    out->duck_percent = 100;
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+    out->calls        = s_ms_calls;
+    out->fails        = s_ms_fails;
+    out->frames       = s_ms_frames;
+    out->frames_sent  = s_spk_frames_sent;
+    out->in_peak      = s_ms_in_peak;
+    out->out_peak     = s_ms_out_peak;
+    out->duck_percent = (int)((int64_t)s_duck_q16 * 100 / 65536);
+    s_ms_in_peak  = 0;
+    s_ms_out_peak = 0;
+#endif
+}
+
+int hannah_audio_get_volume(void)
+{
+    return s_volume;
+}
+
+void hannah_audio_set_volume(int percent)
+{
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    s_volume = percent;
+    ESP_LOGI(TAG, "Lautstärke gesetzt: %d%%", percent);
+    hannah_net_publish_volume(percent);
+    hannah_led_show_volume((uint8_t)percent);
+    volume_changed();
+}
+
+int hannah_audio_get_music_volume(void)
+{
+    return s_music_volume;
+}
+
+void hannah_audio_set_music_volume(int percent)
+{
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    s_music_volume = percent;
+    ESP_LOGI(TAG, "Musik-Lautstärke gesetzt: %d%%", percent);
+    hannah_net_publish_music_volume(percent);
+    hannah_led_show_volume((uint8_t)percent);
+    volume_changed();
+}
+
 void hannah_audio_stop(void)
 {
     s_streaming_paused = false;
@@ -1682,6 +2184,9 @@ void hannah_audio_stop(void)
         while ((item = xRingbufferReceive(s_spk_ringbuf, &item_size, 0)) != NULL)
             vRingbufferReturnItem(s_spk_ringbuf, item);
     }
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+    mix_clear();
+#endif
     if (!s_sampling_mode)
         update_idle_led();
 }
@@ -1746,6 +2251,9 @@ void hannah_audio_deinit_for_ota(void)
 #endif
 #if CONFIG_HANNAH_SPEAKER_ENABLED
     xSemaphoreTake(s_speaker_parked_sem, portMAX_DELAY);
+    /* Musik-Schreiber (Sendspin, Refs #440) können außerhalb von speaker_task
+     * mitten in einem i2s_channel_write() stecken: Mutex abwarten, dann abbauen. */
+    xSemaphoreTake(s_spk_mutex, portMAX_DELAY);
     if (s_tx_chan) {
         esp_err_t err = i2s_channel_disable(s_tx_chan);
         if (err != ESP_OK)
@@ -1755,6 +2263,7 @@ void hannah_audio_deinit_for_ota(void)
             ESP_LOGW(TAG, "i2s_del_channel(tx) fehlgeschlagen: %s", esp_err_to_name(err));
         s_tx_chan = NULL;
     }
+    xSemaphoreGive(s_spk_mutex);
 #endif
     ESP_LOGI(TAG, "Audio-Hardware deinitialisiert (OTA aktiv) — I2S-DMA-Puffer freigegeben.");
 }
