@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.99.2 (2026-10-18)
+### Satellite Firmware
+
+* Changed: a satellite that finds no Music Assistant within 10 minutes of starting no longer stops looking until its next restart. Music Assistant often needs longer than that to pick up a satellite after the satellite restarted, which left it missing from Music Assistant until someone restarted it again. It now pauses for 30 minutes and then looks again for 10 minutes, and keeps repeating this until Music Assistant connects. Once connected it stays connected. Satellites in a network without Music Assistant still cost almost nothing, because the search is paused most of the time (Refs #450)
 
 ## 0.99.1 (2026-10-17)
 ### Satellite Firmware

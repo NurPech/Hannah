@@ -289,7 +289,7 @@ static void sendspin_task(void *)
 
     bool was_connected = false;
     bool ever_connected = false;
-    const int64_t started_us = esp_timer_get_time();
+    int64_t search_start_us = esp_timer_get_time();  // Beginn des aktuellen Suchfensters (GIVE_UP_S)
     int64_t last_stats = 0;
 #if CONFIG_HANNAH_SENDSPIN_STATS_PERIOD_S > 0
     hannah_audio_music_stats_t prev_music{};
@@ -312,16 +312,42 @@ static void sendspin_task(void *)
         if (connected) ever_connected = true;
 
 #if CONFIG_HANNAH_SENDSPIN_GIVE_UP_S > 0
-        // Kein Music Assistant gefunden (Leonie, hannah#440): nach der Frist nicht mehr weitersuchen. Die Sperre gilt nur
-        // zur Laufzeit, ein Neustart des Satelliten startet den Client wieder.
+        // Kein Music Assistant gefunden (Leonie, hannah#440): nach der Frist nicht mehr weitersuchen. Music Assistant
+        // braucht nach einem Neustart eines Satelliten aber oft laenger als die Frist (hannah#450), deshalb startet der
+        // Client nach CONFIG_HANNAH_SENDSPIN_RETRY_PAUSE_S wieder und sucht erneut ein Fenster lang. Die Sperre gilt nur
+        // zur Laufzeit, ein Neustart des Satelliten startet den Client sofort wieder. Nach der ersten Verbindung laeuft
+        // der Client durchgehend (MA verbindet sich nach seinem eigenen Neustart selbst wieder).
         if (!ever_connected &&
-            esp_timer_get_time() - started_us > static_cast<int64_t>(CONFIG_HANNAH_SENDSPIN_GIVE_UP_S) * 1000000LL) {
+            esp_timer_get_time() - search_start_us > static_cast<int64_t>(CONFIG_HANNAH_SENDSPIN_GIVE_UP_S) * 1000000LL) {
+#if CONFIG_HANNAH_SENDSPIN_RETRY_PAUSE_S > 0
+            ESP_LOGW(TAG, "Kein Music Assistant in %d s gefunden, Sendspin pausiert %d s und sucht dann erneut",
+                     CONFIG_HANNAH_SENDSPIN_GIVE_UP_S, CONFIG_HANNAH_SENDSPIN_RETRY_PAUSE_S);
+            client.stop();
+            mdns_free();
+            const int64_t resume_us =
+                esp_timer_get_time() + static_cast<int64_t>(CONFIG_HANNAH_SENDSPIN_RETRY_PAUSE_S) * 1000000LL;
+            while (esp_timer_get_time() < resume_us) {
+                client.loop();  // gestoppt: gibt nur einen von stop() offen gelassenen Verbindungsversuch frei
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            if (!client.start()) {
+                ESP_LOGE(TAG, "SendspinClient.start() nach der Pause fehlgeschlagen, Sendspin bleibt aus");
+                vTaskDelete(nullptr);
+                return;
+            }
+            mdns_start(client.client_id());
+            ESP_LOGI(TAG, "Sendspin sucht wieder nach Music Assistant (%d s)", CONFIG_HANNAH_SENDSPIN_GIVE_UP_S);
+            search_start_us = esp_timer_get_time();
+            was_connected = false;
+            continue;
+#else
             ESP_LOGW(TAG, "Kein Music Assistant in %d s gefunden, Sendspin ist bis zum naechsten Neustart aus",
                      CONFIG_HANNAH_SENDSPIN_GIVE_UP_S);
             client.stop();
             mdns_free();
             vTaskDelete(nullptr);
             return;
+#endif
         }
 #endif
 

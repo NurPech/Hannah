@@ -18,6 +18,20 @@ menu "Hannah Sendspin"
             Findet der Satellit nach dem Start so lange keinen Music Assistant, wird der
             Client gestoppt und mDNS freigegeben. Nur zur Laufzeit: ein Neustart startet
             den Client wieder. Gilt nicht, wenn schon einmal eine Verbindung bestand.
+            Ist CONFIG_HANNAH_SENDSPIN_RETRY_PAUSE_S gesetzt, sucht der Satellit nach der
+            Pause erneut, jeweils für diese Dauer.
+
+    config HANNAH_SENDSPIN_RETRY_PAUSE_S
+        int "Sendspin sucht nach so vielen Sekunden Pause erneut nach Music Assistant (0 = nie)"
+        default 1800
+        depends on HANNAH_SENDSPIN_ENABLED && HANNAH_SENDSPIN_GIVE_UP_S > 0
+        help
+            Music Assistant braucht nach einem Neustart eines Satelliten oft länger als die
+            Frist HANNAH_SENDSPIN_GIVE_UP_S, um ihn zu verbinden. Damit der Satellit danach
+            nicht bis zum nächsten Neustart fehlt, wird der Client nach dieser Pause wieder
+            gestartet (mDNS an) und sucht erneut GIVE_UP_S Sekunden lang; ohne Treffer pausiert
+            er wieder. Sobald einmal eine Verbindung bestand, läuft der Client durchgehend
+            (Refs #450).
 
     config HANNAH_SENDSPIN_WIFI_PS_NONE
         bool "WLAN-Power-Save abschalten, solange ein Sendspin-Stream läuft"
