@@ -15,8 +15,10 @@
  */
 
 #include "hannah_led.h"
+#include "hannah_config.h"
 #include "led_strip.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -42,12 +44,39 @@ static volatile led_state_t s_current_state = LED_STATE_IDLE;
 static volatile int     s_volume_overlay_frames  = 0;
 static volatile uint8_t s_volume_overlay_percent = 0;
 
+/* Globale Helligkeit in Prozent (0..100, Refs #452). Skaliert alle Pixel zentral in put_pixel(),
+ * die Animationen rechnen weiter mit ihren festen Werten. Wird im NVS gespeichert, das Schreiben
+ * läuft verzögert, damit ein Regler mit vielen schnellen Änderungen nur einen Schreibvorgang
+ * auslöst (wie bei der Lautstärke). */
+#define BRIGHTNESS_NVS_KEY         "led_bright"
+#define BRIGHTNESS_SAVE_DELAY_US   (2 * 1000 * 1000)
+static volatile uint8_t  s_brightness              = CONFIG_HANNAH_LED_BRIGHTNESS_DEFAULT;
+static uint8_t           s_brightness_saved        = CONFIG_HANNAH_LED_BRIGHTNESS_DEFAULT;
+static esp_timer_handle_t s_brightness_save_timer  = NULL;
+
 /* ── Hilfsfunktionen ─────────────────────────────────────────────────────── */
+
+/* Skaliert einen Kanalwert mit der globalen Helligkeit. Ein Wert größer 0 bleibt bei einer
+ * Helligkeit größer 0 mindestens 1, damit dunkle Zustände (z.B. MUTE) sichtbar bleiben. Bei 0
+ * ist der Ring in allen Zuständen aus. */
+static inline uint8_t scale(uint8_t v)
+{
+    const uint8_t pct = s_brightness;
+    if (pct >= 100 || v == 0) return v;
+    if (pct == 0) return 0;
+    const uint8_t out = (uint8_t)(((uint32_t)v * pct + 50) / 100);
+    return out ? out : 1;
+}
+
+static inline void put_pixel(int idx, uint8_t r, uint8_t g, uint8_t b)
+{
+    led_strip_set_pixel(s_strip, idx, scale(r), scale(g), scale(b));
+}
 
 static inline void set_all(uint8_t r, uint8_t g, uint8_t b)
 {
     for (int i = 0; i < LED_COUNT; i++)
-        led_strip_set_pixel(s_strip, i, r, g, b);
+        put_pixel(i, r, g, b);
 }
 
 /* Gibt einen Helligkeitswert 0..255 für einen pulsierenden Sinus zurück.
@@ -73,7 +102,7 @@ static void render_boot(uint32_t frame)
             case 1: bright = 35;  break;
             default: bright = 10; break;
         }
-        led_strip_set_pixel(s_strip, idx, bright, bright, bright);
+        put_pixel(idx, bright, bright, bright);
     }
 }
 
@@ -99,9 +128,9 @@ static void render_stream(uint32_t frame)
     uint8_t bright[] = {60, 30, 10};
     for (int d = 0; d <= 2; d++) {
         int idx = (center + d) % LED_COUNT;
-        led_strip_set_pixel(s_strip, idx, 0, 0, bright[d]);
+        put_pixel(idx, 0, 0, bright[d]);
         idx = ((center - d) + LED_COUNT) % LED_COUNT;
-        led_strip_set_pixel(s_strip, idx, 0, 0, bright[d]);
+        put_pixel(idx, 0, 0, bright[d]);
     }
 }
 
@@ -137,7 +166,7 @@ static void render_volume(uint8_t percent)
     int lit = (int)((percent * LED_COUNT + 50) / 100);
     set_all(0, 0, 0);
     for (int i = 0; i < lit && i < LED_COUNT; i++)
-        led_strip_set_pixel(s_strip, i, 60, 60, 60);
+        put_pixel(i, 60, 60, 60);
 }
 
 static void render_error(uint32_t frame)
@@ -189,8 +218,34 @@ static void led_task(void *arg)
 
 /* ── Öffentliche API ─────────────────────────────────────────────────────── */
 
+static void brightness_save_cb(void *arg)
+{
+    (void)arg;
+    const uint8_t b = s_brightness;
+    if (b != s_brightness_saved) {
+        hannah_config_runtime_set_u8(BRIGHTNESS_NVS_KEY, b);
+        s_brightness_saved = b;
+        ESP_LOGI(TAG, "LED-Helligkeit gespeichert: %d%%", b);
+    }
+}
+
 void hannah_led_init(void)
 {
+    /* Zuletzt eingestellte Helligkeit aus dem NVS; ohne gespeicherten Wert gilt
+     * CONFIG_HANNAH_LED_BRIGHTNESS_DEFAULT. hannah_config_init() läuft vorher (main.c). */
+    uint8_t saved;
+    if (hannah_config_runtime_get_u8(BRIGHTNESS_NVS_KEY, &saved) && saved <= 100) {
+        s_brightness = saved;
+        ESP_LOGI(TAG, "LED-Helligkeit aus NVS: %d%%", saved);
+    }
+    s_brightness_saved = s_brightness;
+    const esp_timer_create_args_t save_timer_args = {
+        .callback = brightness_save_cb,
+        .name     = "led_bright_save",
+    };
+    if (esp_timer_create(&save_timer_args, &s_brightness_save_timer) != ESP_OK)
+        ESP_LOGW(TAG, "Timer zum Speichern der LED-Helligkeit nicht angelegt — Helligkeit bleibt nicht erhalten.");
+
     led_strip_config_t strip_cfg = {
         .strip_gpio_num = LED_GPIO,
         .max_leds       = LED_COUNT,
@@ -221,6 +276,21 @@ void hannah_led_show_volume(uint8_t percent)
 {
     s_volume_overlay_percent = percent;
     s_volume_overlay_frames  = VOLUME_DISPLAY_FRAMES;
+}
+
+void hannah_led_set_brightness(uint8_t percent)
+{
+    if (percent > 100) percent = 100;
+    s_brightness = percent;
+    ESP_LOGI(TAG, "LED-Helligkeit gesetzt: %d%%", percent);
+    if (!s_brightness_save_timer) return;
+    esp_timer_stop(s_brightness_save_timer);   /* ESP_ERR_INVALID_STATE, wenn er nicht lief: ok */
+    esp_timer_start_once(s_brightness_save_timer, BRIGHTNESS_SAVE_DELAY_US);
+}
+
+uint8_t hannah_led_get_brightness(void)
+{
+    return s_brightness;
 }
 
 void hannah_status_led_init(void)

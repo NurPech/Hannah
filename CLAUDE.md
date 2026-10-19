@@ -180,6 +180,7 @@ Kein TLS auf UDP (zu teuer für ESP32, im LAN akzeptabel).
 | `hannah/satellite/{device}/notifications_pending` (retained) | Core → Satellit: ungelesene Messages vorhanden — gedimmtes gelbes Idle-LED (#234) |
 | `hannah/satellite/{device}/volume/set` (+ `/state`) | Lautstärke pro Satellit |
 | `hannah/satellite/{device}/mute/set` (+ `/state`) | Mute pro Satellit |
+| `hannah/satellite/{device}/led_brightness/set` (+ `/state`, retained) | Helligkeit des LED-Rings pro Satellit, 0–100 %, bleibt im NVS erhalten; 0 = Ring aus (#452) |
 | `hannah/satellite/{device}/dnd` (+ `/state`) | Do-Not-Disturb |
 | `hannah/satellite/{device}/listen` | Core → Satellit: virtuelles PTT aktivieren (nach TTS-Frage, Issue #18) |
 | `hannah/satellite/{device}/ptt` | Core → Satellit: virtuelles PTT an/aus |

@@ -8,4 +8,6 @@ idf_component_register(
     PRIV_REQUIRES
         esp_common
         esp_driver_gpio
+        esp_timer
+        hannah_config
 )

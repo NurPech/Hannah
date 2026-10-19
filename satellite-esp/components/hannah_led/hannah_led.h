@@ -22,3 +22,9 @@ void hannah_status_led_init(void);
  * Lautstärke-Balken (gedimmtes Weiß), unabhängig vom laufenden State —
  * siehe hannah_led.c für Details. */
 void hannah_led_show_volume(uint8_t percent);
+
+/* Globale Helligkeit des Rings in Prozent (0..100, Refs #452). Gilt für alle States und das
+ * Lautstärke-Overlay. 0 = Ring in allen Zuständen aus, auch MUTE und ERROR. Der Wert wird
+ * verzögert im NVS gespeichert und beim Start wieder geladen. */
+void    hannah_led_set_brightness(uint8_t percent);
+uint8_t hannah_led_get_brightness(void);

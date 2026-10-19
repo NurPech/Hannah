@@ -13,6 +13,15 @@ menu "Hannah LED"
         default 12
         range 1 64
 
+    config HANNAH_LED_BRIGHTNESS_DEFAULT
+        int "Standard-Helligkeit des LED-Rings in Prozent"
+        default 100
+        range 0 100
+        help
+            Gilt, solange noch keine Helligkeit per MQTT
+            (hannah/satellite/<device>/led_brightness/set) eingestellt wurde.
+            100 = die festen Helligkeitswerte der Animationen, unverändert.
+
     config HANNAH_STATUS_LED_ENABLED
         bool "Status-LED aktivieren"
         default y

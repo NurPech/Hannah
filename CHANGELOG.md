@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.100.0 (2026-10-19)
+### Satellite Firmware
+
+* Added: the brightness of the satellite's LED ring can now be set over MQTT, for example to dim the ring at night in a dark room. Publish a value from 0 to 100 (percent) to `hannah/satellite/<device>/led_brightness/set`; the current value is reported on `.../led_brightness/state`. It applies to every ring state and the volume bar, and is kept across restarts. At 0 the ring stays dark in all states, including mute and error. Without a setting the ring looks exactly as before (100 percent) (Refs #452)
+
 ## 0.99.2 (2026-10-18)
 ### Satellite Firmware
 

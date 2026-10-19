@@ -48,6 +48,17 @@ static void on_play_asset(const char *asset_id)
 static void on_satellite_registered(void)
 {
     hannah_asset_play_async("connect");
+    /* LED-Helligkeit (#452): aktuellen Stand melden, falls der retained Wert am Broker
+     * nach einem Zurücksetzen des NVS nicht mehr stimmt. */
+    hannah_net_publish_led_brightness(hannah_led_get_brightness());
+}
+
+/* LED-Helligkeit per MQTT (#452) — hannah_led und hannah_net kennen sich nicht, die
+ * Verdrahtung passiert hier. */
+static void on_led_brightness_set(int percent)
+{
+    hannah_led_set_brightness((uint8_t)percent);
+    hannah_net_publish_led_brightness(hannah_led_get_brightness());
 }
 
 /* Meldet das Ergebnis eines play_asset-Versuchs an Core zurück (#116) — vorher war
@@ -202,6 +213,7 @@ void app_main(void)
 
     /* Netzwerk: STA wenn Config vorhanden, sonst AP-Setup-Modus */
     hannah_net_init();
+    hannah_net_set_led_brightness_callback(on_led_brightness_set);
 
     /* Webserver — immer aktiv (STA: erreichbar über LAN-IP, AP: 192.168.4.1) */
     hannah_webserver_start();
