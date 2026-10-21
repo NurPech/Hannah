@@ -623,6 +623,56 @@ class TestApplyRoomFallback:
         assert intent.room_id == self.SAT_ROOM
 
 
+class TestApplyRoomFallbackSmalltalkPromotion:
+    """#455 — "Friteuse an." (STT-Schreibung weicht vom Gerätenamen "Fritteuse" ab) ohne
+    gesprochenen Raum: parse() liefert Smalltalk, die Fuzzy-Suche im Satelliten-Raum lief
+    nie, weil apply_room_fallback() bei Nicht-Gerätebefehlen vorher abbrach."""
+
+    SAT_ROOM = "kueche"
+
+    @pytest.fixture
+    def nlu_kitchen(self):
+        rooms = {"kueche": "Küche", "buero": "Büro"}
+        devices = {
+            "kueche": {
+                "fritteuse": _make_device("fritteuse", "kueche", category="socket"),
+                "kaffeemaschine": _make_device("kaffeemaschine", "kueche", category="socket"),
+            },
+            "buero": {"lampe": _make_device("lampe", "buero", category="light")},
+        }
+        return NLU(cfg={"turn_on_words": ["an"], "turn_off_words": ["aus"]},
+                   rooms=rooms, devices=devices)
+
+    def _fallback(self, nlu, text):
+        intent = nlu.parse(text)
+        assert intent.name == "Smalltalk", "Testannahme: parse() ohne Raum liefert Smalltalk"
+        nlu.apply_room_fallback(intent, self.SAT_ROOM)
+        return intent
+
+    def test_misspelled_device_name_becomes_turn_on(self, nlu_kitchen):
+        intent = self._fallback(nlu_kitchen, "friteuse an")
+        assert intent.name == "TurnOn"
+        assert intent.device_id == "kueche.fritteuse"
+        assert intent.room_id == self.SAT_ROOM
+
+    def test_misspelled_device_name_becomes_turn_off(self, nlu_kitchen):
+        intent = self._fallback(nlu_kitchen, "friteuse aus")
+        assert intent.name == "TurnOff"
+        assert intent.device_id == "kueche.fritteuse"
+
+    def test_no_fuzzy_match_stays_smalltalk(self, nlu_kitchen):
+        """Aktionswort, aber nichts im Raum passt → kein DeviceNotFound, bleibt Smalltalk."""
+        intent = self._fallback(nlu_kitchen, "pizza an")
+        assert intent.name == "Smalltalk"
+        assert intent.device_id is None
+        assert intent.room_id == self.SAT_ROOM
+
+    def test_smalltalk_without_action_word_is_untouched(self, nlu_kitchen):
+        intent = self._fallback(nlu_kitchen, "friteuse")
+        assert intent.name == "Smalltalk"
+        assert intent.device_id is None
+
+
 class TestCategoryAwareDispatch:
     """#272 — Wörter wie 'hoch'/'runter' sind je Kategorie unterschiedlich belegt
     (Rolladen: öffnen/schließen; Klima: Lüfterstufe). Die Dispatch-Tabelle wertet nur

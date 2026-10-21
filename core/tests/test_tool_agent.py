@@ -280,6 +280,27 @@ class TestToolDispatch:
         assert result["ok"] is False and "BRIGHTNESS" in result["error"]
         assert self.sent == []
 
+    @pytest.mark.parametrize("text, expected", [("true", True), ("True", True), (" false ", False)])
+    def test_set_device_state_accepts_a_boolean_sent_as_text(self, text, expected):
+        """#456 — das LLM schickt 'true' statt true; ohne Umwandlung schaltete nichts."""
+        result = self.agent._set_device_state(self.DEVICE_ID, "on", text, None, [])
+
+        assert result == {"ok": True}
+        assert [(d, s, v.boolean) for d, s, v in self.sent] == [(self.DEVICE_ID, "on", expected)]
+
+    @pytest.mark.parametrize("text, expected", [("40", 40.0), ("12,5", 12.5)])
+    def test_set_device_state_accepts_a_number_sent_as_text(self, text, expected):
+        result = self.agent._set_device_state(self.DEVICE_ID, "brightness", text, None, [])
+
+        assert result == {"ok": True}
+        assert [(d, s, v.number) for d, s, v in self.sent] == [(self.DEVICE_ID, "brightness", expected)]
+
+    def test_set_device_state_still_refuses_text_that_is_no_boolean(self):
+        result = self.agent._set_device_state(self.DEVICE_ID, "on", "vielleicht", None, [])
+
+        assert result["ok"] is False and "ON" in result["error"]
+        assert self.sent == []
+
     def test_an_unknown_device_is_reported(self):
         result = self.agent._set_device_state("gibt-es-nicht", "on", True, None, [])
 

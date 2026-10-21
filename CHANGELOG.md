@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.100.1 (2026-10-21)
+### Hannah Core
+
+* Fixed: a short command like "Friteuse an." (device name only, no room) is no longer treated as small talk when the speech recognition spells the device name slightly differently than the device list ("Friteuse" instead of "Fritteuse"). Hannah now looks for a similar device name in the room of the satellite and switches it. If nothing in the room is similar, the sentence stays small talk as before (Refs #455)
+* Fixed: when Hannah's language model switches a device itself, it no longer fails because it passes the value as text. It sent `"true"` instead of `true`, so the device did not switch and Hannah said the command format was wrong. Text values like `"true"`, `"false"`, `"40"` or `"12,5"` are now converted to the right type before they are sent. A value that makes no sense for the device (for example "maybe" for on/off) is still refused (Refs #456)
+
 ## 0.100.0 (2026-10-19)
 ### Satellite Firmware
 

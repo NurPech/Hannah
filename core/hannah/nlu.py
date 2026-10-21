@@ -899,7 +899,13 @@ class NLU:
           des Intents ist dann dessen Raum. Mehrere andere Räume → Raum-Rückfrage.
         - Nirgends, aber ein Gerätename-Versuch erkennbar (#261/#301) → Fuzzy-Suche im
           Fallback-Raum, bei keinem Treffer DeviceNotFound statt stillem Raum-Bulk.
-        - Gar kein Gerätename-Versuch ("Licht aus") → bewusster Raum-/Kategorie-Bulk."""
+        - Gar kein Gerätename-Versuch ("Licht aus") → bewusster Raum-/Kategorie-Bulk.
+
+        Smalltalk mit Aktionswort ("Friteuse an"): parse() sieht ohne Raum und ohne exakten
+        Gerätetreffer keinen Gerätekontext und liefert Smalltalk. Findet sich hier im
+        Fallback-Raum ein Gerät (auch per Fuzzy, z.B. STT-Schreibung "Friteuse" statt
+        "Fritteuse"), wird daraus TurnOn/TurnOff. Ohne Treffer bleibt es Smalltalk, kein
+        DeviceNotFound — ein Satz mit "an" ist nicht automatisch ein Gerätebefehl."""
         room_name = self._rooms.get(room_key, room_key)
         parsed_device_id = intent.device_id
         intent.room, intent.room_id = room_name, room_key
@@ -909,9 +915,17 @@ class NLU:
         tokens = [t for t in normalized.split() if t not in _FILLER]
         device_key, device, _ = self._find_device(" ".join(tokens), room_key)
 
+        promote_to: Optional[str] = None
+        if intent.name == "Smalltalk":
+            smalltalk_action = self._find_action(tokens)
+            if smalltalk_action is not None:
+                promote_to = "TurnOn" if smalltalk_action == "on" else "TurnOff"
+
         if device:
             intent.device_key, intent.device, intent.device_id = device_key, device.name, device.id
             intent.candidates = []
+            if promote_to:
+                intent.name = promote_to
             return
 
         if parsed_device_id is not None:
@@ -922,7 +936,7 @@ class NLU:
         if intent.candidates:
             return
 
-        if intent.name not in _DEVICE_COMMAND_INTENTS:
+        if intent.name not in _DEVICE_COMMAND_INTENTS and promote_to is None:
             return
         leftover = self._leftover_device_tokens(tokens, room_name, intent.category_filter)
         if not leftover:
@@ -932,8 +946,10 @@ class NLU:
             intent.device_key, intent.device, intent.device_id = matches[0].key, matches[0].name, matches[0].id
         elif len(matches) >= 2:
             intent.device_candidates = [(d.id, d.name) for d in matches]
-        else:
+        elif promote_to is None:
             intent.name, intent.value, intent.unit, intent.is_open_close = "DeviceNotFound", None, None, False
+        if promote_to and matches:
+            intent.name = promote_to
 
     def _leftover_device_tokens(
         self, tokens: list[str], room_name: Optional[str], category_filter: Optional[str],

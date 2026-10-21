@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -18,7 +19,7 @@ from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDeni
 from hannah.llm import CLASSIFY_PROMPT, parse_classification
 from hannah.log_shipping import TRANSCRIPT
 from hannah.nlu_devices import categories_of
-from hannah.typed_devices import DeviceRegistry, Slot, TypedDevice
+from hannah.typed_devices import BOOL_KINDS, TEXT_KINDS, DeviceRegistry, Slot, TypedDevice
 
 if TYPE_CHECKING:
     from .llm import LLMClient
@@ -182,6 +183,7 @@ _TOOLS: list[dict] = [
                         "description": "Der Slot des Geräts, z.B. 'on' oder 'brightness'",
                     },
                     "value": {
+                        "type": ["boolean", "number", "string"],
                         "description": (
                             "Wert: true/false für on, 0–100 für brightness und position (100 = offen), "
                             "Hex-String für color, Kelvin für color_temperature, Grad für target_temperature, "
@@ -215,6 +217,28 @@ _TOOLS: list[dict] = [
         },
     },
 ]
+
+
+def _coerce_llm_value(kind: int, value: object) -> object:
+    """Wandelt einen als String gelieferten Tool-Wert in den Typ der Slot-Art ('true' → True,
+    '21,5' → 21.5). LLMs liefern Werte öfter als Text; slot_value_to_pb() bleibt bewusst
+    streng, die Übersetzung gehört an diese Grenze. Alles andere reicht unverändert durch,
+    damit ein wirklich falscher Wert weiter die Fehlermeldung an das LLM auslöst."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if kind in BOOL_KINDS:
+        lowered = text.lower()
+        if lowered in ("true", "false"):
+            return lowered == "true"
+        return value
+    if kind in TEXT_KINDS or kind == pb.SLOT_KIND_COLOR:
+        return value
+    try:
+        number = float(text.replace(",", "."))
+    except ValueError:
+        return value
+    return number if math.isfinite(number) else value
 
 
 class ToolAgent:
@@ -553,6 +577,7 @@ class ToolAgent:
             return {"ok": False, "error": f"{device.name} hat keinen Slot '{slot_id}'. Bekannt: {', '.join(device.slots)}."}
         if not slot.writable:
             return {"ok": False, "error": f"Der Slot '{slot_id}' von {device.name} ist nur lesbar."}
+        value = _coerce_llm_value(slot.kind, value)
         try:
             result = self._controller.set_slot(device_id, slot_id, value, trust_level=trust_level)
         except TrustLevelDenied:
