@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.101.1 (2026-10-23)
+### Satellite Firmware
+
+* Added: a satellite that is not connected to Music Assistant now writes one diagnostic line to its log every minute. It shows whether the satellite sees Music Assistant on the network, how many other Sendspin devices it sees, and whether Music Assistant tries to connect to it (open, pending and just-closed connections on the Sendspin port). This is meant to find out why some satellites stay unconnected for days. The interval can be changed or switched off with `CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S` (Refs #458)
+
 ## 0.101.0 (2026-10-23)
 ### Hannah Core
 

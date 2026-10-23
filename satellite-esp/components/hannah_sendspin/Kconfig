@@ -53,4 +53,15 @@ menu "Hannah Sendspin"
             Verbunden, Zeitsync, Sync-Fehler, freier Heap (intern und PSRAM) — als
             Grundlage für die Messung von Heap und Last mit aktivem Wakeword.
 
+    config HANNAH_SENDSPIN_DIAG_PERIOD_S
+        int "Sendspin-Verbindungsdiagnose ins Log alle N Sekunden, solange keine Verbindung besteht (0 = aus)"
+        default 60
+        depends on HANNAH_SENDSPIN_ENABLED
+        help
+            Solange der Satellit nicht mit Music Assistant verbunden ist, loggt er in diesem
+            Takt, ob er Music Assistant per mDNS sieht (_sendspin-server._tcp), wie viele
+            andere Sendspin-Geräte er sieht und wie viele TCP-Verbindungen auf dem
+            Sendspin-Port gerade anstehen, bestehen oder gerade beendet wurden. Damit ist
+            erkennbar, ob Music Assistant überhaupt anklopft (Refs #457).
+
 endmenu

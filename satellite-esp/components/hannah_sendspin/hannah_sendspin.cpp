@@ -27,6 +27,8 @@
 #include "freertos/task.h"
 #include "mdns.h"
 #include "nvs.h"
+#include "lwip/tcpip.h"
+#include "lwip/priv/tcp_priv.h"
 
 #include "sendspin/client.h"
 #include "sendspin/player_role.h"
@@ -225,6 +227,88 @@ static void mdns_start(const std::string &client_id)
              g_name.c_str(), kSendspinPort, g_hostname.c_str());
 }
 
+// --------------------------------------------------------------------------- Verbindungsdiagnose (Refs #457)
+
+#if CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S > 0
+
+// TCP-Sicht auf den Sendspin-Port. Die Bibliothek loggt das Annehmen einer Verbindung nur auf DEBUG, das im Build nicht
+// einkompiliert ist. Die lwIP-Listen zeigen trotzdem, ob Music Assistant anklopft: SYN_RCVD und ESTABLISHED sind im
+// Aufbau oder offen, TIME_WAIT wurde in den letzten Minuten beendet.
+struct TcpPortStats {
+    int listen = 0;
+    int syn_rcvd = 0;
+    int established = 0;
+    int other = 0;
+    int time_wait = 0;
+    char last_peer[16] = "-";
+};
+
+static void copy_ip4(char (&dst)[16], const ip4_addr_t *ip)
+{
+    const char *text = ip4addr_ntoa(ip);
+    const size_t n = strnlen(text, sizeof(dst) - 1);
+    memcpy(dst, text, n);
+    dst[n] = '\0';
+}
+
+// Läuft im tcpip-Thread (tcpip_callback_wait), nur dort sind die PCB-Listen sicher lesbar.
+static void tcp_port_collect(void *ctx)
+{
+    auto *s = static_cast<TcpPortStats *>(ctx);
+    for (tcp_pcb_listen *p = tcp_listen_pcbs.listen_pcbs; p != nullptr; p = p->next)
+        if (p->local_port == kSendspinPort) s->listen++;
+    for (tcp_pcb *p = tcp_active_pcbs; p != nullptr; p = p->next) {
+        if (p->local_port != kSendspinPort) continue;
+        if (p->state == SYN_RCVD) s->syn_rcvd++;
+        else if (p->state == ESTABLISHED) s->established++;
+        else s->other++;
+        copy_ip4(s->last_peer, ip_2_ip4(&p->remote_ip));
+    }
+    for (tcp_pcb *p = tcp_tw_pcbs; p != nullptr; p = p->next) {
+        if (p->local_port != kSendspinPort) continue;
+        s->time_wait++;
+        copy_ip4(s->last_peer, ip_2_ip4(&p->remote_ip));
+    }
+}
+
+// Fragt mDNS nach einem Diensttyp und blockiert bis zu 1,5 s. Liefert die Zahl der Treffer, `first` beschreibt den ersten.
+static int mdns_peek(const char *service, std::string &first)
+{
+    first = "-";
+    mdns_result_t *res = nullptr;
+    if (mdns_query_ptr(service, "_tcp", 1500, 8, &res) != ESP_OK || res == nullptr) return 0;
+    int count = 0;
+    for (mdns_result_t *r = res; r != nullptr; r = r->next) count++;
+    char ip[16] = "-";
+    if (res->addr != nullptr && res->addr->addr.type == ESP_IPADDR_TYPE_V4) {
+        ip4_addr_t a;
+        a.addr = res->addr->addr.u_addr.ip4.addr;
+        copy_ip4(ip, &a);
+    }
+    first = res->hostname != nullptr ? res->hostname : (res->instance_name != nullptr ? res->instance_name : "?");
+    first += ":" + std::to_string(res->port) + " ip=" + ip;
+    mdns_query_results_free(res);
+    return count;
+}
+
+// Eine Zeile: sieht der Satellit Music Assistant per mDNS (Multicast kommt an), und was passiert auf dem Sendspin-Port?
+static void log_connection_diag(int64_t search_start_us)
+{
+    TcpPortStats tcp;
+    tcpip_callback_wait(tcp_port_collect, &tcp);
+    std::string ma, peer;
+    const int ma_count = mdns_peek("_sendspin-server", ma);
+    const int peer_count = mdns_peek("_sendspin", peer);
+    ESP_LOGI(TAG,
+             "Diagnose: MA per mDNS %d (%s) | Sendspin-Clients per mDNS %d | TCP :%u listen=%d syn_rcvd=%d "
+             "established=%d sonstige=%d time_wait=%d letzter_peer=%s | Suchfenster %d s",
+             ma_count, ma.c_str(), peer_count, static_cast<unsigned>(kSendspinPort), tcp.listen, tcp.syn_rcvd,
+             tcp.established, tcp.other, tcp.time_wait, tcp.last_peer,
+             static_cast<int>((esp_timer_get_time() - search_start_us) / 1000000LL));
+}
+
+#endif  // CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S > 0
+
 // --------------------------------------------------------------------------- Task
 
 static void sendspin_task(void *)
@@ -291,6 +375,10 @@ static void sendspin_task(void *)
     bool ever_connected = false;
     int64_t search_start_us = esp_timer_get_time();  // Beginn des aktuellen Suchfensters (GIVE_UP_S)
     int64_t last_stats = 0;
+#if CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S > 0
+    constexpr int64_t kDiagPeriodUs = static_cast<int64_t>(CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S) * 1000000LL;
+    int64_t next_diag_us = esp_timer_get_time() + 10 * 1000000LL;  // erste Zeile 10 s nach dem Start des Clients
+#endif
 #if CONFIG_HANNAH_SENDSPIN_STATS_PERIOD_S > 0
     hannah_audio_music_stats_t prev_music{};
 #endif
@@ -311,6 +399,14 @@ static void sendspin_task(void *)
         was_connected = connected;
         if (connected) ever_connected = true;
 
+#if CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S > 0
+        // Ohne Verbindung (Suche oder Verbindungsverlust) regelmäßig festhalten, was der Satellit von MA sieht (Refs #457).
+        if (!connected && esp_timer_get_time() >= next_diag_us) {
+            log_connection_diag(search_start_us);
+            next_diag_us = esp_timer_get_time() + kDiagPeriodUs;
+        }
+#endif
+
 #if CONFIG_HANNAH_SENDSPIN_GIVE_UP_S > 0
         // Kein Music Assistant gefunden (Leonie, hannah#440): nach der Frist nicht mehr weitersuchen. Music Assistant
         // braucht nach einem Neustart eines Satelliten aber oft laenger als die Frist (hannah#450), deshalb startet der
@@ -319,6 +415,9 @@ static void sendspin_task(void *)
         // der Client durchgehend (MA verbindet sich nach seinem eigenen Neustart selbst wieder).
         if (!ever_connected &&
             esp_timer_get_time() - search_start_us > static_cast<int64_t>(CONFIG_HANNAH_SENDSPIN_GIVE_UP_S) * 1000000LL) {
+#if CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S > 0
+            log_connection_diag(search_start_us);  // Zustand am Ende des Suchfensters, bevor mDNS wegfällt
+#endif
 #if CONFIG_HANNAH_SENDSPIN_RETRY_PAUSE_S > 0
             ESP_LOGW(TAG, "Kein Music Assistant in %d s gefunden, Sendspin pausiert %d s und sucht dann erneut",
                      CONFIG_HANNAH_SENDSPIN_GIVE_UP_S, CONFIG_HANNAH_SENDSPIN_RETRY_PAUSE_S);
@@ -338,6 +437,9 @@ static void sendspin_task(void *)
             mdns_start(client.client_id());
             ESP_LOGI(TAG, "Sendspin sucht wieder nach Music Assistant (%d s)", CONFIG_HANNAH_SENDSPIN_GIVE_UP_S);
             search_start_us = esp_timer_get_time();
+#if CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S > 0
+            next_diag_us = search_start_us + 10 * 1000000LL;
+#endif
             was_connected = false;
             continue;
 #else
