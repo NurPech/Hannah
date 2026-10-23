@@ -189,6 +189,34 @@ class SatelliteManager:
         sat = Satellite.get(self._db(), device_id=device_id)
         return bool(sat.smalltalk_followup_listen) if sat else False
 
+    def set_satellite_led_brightness(self, device_id: str, percent: int, requestor_id: Optional[int] = None) -> bool:
+        """Speichert die LED-Helligkeit (0-100 %, 0 = Ring aus) des Satelliten. Das Weiterreichen
+        an den Satelliten übernimmt der Aufrufer (MQTT, #453). ValueError außerhalb von 0-100."""
+        if not 0 <= percent <= 100:
+            raise ValueError(f"led_brightness must be 0-100, got {percent}")
+        self._check_own_or_admin(requestor_id, device_id)
+        sat = Satellite.get(self._db(), device_id=device_id)
+        if not sat:
+            return False
+        sat.update(led_brightness=percent)
+        return True
+
+    def get_satellite_led_brightness(self, device_id: str) -> int:
+        """Gespeicherte LED-Helligkeit, 100 für einen unbekannten Satelliten."""
+        sat = Satellite.get(self._db(), device_id=device_id)
+        return int(sat.led_brightness) if sat and sat.led_brightness is not None else 100
+
+    def adopt_reported_led_brightness(self, device_id: str, percent: int) -> bool:
+        """Übernimmt die Helligkeit, die der Satellit selbst meldet (letzter Schreiber gewinnt,
+        z.B. nach einem manuellen MQTT-Befehl). True, wenn sich der gespeicherte Wert dadurch
+        geändert hat; unbekannte Satelliten werden nicht angelegt."""
+        percent = max(0, min(100, percent))
+        sat = Satellite.get(self._db(), device_id=device_id)
+        if not sat or sat.led_brightness == percent:
+            return False
+        sat.update(led_brightness=percent)
+        return True
+
     def set_satellite_firmware(self, device_id: str, version: str) -> None:
         """Persistiert die aktuell laufende Firmware-Version (vom `.../firmware`-MQTT-Report).
         Legt den Satelliten an, falls er noch nicht in der DB existiert. Löscht ein
@@ -257,6 +285,7 @@ class SatelliteManager:
                 "update_available": bool(s.update_available),
                 "new_version": s.new_version,
                 "smalltalk_followup_listen": bool(s.smalltalk_followup_listen),
+                "led_brightness": s.led_brightness,
             }
             for s in sats
         ]

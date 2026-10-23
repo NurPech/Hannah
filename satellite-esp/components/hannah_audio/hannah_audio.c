@@ -1219,7 +1219,9 @@ static void mic_task(void *arg)
 
         if (muted && !s_ptt_active && state != AUDIO_STATE_STREAMING) {
             state = AUDIO_STATE_IDLE;
-            if (!s_sampling_mode)
+            /* Nicht während einer Ansage (#444): dieser Zweig läuft in jedem 10-ms-Frame und
+             * hat SPEAK sonst sofort wieder durch MUTE ersetzt. */
+            if (!s_sampling_mode && !s_speaking_active)
                 update_idle_led();
             was_ptt = false;
             if (!s_sampling_mode) {
@@ -1625,6 +1627,11 @@ static void speaker_task(void *arg)
                 s_ptt_active = true;
             }
             continue;
+        }
+        if (!was_speaking && !s_sampling_mode) {
+            /* Die Ansage zeigt SPEAK, sobald sie wirklich abgespielt wird, nicht erst/nur wenn
+             * eine Server-Status-Meldung "speaking" ankommt (#444). */
+            hannah_led_set_state(LED_STATE_SPEAK);
         }
         was_speaking = true;
         s_speaking_active = true;

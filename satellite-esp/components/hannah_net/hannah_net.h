@@ -76,7 +76,9 @@ void hannah_net_publish_music_volume(int vol);
 
 /* LED-Helligkeit des Rings in Prozent (Refs #452): Callback bei
  * hannah/satellite/<device>/led_brightness/set (0..100), Status (retained) auf
- * .../led_brightness/state. Ein Payload, der keine Zahl ist, wird verworfen. */
+ * .../led_brightness/state. Ein Payload, der keine Zahl ist, wird verworfen. Ein retained
+ * set, das vor der Registrierung des Callbacks ankommt, wird beim Registrieren nachgeliefert
+ * (Refs #453). */
 void hannah_net_set_led_brightness_callback(hannah_net_volume_cb_t cb);
 void hannah_net_publish_led_brightness(int percent);
 

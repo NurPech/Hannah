@@ -83,6 +83,7 @@ static TimerHandle_t             s_sntp_retry  = NULL;
 static TimerHandle_t             s_ap_recovery_retry = NULL;
 static esp_mqtt_client_handle_t  s_mqtt_client = NULL;
 static volatile bool             s_mqtt_stopped = false;  /* Client existiert, ist aber gestoppt (AP-Modus) */
+static volatile int              s_mqtt_outbox_size = -1; /* Cache fürs Heap-Log, siehe on_mqtt_event() */
 static esp_netif_t              *s_sta_netif   = NULL;
 static esp_netif_t              *s_ap_netif    = NULL;
 
@@ -101,6 +102,8 @@ static int  s_asset_relevant_cache_len = 0;
 static hannah_net_volume_cb_t          s_volume_cb          = NULL;
 static hannah_net_volume_cb_t          s_music_volume_cb    = NULL;
 static hannah_net_volume_cb_t          s_led_brightness_cb  = NULL;
+static int                             s_led_brightness_cache = 0;
+static bool                            s_led_brightness_cache_valid = false;
 static hannah_net_sampling_cb_t        s_sampling_cb        = NULL;
 static hannah_net_virtual_ptt_cb_t        s_virtual_ptt_cb        = NULL;
 static hannah_net_play_asset_cb_t         s_play_asset_cb         = NULL;
@@ -335,12 +338,17 @@ static void heartbeat_task(void *arg)
          * einen Eintrag in seiner internen, intern-DRAM-allokierten Outbox
          * bis das Ack vom Broker zurückkommt — bei schnell aufeinander-
          * folgenden Reconnects (MQTT_EVENT_CONNECTED resubscribt alle Topics)
-         * ist ein wachsender Outbox-Stand der Verdacht für das Leck. */
+         * ist ein wachsender Outbox-Stand der Verdacht für das Leck. Der Wert
+         * kommt aus dem Cache in on_mqtt_event(), nicht aus einem direkten
+         * esp_mqtt_client_get_outbox_size()-Aufruf: der nimmt den API-Lock
+         * des MQTT-Tasks, und der hält ihn während eines ganzen Connect-
+         * Versuchs (bis zu 2x network_timeout_ms = 20 s) — länger als die 5 s
+         * Reserve des TWDT hier, der Task-Watchdog löste aus (#449). */
         ESP_LOGI(TAG, "Heap: frei=%lu min_je=%lu intern=%lu outbox=%d",
                  (unsigned long)esp_get_free_heap_size(),
                  (unsigned long)esp_get_minimum_free_heap_size(),
                  (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                 s_mqtt_client ? esp_mqtt_client_get_outbox_size(s_mqtt_client) : -1);
+                 s_mqtt_outbox_size);
 
         /* GOT_IP/MQTT_CONNECTED feuern nur einmal pro Verbindung, MQTT_DATA nur
          * bei eingehenden Befehlen — im ruhigen Idle-Betrieb kommt sonst über
@@ -405,6 +413,10 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                           int32_t event_id, void *event_data)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
+
+    /* Läuft im MQTT-Task, der den API-Lock (rekursiv) schon hält — der Aufruf
+     * blockiert hier nie. Gelesen wird der Wert im heartbeat_task(). */
+    s_mqtt_outbox_size = esp_mqtt_client_get_outbox_size(s_mqtt_client);
 
     switch (event_id) {
     case MQTT_EVENT_CONNECTED: {
@@ -543,7 +555,15 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
             } else {
                 if (pct < 0)   pct = 0;
                 if (pct > 100) pct = 100;
-                if (s_led_brightness_cb) s_led_brightness_cb((int)pct);
+                if (s_led_brightness_cb) {
+                    s_led_brightness_cb((int)pct);
+                } else {
+                    /* Das retained set kommt gleich nach dem MQTT-Connect, der Callback wird in
+                     * main.c aber erst nach hannah_net_init() registriert — Cache-and-replay
+                     * wie bei notifications_pending (#453). */
+                    s_led_brightness_cache = (int)pct;
+                    s_led_brightness_cache_valid = true;
+                }
             }
 
         } else if (strstr(topic, "/music_volume/set")) {
@@ -1145,7 +1165,14 @@ void hannah_net_set_asset_relevant_callback(hannah_net_asset_relevant_cb_t cb)
 }
 void hannah_net_set_volume_callback(hannah_net_volume_cb_t cb)        { s_volume_cb        = cb; }
 void hannah_net_set_music_volume_callback(hannah_net_volume_cb_t cb)  { s_music_volume_cb  = cb; }
-void hannah_net_set_led_brightness_callback(hannah_net_volume_cb_t cb) { s_led_brightness_cb = cb; }
+void hannah_net_set_led_brightness_callback(hannah_net_volume_cb_t cb)
+{
+    s_led_brightness_cb = cb;
+    if (cb && s_led_brightness_cache_valid) {
+        s_led_brightness_cache_valid = false;
+        cb(s_led_brightness_cache);
+    }
+}
 void hannah_net_set_sampling_callback(hannah_net_sampling_cb_t cb)       { s_sampling_cb      = cb; }
 void hannah_net_set_virtual_ptt_callback(hannah_net_virtual_ptt_cb_t cb)       { s_virtual_ptt_cb        = cb; }
 void hannah_net_set_play_asset_callback(hannah_net_play_asset_cb_t cb)         { s_play_asset_cb         = cb; }

@@ -266,6 +266,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         on_weather_update: Optional[Callable[[pb.AgentWeatherUpdate], None]] = None,
         on_trigger_firmware_update: Optional[Callable[[str], None]] = None,  # (device)
         on_trigger_satellite_restart: Optional[Callable[[str], None]] = None,  # (device)
+        on_led_brightness: Optional[Callable[[str, int], None]] = None,        # (device, percent) — nach SetSatelliteLedBrightness gespeichert: an den Satelliten und den Adapter weiterreichen (#453)
         on_timer_fired: Optional[Callable[[str, str, dict], None]] = None,     # (timer_id, label, metadata)
         on_timer_list: Optional[Callable[[list], None]] = None,               # (list[TimerInfo])
         on_timer_connected: Optional[Callable[[], None]] = None,
@@ -354,6 +355,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_weather_update           = on_weather_update
         self._on_trigger_firmware_update  = on_trigger_firmware_update or (lambda _: None)
         self._on_trigger_satellite_restart = on_trigger_satellite_restart or (lambda _: None)
+        self._on_led_brightness = on_led_brightness or (lambda *_: None)
         self._on_timer_fired    = on_timer_fired
         self._on_timer_list     = on_timer_list
         self._on_timer_connected = on_timer_connected
@@ -837,6 +839,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             )
             if sat.get("new_version"):
                 kwargs["new_version"] = sat["new_version"]
+            if sat.get("led_brightness") is not None:
+                kwargs["led_brightness"] = sat["led_brightness"]
             result.append(pb.Satellite(**kwargs))
         for device_id, info in connected.items():
             if device_id not in seen:
@@ -891,6 +895,20 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             )
         except SatellitePermissionError:
             return pb.StatusResponse(ok=False, message="forbidden")
+        return pb.StatusResponse(ok=ok, message="set" if ok else "not found")
+
+    def SetSatelliteLedBrightness(self, request, _context):
+        if not 0 <= request.percent <= 100:
+            return pb.StatusResponse(ok=False, message="percent must be 0-100")
+        self._upsert_satellite(request.device_id)
+        try:
+            ok = self._satellite_manager.set_satellite_led_brightness(
+                request.device_id, request.percent, requestor_id=request.requestor_id,
+            )
+        except SatellitePermissionError:
+            return pb.StatusResponse(ok=False, message="forbidden")
+        if ok:
+            self._on_led_brightness(request.device_id, request.percent)
         return pb.StatusResponse(ok=ok, message="set" if ok else "not found")
 
     def DeleteSatellite(self, request, _context):
@@ -1561,7 +1579,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
 
     def agent_satellite_update(self, device_id: str, room: str, address: str, online: bool,
                                volume: int = None, mute: bool = None, dnd: bool = None,
-                               display_name: str = "") -> bool:
+                               display_name: str = "", led_brightness: int = None) -> bool:
         """Push a satellite online/offline or state update to all connected adapters."""
         kwargs = dict(device_id=device_id, room=room, address=address, online=online)
         if volume is not None:
@@ -1570,6 +1588,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             kwargs["mute"] = mute
         if dnd is not None:
             kwargs["dnd"] = dnd
+        if led_brightness is not None:
+            kwargs["led_brightness"] = led_brightness
         if display_name:
             kwargs["display_name"] = display_name
         cmd = pb.AgentCommand(satellite_update=pb.AgentSatelliteUpdate(**kwargs))

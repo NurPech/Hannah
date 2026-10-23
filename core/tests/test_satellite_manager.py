@@ -253,6 +253,84 @@ class TestSmalltalkFollowup:
         assert manager.get_satellite_smalltalk_followup("unknown") is False
 
 
+class TestLedBrightness:
+    """#453 — LED-Helligkeit pro Satellit (0-100 %, 0 = Ring aus), Core ist die Quelle der Wahrheit."""
+
+    def test_default_is_full_brightness(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        assert manager.get_satellite_led_brightness("wz-esp") == 100
+
+    def test_set_and_get(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        assert manager.set_satellite_led_brightness("wz-esp", 30) is True
+        assert manager.get_satellite_led_brightness("wz-esp") == 30
+
+    def test_zero_is_a_valid_value(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        assert manager.set_satellite_led_brightness("wz-esp", 0) is True
+        assert manager.get_satellite_led_brightness("wz-esp") == 0
+
+    @pytest.mark.parametrize("percent", [-1, 101])
+    def test_out_of_range_is_rejected(self, manager, percent):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        with pytest.raises(ValueError):
+            manager.set_satellite_led_brightness("wz-esp", percent)
+        assert manager.get_satellite_led_brightness("wz-esp") == 100
+
+    def test_unknown_device(self, manager):
+        assert manager.set_satellite_led_brightness("unknown", 30) is False
+        assert manager.get_satellite_led_brightness("unknown") == 100
+
+    def test_get_satellites_lists_brightness(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.set_satellite_led_brightness("wz-esp", 40)
+
+        assert manager.get_satellites()[0]["led_brightness"] == 40
+
+    def test_adopt_reported_value(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        assert manager.adopt_reported_led_brightness("wz-esp", 25) is True
+        assert manager.get_satellite_led_brightness("wz-esp") == 25
+
+    def test_adopt_same_value_reports_no_change(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+        manager.set_satellite_led_brightness("wz-esp", 25)
+
+        assert manager.adopt_reported_led_brightness("wz-esp", 25) is False
+
+    def test_adopt_clamps_to_range(self, manager):
+        _insert_satellite(manager, "wz-esp", "seed-1", days_old=0)
+
+        assert manager.adopt_reported_led_brightness("wz-esp", 150) is False   # clamped to 100 = the default
+        assert manager.get_satellite_led_brightness("wz-esp") == 100
+
+    def test_adopt_does_not_create_unknown_satellite(self, manager):
+        assert manager.adopt_reported_led_brightness("unknown", 30) is False
+        assert manager.get_satellites() == []
+
+    def test_migration_adds_column_with_default(self, tmp_path):
+        """Bestehende DB ohne die Spalte: die Migration legt sie mit Standard 100 an, nichts geht verloren."""
+        import sqlite3
+        path = os.path.join(str(tmp_path), "old.db")
+        db_module.DB_PATH = path
+        db_module.init_db()
+        con = sqlite3.connect(path)
+        con.execute("INSERT INTO satellites (device_id) VALUES ('wz-esp')")
+        con.execute("ALTER TABLE satellites DROP COLUMN led_brightness")
+        con.commit()
+        con.close()
+
+        db_module.init_db()
+
+        mgr = SatelliteManager(db_module.get_db, {"seed_ttl_days": 7})
+        assert mgr.get_satellite_led_brightness("wz-esp") == 100
+
+
 class TestRejuvenationRestart:
     """#162 — periodischer präventiver Restart, gestreut über Hash-Offset-Stunde,
     nur ausgelöst wenn is_device_free() zustimmt."""
@@ -528,6 +606,16 @@ class TestPermissions:
 
         with pytest.raises(SatellitePermissionError):
             mgr.set_satellite_smalltalk_followup("wz-esp", True, requestor_id=other_id)
+
+    def test_trust5_cannot_set_led_brightness_on_others_satellite(self, manager_with_users):
+        mgr, db = manager_with_users
+        owner_id = _create_user(db, "owner", 10)
+        other_id = _create_user(db, "other", 5)
+        _insert_satellite(mgr, "wz-esp", "seed-1", days_old=0)
+        mgr.set_satellite_owner("wz-esp", owner_id)
+
+        with pytest.raises(SatellitePermissionError):
+            mgr.set_satellite_led_brightness("wz-esp", 30, requestor_id=other_id)
 
 
 class TestSatelliteLabel:

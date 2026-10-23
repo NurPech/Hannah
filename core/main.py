@@ -1565,6 +1565,23 @@ def main():
         grpc_servicer.agent_satellite_update(device, room, "", True, dnd=active, display_name=display_name)
         log.info(f"DND {device}: {active}")
 
+    def _push_led_brightness(device: str, percent: int):
+        """Reicht die gespeicherte LED-Helligkeit eines Satelliten weiter: retained `set` an den
+        Satelliten (er bekommt sie auch nach einem eigenen Neustart) und Meldung an den Adapter,
+        solange der Satellit verbunden ist (#453)."""
+        mqtt_handler.publish_led_brightness_set(device, percent)
+        all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}
+        if device in all_devices:
+            grpc_servicer.agent_satellite_update(device, all_devices[device], "", True, led_brightness=percent)
+        log.info(f"LED-Helligkeit {device}: {percent}%")
+
+    def _on_led_brightness_state(device: str, percent: int):
+        """Der Satellit meldet seine LED-Helligkeit (z.B. nach einem manuellen MQTT-Befehl). Weicht sie
+        vom gespeicherten Wert ab, gewinnt der letzte Schreiber: Core übernimmt sie, damit Core und
+        Satellit nicht gegeneinander arbeiten (#453)."""
+        if satellite_manager.adopt_reported_led_brightness(device, percent):
+            _push_led_brightness(device, percent)
+
     def _apply_global_dnd(active: bool):
         """Setzt DND auf allen bekannten Satelliten und publiziert den globalen State."""
         all_devices = {**udp_server.registered_devices(), **grpc_servicer.proxy_satellites()}
@@ -1636,6 +1653,7 @@ def main():
     mqtt_handler.set_volume_handler(_on_volume)
     mqtt_handler.set_mute_handler(_on_mute)
     mqtt_handler.set_dnd_handler(_on_dnd)
+    mqtt_handler.set_led_brightness_handler(_on_led_brightness_state)
 
     # BLE-Lokalisierung: Tags kommen aus der ble_tags-Tabelle (BleTagManager, #115) mit
     # user_id bereits aufgelöst.
@@ -1721,7 +1739,14 @@ def main():
         ble_macs = ble_engine.get_all_macs()
         for device_id in current - _known_satellites:
             display_name = satellite_manager.resolve_satellite_name(device_id) or ""
-            grpc_servicer.agent_satellite_update(device_id, satellite_map[device_id], "", True, display_name=display_name)
+            led_brightness = satellite_manager.get_satellite_led_brightness(device_id)
+            grpc_servicer.agent_satellite_update(
+                device_id, satellite_map[device_id], "", True,
+                display_name=display_name, led_brightness=led_brightness,
+            )
+            # Core ist die Quelle der Wahrheit für die LED-Helligkeit (#453): der Satellit bekommt
+            # sie beim Verbinden als retained `set`.
+            mqtt_handler.publish_led_brightness_set(device_id, led_brightness)
             if not grpc_servicer.is_captured(device_id):
                 # Stelle sicher, dass kein retained Capture-Modus aus einer
                 # vorherigen Hannah-Session am Satelliten hängen geblieben ist.
@@ -2197,6 +2222,14 @@ def main():
             for d in targets:
                 _device_volume[d] = int(value)
                 mqtt_handler.publish_volume_set(d, int(value))
+        elif key == "led_brightness":
+            percent = int(value)
+            if not 0 <= percent <= 100:
+                log.warning(f"[satellite_control] led_brightness {percent} außerhalb von 0-100 — ignoriert.")
+                return
+            for d in targets:
+                if satellite_manager.set_satellite_led_brightness(d, percent):
+                    _push_led_brightness(d, percent)
         elif key == "capture":
             # capture ist immer device_id-gebunden (nie Raum-Broadcast, #230) —
             # targets ist hier trotzdem eine Liste, weil device_id oben nicht immer gesetzt sein muss.
@@ -2457,6 +2490,7 @@ def main():
             mqtt_handler.publish_restart(device),
             satellite_manager.mark_restarted(device),
         ),
+        on_led_brightness=_push_led_brightness,
         on_timer_fired=_on_timer_fired,
         on_timer_list=_on_timer_list,
         on_timer_connected=_on_timer_connected,

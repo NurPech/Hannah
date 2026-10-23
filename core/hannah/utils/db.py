@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS "satellites" (
 	"update_available"	INTEGER NOT NULL DEFAULT 0,
 	"new_version"	TEXT,
 	"smalltalk_followup_listen"	INTEGER NOT NULL DEFAULT 0,
+	"led_brightness"	INTEGER NOT NULL DEFAULT 100,
 	"last_restart_at"	TEXT,
 	"last_reported_restart_count"	INTEGER,
 	"last_reported_coredump_pending"	INTEGER,
@@ -321,6 +322,10 @@ def init_db():
 
     if "smalltalk_followup_listen" not in _col_names(db, "satellites"):
         db.execute('ALTER TABLE "satellites" ADD COLUMN "smalltalk_followup_listen" INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+
+    if "led_brightness" not in _col_names(db, "satellites"):
+        db.execute('ALTER TABLE "satellites" ADD COLUMN "led_brightness" INTEGER NOT NULL DEFAULT 100')
         db.commit()
 
     if "sender_user_id" not in _col_names(db, "messages"):

@@ -4,6 +4,20 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.101.0 (2026-10-23)
+### Hannah Core
+
+* Added: Hannah Core now keeps the brightness of each satellite's LED ring (0 to 100 percent, 0 = ring off) and is the one that decides it. It sends the value to a satellite when the satellite connects and every time it changes, so a satellite that restarts or has lost its stored value gets the right brightness back. The brightness is part of the satellite list (`GetSatellites`), can be changed with the new call `SetSatelliteLedBrightness`, and an ioBroker adapter that supports it can read and set it too. If someone sets a different value directly on a satellite over MQTT, Core takes that value over, so the two do not work against each other. Needs hannah-proto 5.5 (Refs #453)
+
+### Telegram
+
+* Fixed: the Telegram bot no longer fails against a Hannah Core that still speaks the older API generation (`hannah.v1`) once the current Hannah schema (hannah-proto 5.5) is installed. The shared client library did not know the new call for the LED ring brightness and broke while it set up the connection, so no command went through. It now needs hannah-grpc-lib 0.12 (Refs #453)
+
+### Satellite Firmware
+
+* Fixed: a satellite no longer misses the LED ring brightness that Hannah Core sends right after it connects to the MQTT broker. The value could arrive before the satellite was ready for it and was then lost, so the ring kept its old brightness until the next change. The satellite now holds on to it and applies it as soon as it is ready (Refs #453)
+* Fixed: a satellite no longer crashes when the WLAN drops and the connection to the MQTT broker cannot be re-established right away. The task that sends the heartbeat asked the MQTT client for the size of its outgoing queue, and the client does not answer while it is busy with a connection attempt, which can take up to 20 seconds. The watchdog saw the heartbeat task as stuck after 5 seconds and restarted the satellite with a crash. The size is now taken from the last MQTT event instead, so the heartbeat task never waits for the MQTT client (Refs #449)
+* Fixed: the LED ring of a muted satellite no longer flickers between the speaking and the mute display while it plays an announcement. A muted satellite switched the ring back to mute many times a second and overwrote the speaking display each time. Now the ring shows the speaking display for the whole announcement and goes back to mute when it ends (Refs #444)
 
 ## 0.100.1 (2026-10-21)
 ### Hannah Core

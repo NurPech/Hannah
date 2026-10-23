@@ -151,6 +151,86 @@ class TestCoredumpPendingReport:
         ))
 
 
+class TestLedBrightness:
+    """#453 — der Satellit meldet seine LED-Helligkeit auf led_brightness/state (Prozent als Text),
+    Core hält sie als retained led_brightness/set fest."""
+
+    def _raw(self, topic: str, payload: bytes, retain: bool = False) -> SimpleNamespace:
+        return SimpleNamespace(topic=topic, payload=payload, retain=retain)
+
+    def test_retained_snapshot_is_ignored(self):
+        """Der retained Stand beim Abonnieren kann von einem Satelliten stammen, der gerade aus ist."""
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_led_brightness_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, self._raw(
+            "hannah/satellite/wz-sat/led_brightness/state", b"30", retain=True,
+        ))
+
+        assert results == []
+
+    def test_dispatches_reported_value(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_led_brightness_handler(lambda device, percent: results.append((device, percent)))
+
+        handler._on_message(None, None, self._raw("hannah/satellite/wz-sat/led_brightness/state", b"30"))
+
+        assert results == [("wz-sat", 30)]
+
+    def test_zero_is_dispatched(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_led_brightness_handler(lambda device, percent: results.append((device, percent)))
+
+        handler._on_message(None, None, self._raw("hannah/satellite/wz-sat/led_brightness/state", b"0"))
+
+        assert results == [("wz-sat", 0)]
+
+    def test_value_is_clamped(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_led_brightness_handler(lambda device, percent: results.append(percent))
+
+        handler._on_message(None, None, self._raw("hannah/satellite/wz-sat/led_brightness/state", b"180"))
+
+        assert results == [100]
+
+    def test_non_numeric_payload_is_ignored(self):
+        handler = MQTTHandler({}, {})
+        results = []
+        handler.set_led_brightness_handler(lambda *a: results.append(a))
+
+        handler._on_message(None, None, self._raw("hannah/satellite/wz-sat/led_brightness/state", b"hell"))
+
+        assert results == []
+
+    def test_no_handler_registered_does_not_raise(self):
+        handler = MQTTHandler({}, {})
+
+        handler._on_message(None, None, self._raw("hannah/satellite/wz-sat/led_brightness/state", b"30"))
+
+    def test_set_is_published_retained(self):
+        handler = MQTTHandler({}, {})
+        handler._client = MagicMock()
+
+        handler.publish_led_brightness_set("wz-sat", 30)
+
+        handler._client.publish.assert_called_once_with(
+            "hannah/satellite/wz-sat/led_brightness/set", "30", qos=1, retain=True,
+        )
+
+    def test_state_topic_is_subscribed_on_connect(self):
+        handler = MQTTHandler({}, {})
+        client = MagicMock()
+
+        handler._on_connect(client, None, None, 0, None)
+
+        topics = [call.args[0] for call in client.subscribe.call_args_list]
+        assert "hannah/satellite/+/led_brightness/state" in topics
+
+
 class TestPlaybackBusy:
     """#304 — Busy-Flag pro Satellit, unabhängig vom playback_done-Ack, damit
     überlappende TTS/Announcement-Sends auf denselben Satelliten verworfen statt

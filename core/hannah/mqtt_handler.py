@@ -25,8 +25,9 @@ class MQTTHandler:
         self._topic_sat_volume_state = "hannah/satellite/+/volume/state"
         self._topic_sat_mute_state   = "hannah/satellite/+/mute/state"
         self._topic_sat_dnd          = "hannah/satellite/+/dnd"
+        self._topic_sat_led_brightness_state = "hannah/satellite/+/led_brightness/state"
 
-        self._on_announcement:       Optional[Callable[[str, str], None]] = None
+        self._on_announcement:      Optional[Callable[[str, str], None]] = None
         self._on_room_announce:      Optional[Callable[[str, str], None]] = None
         self._on_room_announce_ssml: Optional[Callable[[str, str], None]] = None
         self._on_notification:       Optional[Callable[[str, str], None]] = None
@@ -34,6 +35,7 @@ class MQTTHandler:
         self._on_volume: Optional[Callable[[Optional[str], int], None]] = None
         self._on_mute:   Optional[Callable[[str, bool], None]] = None
         self._on_dnd:    Optional[Callable[[str, bool], None]] = None
+        self._on_led_brightness: Optional[Callable[[str, int], None]] = None
 
         self._on_ota_pending: Optional[Callable[[str, str], None]] = None
         self._on_firmware:    Optional[Callable[[str, str, str, int], None]] = None
@@ -94,6 +96,11 @@ class MQTTHandler:
     def set_dnd_handler(self, callback: Callable[[str, bool], None]):
         self._on_dnd = callback
 
+    def set_led_brightness_handler(self, callback: Callable[[str, int], None]):
+        """callback(device, percent) — der Satellit meldet seine LED-Helligkeit auf
+        led_brightness/state (#453)."""
+        self._on_led_brightness = callback
+
     def publish_volume_state(self, level: int, device: Optional[str] = None):
         topic = (f"hannah/satellite/{device}/volume/state" if device
                  else f"{self._topic_global_volume}/state")
@@ -114,6 +121,11 @@ class MQTTHandler:
     def publish_dnd_state(self, device: str, active: bool):
         self._client.publish(f"hannah/satellite/{device}/dnd/state",
                              "true" if active else "false", qos=1, retain=True)
+
+    def publish_led_brightness_set(self, device: str, percent: int):
+        """Retained, damit ein Satellit den Wert auch nach einem eigenen Neustart bekommt (#453)."""
+        self._client.publish(f"hannah/satellite/{device}/led_brightness/set",
+                             str(percent), qos=1, retain=True)
 
     # ------------------------------------------------------------------
     # OTA / firmware / sensors / BLE
@@ -296,7 +308,8 @@ class MQTTHandler:
         client.subscribe(self._topic_sat_volume_state, qos=1)
         client.subscribe(self._topic_sat_mute_state, qos=1)
         client.subscribe(self._topic_sat_dnd, qos=1)
-        log.info("Satellit-Steuerung abonniert: volume/state / mute/state / dnd")
+        client.subscribe(self._topic_sat_led_brightness_state, qos=1)
+        log.info("Satellit-Steuerung abonniert: volume/state / mute/state / dnd / led_brightness/state")
 
         client.subscribe("hannah/satellite/+/ota/pending", qos=1)
         client.subscribe("hannah/satellite/+/firmware", qos=1)
@@ -431,6 +444,18 @@ class MQTTHandler:
                 device = topic[len(prefix):-len("/dnd")]
                 if self._on_dnd:
                     self._on_dnd(device, raw.lower() in ("true", "1", "yes", "on"))
+                return
+            if topic.endswith("/led_brightness/state"):
+                device = topic[len(prefix):-len("/led_brightness/state")]
+                # Der Broker liefert beim Abonnieren den retained Stand von früher (retain=True),
+                # etwa von einem Satelliten, der gerade aus ist. Nur eine Live-Meldung zeigt, was
+                # der Satellit jetzt hat — sonst überschriebe ein alter Stand einen Wert, den Core
+                # inzwischen gesetzt hat (#453).
+                if self._on_led_brightness and not msg.retain:
+                    try:
+                        self._on_led_brightness(device, max(0, min(100, int(raw))))
+                    except ValueError:
+                        pass
                 return
 
         if topic == self._topic_notification_in:

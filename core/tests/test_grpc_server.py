@@ -22,11 +22,11 @@ from hannah.residents.Roomie import Roomie
 from hannah.iobroker import IoBrokerClient
 from hannah.weather import WeatherCache
 from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
-from hannah_proto.v2.hannah_pb2 import AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreatePresenceSourceRequest, UpdatePresenceSourceRequest, DeletePresenceSourceRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand, StartVoiceEnrollmentRequest
+from hannah_proto.v2.hannah_pb2 import AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, SetSatelliteLedBrightnessRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreatePresenceSourceRequest, UpdatePresenceSourceRequest, DeletePresenceSourceRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand, StartVoiceEnrollmentRequest
 from hannah.satellite_manager import SatellitePermissionError
 from hannah.grpc_interceptors import CallerIdentity
 
-def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_presence_source_records=None,create_presence_source=None,update_presence_source=None,delete_presence_source=None,get_residents=None,get_devices=None):
+def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_presence_source_records=None,create_presence_source=None,update_presence_source=None,delete_presence_source=None,get_residents=None,get_devices=None,on_led_brightness=None):
     return HannahServicer(
         user_manager=user_manager or MagicMock(),
         satellite_manager=satellite_manager or MagicMock(),
@@ -42,6 +42,7 @@ def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handl
         on_agent_room_snapshot=on_agent_room_snapshot,
         on_weather_update=on_weather_update,
         on_satellite_change=on_satellite_change,
+        on_led_brightness=on_led_brightness,
         resolve_satellite_room=resolve_satellite_room,
         upsert_satellite=upsert_satellite,
         get_rooms=get_rooms,
@@ -589,6 +590,114 @@ class TestSatelliteRpcs:
 
         assert response.ok is False
         assert response.message == "forbidden"
+
+    def test_get_satellites_includes_led_brightness(self):
+        servicer = _make_server(
+            get_satellites=lambda: {},
+            get_db_satellites=lambda: [{"device_id": "wz-sat", "led_brightness": 0}],
+        )
+
+        sat = servicer.GetSatellites(None, None).satellites[0]
+
+        assert sat.HasField("led_brightness")   # 0 (Ring aus) ist ein Wert, nicht "unbekannt"
+        assert sat.led_brightness == 0
+
+    def test_get_satellites_without_led_brightness_leaves_it_unset(self):
+        servicer = _make_server(
+            get_satellites=lambda: {},
+            get_db_satellites=lambda: [{"device_id": "wz-sat"}],
+        )
+
+        sat = servicer.GetSatellites(None, None).satellites[0]
+
+        assert not sat.HasField("led_brightness")
+
+    def test_set_satellite_led_brightness_ok(self):
+        satellite_manager = MagicMock(set_satellite_led_brightness=MagicMock(return_value=True))
+        upsert = MagicMock()
+        on_led_brightness = MagicMock()
+        servicer = _make_server(
+            satellite_manager=satellite_manager, upsert_satellite=upsert, on_led_brightness=on_led_brightness,
+        )
+
+        response = servicer.SetSatelliteLedBrightness(
+            SetSatelliteLedBrightnessRequest(device_id="wz-sat", percent=30, requestor_id=1), None,
+        )
+
+        upsert.assert_called_once_with("wz-sat")
+        satellite_manager.set_satellite_led_brightness.assert_called_once_with("wz-sat", 30, requestor_id=1)
+        on_led_brightness.assert_called_once_with("wz-sat", 30)
+        assert response.ok is True
+
+    def test_set_satellite_led_brightness_zero_is_accepted(self):
+        satellite_manager = MagicMock(set_satellite_led_brightness=MagicMock(return_value=True))
+        servicer = _make_server(satellite_manager=satellite_manager)
+
+        response = servicer.SetSatelliteLedBrightness(
+            SetSatelliteLedBrightnessRequest(device_id="wz-sat", percent=0, requestor_id=1), None,
+        )
+
+        assert response.ok is True
+        satellite_manager.set_satellite_led_brightness.assert_called_once_with("wz-sat", 0, requestor_id=1)
+
+    def test_set_satellite_led_brightness_not_found(self):
+        satellite_manager = MagicMock(set_satellite_led_brightness=MagicMock(return_value=False))
+        on_led_brightness = MagicMock()
+        servicer = _make_server(satellite_manager=satellite_manager, on_led_brightness=on_led_brightness)
+
+        response = servicer.SetSatelliteLedBrightness(
+            SetSatelliteLedBrightnessRequest(device_id="unknown", percent=30, requestor_id=1), None,
+        )
+
+        assert response.ok is False
+        on_led_brightness.assert_not_called()
+
+    def test_set_satellite_led_brightness_forbidden(self):
+        satellite_manager = MagicMock(
+            set_satellite_led_brightness=MagicMock(side_effect=SatellitePermissionError("nope")),
+        )
+        on_led_brightness = MagicMock()
+        servicer = _make_server(satellite_manager=satellite_manager, on_led_brightness=on_led_brightness)
+
+        response = servicer.SetSatelliteLedBrightness(
+            SetSatelliteLedBrightnessRequest(device_id="wz-sat", percent=30, requestor_id=1), None,
+        )
+
+        assert response.ok is False
+        assert response.message == "forbidden"
+        on_led_brightness.assert_not_called()
+
+    @pytest.mark.parametrize("percent", [-1, 101])
+    def test_set_satellite_led_brightness_out_of_range(self, percent):
+        satellite_manager = MagicMock()
+        servicer = _make_server(satellite_manager=satellite_manager)
+
+        response = servicer.SetSatelliteLedBrightness(
+            SetSatelliteLedBrightnessRequest(device_id="wz-sat", percent=percent, requestor_id=1), None,
+        )
+
+        assert response.ok is False
+        satellite_manager.set_satellite_led_brightness.assert_not_called()
+
+    def test_agent_satellite_update_carries_led_brightness(self):
+        servicer = _make_server()
+        session = MagicMock()
+        servicer._agent_sessions.append(session)
+
+        servicer.agent_satellite_update("wz-sat", "wohnzimmer", "", True, led_brightness=0)
+
+        update = session.put.call_args.args[0].satellite_update
+        assert update.HasField("led_brightness")
+        assert update.led_brightness == 0
+
+    def test_agent_satellite_update_without_led_brightness_leaves_it_unset(self):
+        servicer = _make_server()
+        session = MagicMock()
+        servicer._agent_sessions.append(session)
+
+        servicer.agent_satellite_update("wz-sat", "wohnzimmer", "", True, volume=40)
+
+        assert not session.put.call_args.args[0].satellite_update.HasField("led_brightness")
 
     def test_delete_satellite_ok(self):
         satellite_manager = MagicMock(
