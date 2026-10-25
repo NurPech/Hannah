@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "hannah_audio.c"
+    SRCS "hannah_audio.c" "ref_timeline.c"
     INCLUDE_DIRS "."
     REQUIRES
         nurpech__audiolib

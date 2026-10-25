@@ -75,7 +75,10 @@ static tflite::MicroResourceVariables    *s_resource_vars    = nullptr;
 static TfLiteTensor                      *s_input            = nullptr;
 static TfLiteTensor                      *s_output           = nullptr;
 static uint8_t                           *s_model_override_buf = nullptr;
+static size_t                             s_model_override_size = 0;
 static size_t                             s_input_frame_count = 1;  /* #181: aggregierte Frames pro Invoke */
+static size_t                             s_block_fill        = 0;  /* Streaming-Modelle mit Schrittweite > 1: schon gefüllte Frame-Plätze */
+static float                              s_block_last_out    = 0.0f; /* Ausgabe des letzten Invoke, zwischen zwei Invokes gehalten */
 
 /* Debug-Snapshot des letzten process()-Aufrufs (#173) */
 static size_t   s_last_feat_size                                            = 0;
@@ -98,6 +101,7 @@ static const tflite::Model *load_model(void)
         if (m->version() == TFLITE_SCHEMA_VERSION) {
             ESP_LOGI(TAG, "Wakeword-Override aus Asset-Cache geladen (%u Bytes).",
                      (unsigned)override_size);
+            s_model_override_size = override_size;
             return m;
         }
         ESP_LOGW(TAG, "Wakeword-Override ungültig (Schema-Version) — "
@@ -313,6 +317,8 @@ static void tflite_init(void)
         return;
     }
     s_input_frame_count = s_input->bytes / FRONTEND_NUM_CHANNELS;
+    s_block_fill        = 0;
+    s_block_last_out    = 0.0f;
     ESP_LOGI(TAG, "Wakeword-Input: %u Frame(s) à %u Werte (%u B gesamt).",
              (unsigned)s_input_frame_count, (unsigned)FRONTEND_NUM_CHANNELS,
              (unsigned)s_input->bytes);
@@ -405,15 +411,17 @@ float hannah_wakeword_process(const int16_t *pcm)
     s_last_num_read  = num_read;
     if (feat.size == 0) return 0.0f;   /* Noch kein vollständiger Frame */
 
-    /* #181: bei Modellen mit mehr als einem Frame pro Input (z.B. okay_nabu)
-     * ältere Frames nach vorne schieben, neuesten Frame hinten anhängen
-     * (Sliding Window). Bei s_input_frame_count==1 (hey_hannah) ist der
-     * memmove ein No-Op — identisch zum bisherigen Verhalten. Annahme:
-     * Frame-Reihenfolge im Tensor ist zeitlich aufsteigend (älteste zuerst). */
-    size_t tail_offset = (s_input_frame_count - 1) * feat.size;
-    if (s_input_frame_count > 1) {
-        memmove(s_input->data.raw, s_input->data.raw + feat.size, tail_offset);
-    }
+    /* #181: bei Modellen mit mehr als einem Frame pro Input (z.B. okay_nabu_v2)
+     * sind das Streaming-Modelle mit Schrittweite n (Zustand in Resource-Variablen):
+     * sie erwarten bei jedem Invoke n NEUE Frames, ohne Überlappung (so füttert auch
+     * ESPHome microWakeWord). Ein Sliding Window um einen Frame mit Invoke je Frame
+     * speist ihren Zustand mit überlappenden Daten und verschlechtert die Erkennung.
+     * Deshalb: Frames der Reihe nach in die Plätze 0..n-1 schreiben, erst beim n-ten
+     * Frame Invoke, dazwischen die letzte Ausgabe halten. Bei s_input_frame_count==1
+     * (hey_hannah) unverändert: Platz 0, Invoke je Frame. Annahme: Frame-Reihenfolge
+     * im Tensor ist zeitlich aufsteigend (älteste zuerst). */
+    const bool block_feed = s_input_frame_count > 1;
+    size_t tail_offset = block_feed ? s_block_fill * feat.size : 0;
 
     /* uint16 → int8/uint8 quantisieren (je nach Modell-Input-Dtype), neuesten
      * Frame ans Ende schreiben. Kombinierte Skala: FrontendOutput-Rohwerte
@@ -447,6 +455,11 @@ float hannah_wakeword_process(const int16_t *pcm)
         }
     }
 
+    if (block_feed) {
+        if (++s_block_fill < s_input_frame_count) return s_block_last_out;
+        s_block_fill = 0;
+    }
+
     if (s_interpreter->Invoke() != kTfLiteOk) {
         s_invoke_fail_count++;
         /* Nicht bei jedem Fehlschlag loggen (könnte pro 10ms-Frame passieren und
@@ -457,7 +470,9 @@ float hannah_wakeword_process(const int16_t *pcm)
     int32_t raw = s_output_is_int8 ? (int32_t)s_output->data.int8[0]
                                     : (int32_t)s_output->data.uint8[0];
     s_last_output_raw = (uint8_t)raw;  /* Debug-Rohbyte, siehe hannah_wakeword_debug_t */
-    return (float)(raw - s_output_zero_point) * s_output_scale;
+    const float out = (float)(raw - s_output_zero_point) * s_output_scale;
+    if (block_feed) s_block_last_out = out;
+    return out;
 }
 
 void hannah_wakeword_last_debug(hannah_wakeword_debug_t *out)
@@ -467,6 +482,8 @@ void hannah_wakeword_last_debug(hannah_wakeword_debug_t *out)
     out->num_read          = s_last_num_read;
     out->output_raw        = s_last_output_raw;
     out->invoke_fail_count = s_invoke_fail_count;
+    out->input_frames      = (uint8_t)s_input_frame_count;
+    out->model_bytes       = s_model_override_buf ? s_model_override_size : (size_t)hey_hannah_int8_tflite_len;
     memcpy(out->input_preview, s_last_input_preview, sizeof(out->input_preview));
     memcpy(out->mel_preview,   s_last_mel_preview,   sizeof(out->mel_preview));
 }

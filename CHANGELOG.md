@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.102.0 (2026-10-25)
+### Satellite Firmware
+
+* Added: a Rev. 5 satellite can now hear its wake word while it is speaking itself. It removes its own playback from the microphone signal with an echo canceller (Speex MDF from AudioLib) that protects the voice of the person talking over it. On the test satellite, "Okay Nabu" was recognized in 44 of 100 runs over playback, against 7 of 100 with the earlier filter that was tried. The canceller needs about 30 KB of RAM and 4.5 ms of each 10 ms microphone frame. It is off by default (`CONFIG_HANNAH_AEC`) and switched on for Rev. 5 (Refs #226)
+* Changed: the wake word detection of a satellite now runs in its own task instead of inside the microphone task. Together with the echo canceller, the microphone task would have been busy for almost all of each 10 ms frame, and a short pause (for example while a log line is written to the console) could make it lose microphone audio. The detection itself does not change (Refs #226)
+* Fixed: a wake word model that takes several audio frames per step (such as `okay_nabu_v2`) now gets only new frames at every step, without overlap, as it expects. Before, it was fed overlapping data and recognized the wake word worse. The wake word debug line now also shows the size and frame count of the loaded model (Refs #226)
+
 ## 0.101.1 (2026-10-23)
 ### Satellite Firmware
 

@@ -54,3 +54,7 @@ CONFIG_HANNAH_WAKEWORD_DEBUG=y
 # Pegel = 100% für den Satelliten (Refs #232, Schätzwert, ggf. nachjustiert
 # per NVS/WebUI)
 CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT=70
+
+# Echo-Canceller (Refs #226): Speex-MDF aus AudioLib, damit das Wake Word auch
+# erkannt wird, während der Satellit selbst spricht (Filterlänge 256 Taps = Standard)
+CONFIG_HANNAH_AEC=y

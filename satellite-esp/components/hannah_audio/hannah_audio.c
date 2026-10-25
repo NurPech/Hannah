@@ -21,6 +21,7 @@
 #include "hannah_led.h"
 #include "hannah_wakeword.h"
 #include "libhannah_audio.h"
+#include "ref_timeline.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,7 @@
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #if CONFIG_HANNAH_MIC_TYPE_PDM
@@ -198,6 +200,21 @@ static volatile int16_t  s_ms_out_peak    = 0;
 static volatile uint32_t s_spk_frames_sent    = 0;
 static uint32_t          s_spk_frames_written = 0;
 static volatile bool     s_music_muted        = false;
+
+#if CONFIG_HANNAH_AEC
+/* AEC-Referenz auf einer Zeitachse (Refs #226). Eine FIFO, die der mic_task in der Reihenfolge verbraucht,
+ * in der er die Referenz abholt, lässt die Wiedergabe-Verzögerung mit Chunk-Bursts und Ringpuffer-Füllstand um
+ * mehrere ms wandern; auch eine Zeitachse, auf der die Chunks beim Schreiben platziert werden, trägt nicht: wo ein
+ * geschriebener Chunk im DMA-Ring ausgegeben wird, hängt vom Füllstand der Warteschlange ab (Phasensprünge von
+ * ±6..8 Samples, ein 88-ms-Loch nach dem Start). Deshalb wird die Zeitachse im on_sent-Callback des TX-DMA gefüllt,
+ * aus dem Puffer, der gerade ausgegeben wurde (i2s_event_data_t.dma_buf, auto_clear löscht erst nach dem Callback):
+ * was dort steht, ist exakt das, was ausgegeben wurde, Stille und Musik eingeschlossen. Der mic_task liest zu jedem
+ * Frame die Stelle, die der Ausgabezähler (s_spk_frames_sent) zu diesem Zeitpunkt hat. */
+#define REF_TL_LEN 4096                                 /* 256 ms bei SAMPLE_RATE, Zweierpotenz; internes RAM, weil der DMA-Callback (ISR) schreibt */
+static int16_t           s_ref_tl[REF_TL_LEN];          /* Index = (Ausgabeposition / SPK_UPSAMPLE) mod REF_TL_LEN */
+static volatile uint32_t s_ref_tl_end16   = 0;          /* erste noch nicht beschriebene Position (SAMPLE_RATE-Samples) */
+static volatile int64_t  s_spk_sent_ts_us = 0;          /* Zeitpunkt des letzten DMA-Deskriptor-Abschlusses */
+#endif
 static volatile bool     s_ptt_active        = false;
 /* PTT durchbricht bewusst den Hardware-Mute (#296): nur mic_task selbst
  * schreibt/liest das, kein ISR-Zugriff nötig. Mic-Stromversorgung (GPIO,
@@ -237,6 +254,25 @@ static volatile int      s_volume                 = CONFIG_HANNAH_VOLUME_DEFAULT
 static volatile bool     s_notifications_pending  = false;  /* ungelesene Messages, #234 */
 static hannah_webrtc_vad_state_t s_webrtc_vad;
 static float              s_noise_floor_ema = 0.020f; /* adaptiver Noise-Floor-Schätzer */
+
+#if CONFIG_HANNAH_WAKEWORD_ENABLED && !CONFIG_HANNAH_MIC_TYPE_NONE
+/* Wakeword-Inferenz in eigenem Task (Refs #226). Sie lief inline im mic_task: im Mittel 5,4 ms
+ * je 10-ms-Frame (bis 48 ms) neben ~2,8 ms für Beamforming/Resampling/AEC ergaben ~95 % Auslastung
+ * ohne Reserve. Jede Pause des Tasks (z. B. die synchrone 115200-Baud-Konsole, 3 Logzeilen alle
+ * 500 ms = bis zu ~85 ms) baute einen Rückstau auf, der nie abgebaut wurde, bis die RX-Queue
+ * überlief und ganze 10-ms-Frames verloren gingen. Jetzt gibt der mic_task die fertigen Frames
+ * über eine kleine Queue an den ww_task (Core 1) und liest nur noch das zuletzt berechnete
+ * Maximum der Confidence seit seinem letzten Abholen. Ist die Queue voll, wird der neue Frame
+ * verworfen (zählt s_ww_dropped), der mic_task wartet nie. */
+#define WW_Q_FRAMES 8
+static int16_t           s_ww_q[WW_Q_FRAMES][WAKEWORD_STEP_SAMPLES];
+static volatile uint32_t s_ww_q_wr   = 0;       /* nur mic_task schreibt */
+static volatile uint32_t s_ww_q_rd   = 0;       /* nur ww_task schreibt (bei Pause auch zurückgesetzt) */
+static TaskHandle_t      s_ww_task   = NULL;
+static float             s_ww_conf_max = 0.0f;  /* größte Confidence seit dem letzten ww_take_confidence() */
+static volatile uint32_t s_ww_dropped = 0;
+static portMUX_TYPE      s_ww_mux    = portMUX_INITIALIZER_UNLOCKED;
+#endif
 /* Lautstärke im NVS merken (Refs #445): jede Änderung startet einen Timer, geschrieben wird erst
  * nach VOLUME_SAVE_DELAY_US Ruhe, also einmal je Änderungsserie statt bei jedem Tastendruck. */
 #define VOLUME_NVS_KEY        "volume"
@@ -734,8 +770,21 @@ static IRAM_ATTR bool spk_on_sent(i2s_chan_handle_t handle, i2s_event_data_t *ev
 {
     (void)handle;
     (void)user_ctx;
+#if !CONFIG_HANNAH_AEC
     s_spk_frames_sent += (uint32_t)(event->size / 2);
     return false;
+#else
+    const uint32_t s0 = s_spk_frames_sent;
+    const uint32_t n  = (uint32_t)(event->size / 2);
+    /* Refs #226: das gerade ausgegebene Stück auf SAMPLE_RATE mitteln und an seine Position der
+     * Ausgabe-Zeitachse legen (ref_timeline.h, Host-Test test_ref_tl_io.c). Ein Deskriptor ist ein
+     * Vielfaches von SPK_UPSAMPLE Frames lang (120), s0 damit auch. */
+    if (event->dma_buf)
+        s_ref_tl_end16 = ref_tl_store(s_ref_tl, REF_TL_LEN, s0, (const int16_t *)event->dma_buf, n, SPK_UPSAMPLE);
+    s_spk_frames_sent = s0 + n;
+    s_spk_sent_ts_us  = esp_timer_get_time();   /* Zeitbezug für die AEC-Referenz-Zeitachse */
+    return false;
+#endif
 }
 
 static esp_err_t speaker_init(void)
@@ -928,6 +977,177 @@ static inline void mic_led(led_state_t state)
     }
 }
 
+/* Echo-Canceller (Refs #226): Speex-MDF aus AudioLib (hannah_aec_*), 10-ms-Frames mit 16 kHz.
+ * Der Filterzustand bleibt zwischen Ansagen erhalten (kalt braucht Speex ~3 s zum Einschwingen). */
+#if CONFIG_HANNAH_AEC
+static hannah_aec_state_t s_aec;
+static bool               s_aec_ready = false;
+
+/* Liest zu diesem Mikrofon-Frame das Stück der Referenz-Zeitachse, das zu diesem
+ * Zeitpunkt am I2S-Ausgang liegt (Refs #226). Der Ausgabezähler s_spk_frames_sent
+ * springt nur alle Deskriptoren (120 Frames = 2,5 ms): mit dem Zeitstempel des
+ * letzten Sprungs wird dazwischen interpoliert. Die Abweichung zwischen Mikrofon-
+ * und Lautsprecher-Zeitachse (je an Zählern getaktet) hält ref_timeline.c fest, damit
+ * das Aufwachen des mic_task (±1-2 ms) nicht ins Ergebnis geht. Der Rest — Wartetiefe
+ * der TX-DMA-Warteschlange (~80 ms), Weg zum Mikrofon, Verarbeitung — ist konstant;
+ * das Filter des Echo-Cancellers deckt ihn ab. */
+static void ref_from_timeline(int16_t *ref_frame, size_t n)
+{
+    memset(ref_frame, 0, n * sizeof(int16_t));
+#if CONFIG_HANNAH_SPEAKER_ENABLED
+    static bool     s_init       = false;
+    static uint32_t s_last_sent  = 0;
+    static int64_t  s_unwrapped  = 0;   /* Ausgabezähler ohne 32-Bit-Überlauf, startet beim absoluten Zählerstand */
+    static int64_t  s_pll_off    = 0;   /* geglätteter Versatz zur Mikrofon-Zeitachse */
+    static int64_t  s_frame_idx  = 0;   /* Mikrofon-Frames seit Start, in Ausgabe-Frames: * n * SPK_UPSAMPLE */
+
+    const uint32_t sent = s_spk_frames_sent;
+    const int64_t  ts   = s_spk_sent_ts_us;
+    const int64_t  now  = esp_timer_get_time();
+    if (!s_init) {
+        s_last_sent = sent;
+        s_unwrapped = sent;   /* absolut starten: spk_on_sent() legt die Daten an absoluten Zählerpositionen ab */
+        s_init = true;
+    }
+    s_unwrapped += (int32_t)(sent - s_last_sent);
+    s_last_sent  = sent;
+
+    int64_t dt = now - ts;
+    if (dt < 0) dt = 0;
+    int64_t frac = dt * SPK_RATE / 1000000LL;
+    if (frac > 120) frac = 120;     /* länger als ein Deskriptor = ISR hängt, nicht weiter hochzählen */
+    const int64_t est48  = s_unwrapped + frac;
+    const int64_t frame_len48 = (int64_t)n * SPK_UPSAMPLE;
+    const int64_t meas_off = est48 - s_frame_idx * frame_len48;
+
+    /* Der Versatz zwischen den beiden Zeitachsen ist konstant: Mikrofon-RX und Lautsprecher-TX laufen mit
+     * 48 kHz aus derselben Taktquelle mit demselben Teiler, es gibt keine Drift. Jede Einzelmessung rauscht
+     * aber nach oben (der mic_task wacht spät auf, z. B. beim Start eines Assets, wenn das SPIFFS-Lesen ihn
+     * verdrängt). Ein Regler, der solchen Verspätungen nachgibt, verschiebt die Referenz um bis zu 15 Samples.
+     * ref_timeline.c nimmt stattdessen das Minimum über ein Fenster von 100 Frames und hält den Versatz fest
+     * (Details und Host-Test dort). */
+    static ref_tl_t s_tl;
+    static bool     s_tl_init = false;
+    if (!s_tl_init) {
+        ref_tl_init(&s_tl, 5 * (SPK_RATE / 1000));   /* 5 ms: ab hier gilt ein Fenster als Sprung */
+        s_tl_init = true;
+    }
+    s_pll_off = ref_tl_update(&s_tl, meas_off);
+    /* geglättete Ausgabeposition "jetzt" = Ende dieses Frames, einen Deskriptor (120 Frames,
+     * 2,5 ms) zurückversetzt: die Zeitachse enthält nur schon vollständig ausgegebene
+     * Deskriptoren, ein Lesen bis "jetzt" würde in den noch laufenden greifen (Stille). */
+    const int64_t end48 = s_pll_off + s_frame_idx * frame_len48 - 120;
+    s_frame_idx++;
+
+    /* Lesen mit Catmull-Rom zwischen zwei Samples, Stille vor dem beschriebenen Ende und hinter dem
+     * überschriebenen Teil: ref_timeline.c, Host-Test test_ref_tl_io.c. */
+    ref_tl_read(s_ref_tl, REF_TL_LEN, s_ref_tl_end16, end48, SPK_UPSAMPLE, ref_frame, n);
+#endif
+}
+#endif /* CONFIG_HANNAH_AEC */
+
+/* Holt das zum Frame passende Stück Referenz und führt die AEC aus. Läuft
+ * unconditional mit, auch außerhalb von STREAMING/Warmup, damit die Zeitachse
+ * durchgehend mitläuft. Ohne CONFIG_HANNAH_AEC bleibt mic_frame unverändert. */
+static void aec_run(int16_t *mic_frame, size_t n)
+{
+#if CONFIG_HANNAH_AEC
+    if (!s_aec_ready) return;
+    int16_t ref_frame[STEP_SAMPLES];
+    ref_from_timeline(ref_frame, n);
+    hannah_aec_process(&s_aec, mic_frame, ref_frame, (int)n);
+#else
+    (void)mic_frame;
+    (void)n;
+#endif
+}
+
+#if CONFIG_HANNAH_WAKEWORD_ENABLED
+/* Reicht einen fertigen 10-ms-Frame an den ww_task weiter. Wartet nie: bei voller Queue wird der
+ * Frame verworfen (das Wakeword-Frontend verträgt eine 10-ms-Lücke), die Mikrofon-Kette läuft weiter. */
+static void ww_push(const int16_t *pcm)
+{
+    const uint32_t wr = s_ww_q_wr;
+    if (wr - s_ww_q_rd >= WW_Q_FRAMES) {
+        s_ww_dropped++;
+        return;
+    }
+    memcpy(s_ww_q[wr % WW_Q_FRAMES], pcm, sizeof(s_ww_q[0]));
+    __sync_synchronize();
+    s_ww_q_wr = wr + 1;
+    if (s_ww_task) xTaskNotifyGive(s_ww_task);
+}
+
+/* Größte Confidence, die der ww_task seit dem letzten Aufruf berechnet hat (und setzt sie zurück). */
+static float ww_take_confidence(void)
+{
+    portENTER_CRITICAL(&s_ww_mux);
+    const float c = s_ww_conf_max;
+    s_ww_conf_max = 0.0f;
+    portEXIT_CRITICAL(&s_ww_mux);
+    return c;
+}
+
+/* Läuft auf Core 1 (Priorität unter dem Speaker-Task), Stack im PSRAM. Parkt bei OTA wie früher der
+ * mic_task: das Give auf s_wakeword_parked_sem bestätigt, dass hier kein hannah_wakeword_process() /
+ * Invoke() mehr in Flight ist (#196), erst danach gibt der OTA-Task die TFLite-Arena frei. */
+static void ww_task(void *arg)
+{
+    (void)arg;
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+    uint32_t dbg_ctr      = 0;
+    float    dbg_max      = 0.0f;
+    float    dbg_peak     = 0.0f;
+    size_t   dbg_min_feat = SIZE_MAX;
+#endif
+    while (1) {
+        if (s_wakeword_paused) {
+            s_ww_q_rd = s_ww_q_wr;   /* Rückstau verwerfen, nach der Pause beginnt der Strom neu */
+            xSemaphoreGive(s_wakeword_parked_sem);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+        while (s_ww_q_rd != s_ww_q_wr && !s_wakeword_paused) {
+            const int16_t *frame = s_ww_q[s_ww_q_rd % WW_Q_FRAMES];
+            const float confidence = hannah_wakeword_process(frame);
+
+            portENTER_CRITICAL(&s_ww_mux);
+            if (confidence > s_ww_conf_max) s_ww_conf_max = confidence;
+            portEXIT_CRITICAL(&s_ww_mux);
+
+#if CONFIG_HANNAH_WAKEWORD_DEBUG
+            /* Wakeword-Debug (#173): die Logzeilen kamen früher aus dem mic_task und haben ihn über die
+             * synchrone Konsole bis zu ~85 ms blockiert. Hier blockieren sie nur den ww_task, und nur alle 5 s. */
+            if (confidence > dbg_max) dbg_max = confidence;
+            for (size_t i = 0; i < WAKEWORD_STEP_SAMPLES; i++) {
+                const float a = fabsf((float)frame[i]) / 32768.0f;
+                if (a > dbg_peak) dbg_peak = a;
+            }
+            hannah_wakeword_debug_t wwdbg;
+            hannah_wakeword_last_debug(&wwdbg);
+            if (wwdbg.feat_size < dbg_min_feat) dbg_min_feat = wwdbg.feat_size;
+            if (++dbg_ctr >= 500) {
+                dbg_ctr = 0;
+                ESP_LOGI(TAG, "Wakeword-Debug: rms=%.4f peak=%.4f confidence(peak/5s)=%.4f threshold=%.2f "
+                              "noise_ema=%.4f feat_size(min/5s)=%u num_read=%u output_raw=%u invoke_fails=%lu frame_no=%lu dropped=%lu model=%uB/%uF",
+                         hannah_rms(frame, WAKEWORD_STEP_SAMPLES), dbg_peak, dbg_max,
+                         hannah_config_get()->wakeword_threshold / 100.0f, s_noise_floor_ema,
+                         (unsigned)dbg_min_feat, (unsigned)wwdbg.num_read,
+                         (unsigned)wwdbg.output_raw, (unsigned long)wwdbg.invoke_fail_count,
+                         (unsigned long)s_debug_ring_frame_no, (unsigned long)s_ww_dropped,
+                         (unsigned)wwdbg.model_bytes, (unsigned)wwdbg.input_frames);
+                dbg_max      = 0.0f;
+                dbg_peak     = 0.0f;
+                dbg_min_feat = SIZE_MAX;
+            }
+#endif
+            s_ww_q_rd = s_ww_q_rd + 1;
+        }
+    }
+}
+#endif /* CONFIG_HANNAH_WAKEWORD_ENABLED */
+
 static void mic_task(void *arg)
 {
     uint8_t  *raw  = malloc(STEP_BYTES_RAW);
@@ -1102,6 +1322,11 @@ static void mic_task(void *arg)
         int64_t tdm_timing_resample_us = esp_timer_get_time() - tdm_timing_t_resample0;
 #endif
 
+        /* Echo-Canceller vor dem Gain (Refs #226): Der Gain (Faktor 16) schneidet das Mikrofonsignal bei
+         * lautem eigenem Lautsprecher hart ab (gemessen: ~21000 von 32767 bei Lautstärke 70), ein lineares
+         * Filter kann das nicht mehr auslöschen. Die AEC ist linear und läuft deshalb davor. */
+        aec_run(mono, STEP_SAMPLES);
+
         int32_t tdm_gain = hannah_config_get()->tdm_downmix_gain;
         for (size_t i = 0; i < STEP_SAMPLES; i++) {
             int32_t amplified = (int32_t)mono[i] * tdm_gain;
@@ -1146,6 +1371,10 @@ static void mic_task(void *arg)
 #endif
         size_t mono_samples = frames;
 
+#if !CONFIG_HANNAH_MIC_TYPE_TDM
+        aec_run(mono, mono_samples);   /* TDM: schon vor dem Gain gelaufen (s.o.) */
+#endif
+
 #if CONFIG_HANNAH_WAKEWORD_DEBUG
         /* Debug-Ringpuffer (#180): läuft immer mit, unabhängig vom State —
          * erfasst exakt das PCM, das auch durch die Wakeword-Pipeline läuft. */
@@ -1165,7 +1394,7 @@ static void mic_task(void *arg)
         if (warmup_remaining > 0) {
             --warmup_remaining;
 #if CONFIG_HANNAH_WAKEWORD_ENABLED
-            hannah_wakeword_process(mono);
+            ww_push(mono);
 #endif
             /* Noise-Floor während Warmup kalibrieren (nicht während TTS) */
             if (!s_speaking_active) {
@@ -1190,8 +1419,11 @@ static void mic_task(void *arg)
              * OTA läuft — Inference pausieren damit IDLE0 den WDT zurücksetzen kann.
              * xSemaphoreGive() bestätigt hannah_audio_pause_wakeword(), dass hier
              * gerade sicher kein hannah_wakeword_process()/Invoke() mehr läuft —
-             * erst danach darf der OTA-Task die TFLite-Arena freigeben (#196). */
+             * erst danach darf der OTA-Task die TFLite-Arena freigeben (#196).
+             * Mit eigenem ww_task (Refs #226) bestätigt dieser das Parken, nicht mehr der mic_task. */
+#if !CONFIG_HANNAH_WAKEWORD_ENABLED
             xSemaphoreGive(s_wakeword_parked_sem);
+#endif
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
@@ -1238,7 +1470,10 @@ static void mic_task(void *arg)
 /* -- Wakeword-Modus -------------------------------------------------- */
 #if CONFIG_HANNAH_WAKEWORD_ENABLED
         {
-            float confidence = hannah_wakeword_process(mono);
+            /* Inferenz läuft im ww_task (Refs #226): hier nur Frame abgeben und die größte Confidence
+             * seit dem letzten Frame abholen (eine Frame-Latenz, ändert die Erkennung nicht). */
+            ww_push(mono);
+            float confidence = ww_take_confidence();
 
             if (s_sampling_mode) {
                 if (s_sampling_hey_hannah) {
@@ -1280,53 +1515,6 @@ static void mic_task(void *arg)
                         s_noise_floor_ema = s_noise_floor_ema * 0.999f + rms_idle * 0.001f;
                 }
 
-#if CONFIG_HANNAH_WAKEWORD_DEBUG
-                /* Wakeword-Debug: alle ~500ms komplette Diagnosekette loggen (#173) —
-                 * rms/peak (kommt überhaupt Audio an, clippt es?), confidence (wie nah
-                 * ans Threshold?), feat_size/num_read (liefert das AudioFrontend
-                 * vollständige Frames?), mel_preview (rohe Frontend-Werte, 1:1 gegen
-                 * pymicro_features/test_inference.py vergleichbar), input_preview
-                 * (quantisierte Werte, die tatsächlich ins Modell gingen), output_raw
-                 * (unskalierter Modell-Output) und invoke_fail_count (falls Invoke()
-                 * selbst scheitert, aktuell sonst lautlos als confidence=0.0 sichtbar).
-                 * Bewusst viel auf einmal statt mehrerer Debug-Release-Runden. */
-                static int    s_wakeword_debug_ctr      = 0;
-                static float  s_wakeword_debug_max      = 0.0f;
-                static float  s_wakeword_debug_peak     = 0.0f;
-                static size_t s_wakeword_debug_min_feat = SIZE_MAX;
-                if (confidence > s_wakeword_debug_max) s_wakeword_debug_max = confidence;
-                for (size_t i = 0; i < mono_samples; i++) {
-                    float a = fabsf((float)mono[i]) / 32768.0f;
-                    if (a > s_wakeword_debug_peak) s_wakeword_debug_peak = a;
-                }
-                hannah_wakeword_debug_t wwdbg;
-                hannah_wakeword_last_debug(&wwdbg);
-                if (wwdbg.feat_size < s_wakeword_debug_min_feat) s_wakeword_debug_min_feat = wwdbg.feat_size;
-                if (++s_wakeword_debug_ctr >= 50) {
-                    s_wakeword_debug_ctr = 0;
-                    ESP_LOGI(TAG, "Wakeword-Debug: rms=%.4f peak=%.4f confidence(peak/500ms)=%.4f threshold=%.2f "
-                                  "noise_ema=%.4f feat_size(min/500ms)=%u num_read=%u output_raw=%u invoke_fails=%lu frame_no=%lu",
-                             rms_idle, s_wakeword_debug_peak, s_wakeword_debug_max,
-                             hannah_config_get()->wakeword_threshold / 100.0f, s_noise_floor_ema,
-                             (unsigned)s_wakeword_debug_min_feat, (unsigned)wwdbg.num_read,
-                             (unsigned)wwdbg.output_raw, (unsigned long)wwdbg.invoke_fail_count,
-                             (unsigned long)s_debug_ring_frame_no);
-                    ESP_LOGI(TAG, "Wakeword-Debug mel[0..9]=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
-                             (unsigned)wwdbg.mel_preview[0], (unsigned)wwdbg.mel_preview[1],
-                             (unsigned)wwdbg.mel_preview[2], (unsigned)wwdbg.mel_preview[3],
-                             (unsigned)wwdbg.mel_preview[4], (unsigned)wwdbg.mel_preview[5],
-                             (unsigned)wwdbg.mel_preview[6], (unsigned)wwdbg.mel_preview[7],
-                             (unsigned)wwdbg.mel_preview[8], (unsigned)wwdbg.mel_preview[9]);
-                    ESP_LOGI(TAG, "Wakeword-Debug input[0..9]=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-                             wwdbg.input_preview[0], wwdbg.input_preview[1], wwdbg.input_preview[2],
-                             wwdbg.input_preview[3], wwdbg.input_preview[4], wwdbg.input_preview[5],
-                             wwdbg.input_preview[6], wwdbg.input_preview[7], wwdbg.input_preview[8],
-                             wwdbg.input_preview[9]);
-                    s_wakeword_debug_max      = 0.0f;
-                    s_wakeword_debug_peak     = 0.0f;
-                    s_wakeword_debug_min_feat = SIZE_MAX;
-                }
-#endif /* CONFIG_HANNAH_WAKEWORD_DEBUG */
 
                 /* PTT oder Wake-Word → Streaming starten */
                 if ((s_ptt_active && !was_ptt) ||
@@ -1837,6 +2025,17 @@ void hannah_audio_init(void)
         ESP_LOGW(TAG, "Mix-Warteschlange: PSRAM-Allokation fehlgeschlagen — kein Ducking.");
     speaker_init();
 #endif
+#if CONFIG_HANNAH_AEC
+    /* Echo-Canceller (Refs #226) — nur sinnvoll, wenn Lautsprecher und Mikrofon existieren (Kconfig). Lebt
+     * wie s_spk_ringbuf über den ganzen Boot-Zyklus und bleibt zwischen Ansagen eingeschwungen; bei der
+     * OTA-Pause (hannah_audio_deinit_for_ota()) wird er nicht angefasst. */
+    s_aec_ready = hannah_aec_init(&s_aec, STEP_SAMPLES, CONFIG_HANNAH_AEC_FILTER_LEN, SAMPLE_RATE) == 0;
+    if (s_aec_ready)
+        ESP_LOGI(TAG, "Echo-Canceller: Frame %d, Filter %d Taps (%d ms).", STEP_SAMPLES,
+                 CONFIG_HANNAH_AEC_FILTER_LEN, CONFIG_HANNAH_AEC_FILTER_LEN * 1000 / SAMPLE_RATE);
+    else
+        ESP_LOGE(TAG, "Echo-Canceller nicht allokierbar — AEC aus.");
+#endif
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
     mic_init();
 
@@ -1934,6 +2133,12 @@ void hannah_audio_init(void)
     s_wakeword_parked_sem = xSemaphoreCreateBinary();
 #if CONFIG_HANNAH_WAKEWORD_DEBUG
     s_debug_wav_done_sem = xSemaphoreCreateBinary();
+#endif
+#if CONFIG_HANNAH_WAKEWORD_ENABLED
+    /* Vor dem mic_task, damit s_ww_task beim ersten ww_push() gesetzt ist. Stack im PSRAM: interner
+     * Heap ist knapp (Heap-Watchdog, #266). Core 1 teilt sich nur den Speaker-Task, der fast nur wartet. */
+    if (xTaskCreatePinnedToCoreWithCaps(ww_task, "ww", 8192, NULL, 4, &s_ww_task, 1, MALLOC_CAP_SPIRAM) != pdPASS)
+        ESP_LOGE(TAG, "ww_task konnte nicht angelegt werden — keine Wake-Word-Erkennung.");
 #endif
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);
 #else

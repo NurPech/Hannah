@@ -17,9 +17,11 @@
  *   PDM-Read → bei PTT gedrückt: hannah_net_send_audio()
  *              bei PTT losgelassen: hannah_net_send_audio_end()
  *
- * Pipeline Phase 2:
- *   PDM-Read → ESP-SR AFE (Beamforming + AEC + VAD) →
- *   Wake-Word → Stream-Start → audio_end bei Stille
+ * Pipeline Phase 2 (aktuell, AudioLib statt ESP-SR):
+ *   PDM/TDM-Read → Beamforming (Rev5) + WebRTC-VAD (AudioLib) →
+ *   Wake-Word (microWakeWord) → Stream-Start → audio_end bei Stille
+ *   Mit CONFIG_HANNAH_AEC läuft vor dem Wake-Word ein Echo-Canceller (Speex-MDF aus
+ *   AudioLib); seine Referenz ist die Zeitachse der TX-DMA-Ausgabe (hannah_audio.c).
  *
  * TTS-Wiedergabe:
  *   hannah_audio_play() nimmt PCM-Chunks entgegen und schreibt sie

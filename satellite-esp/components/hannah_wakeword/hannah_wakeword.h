@@ -68,6 +68,8 @@ typedef struct {
     int8_t   input_preview[HANNAH_WAKEWORD_DEBUG_PREVIEW_LEN]; /* quantisierte int8-Werte, die tatsächlich in den Input-Tensor geschrieben wurden */
     uint8_t  output_raw;        /* unskalierter uint8-Output-Tensor-Wert (confidence = output_raw / 256.0) */
     uint32_t invoke_fail_count; /* kumulative Anzahl fehlgeschlagener Invoke()-Aufrufe seit Boot */
+    uint8_t  input_frames;      /* Frames je Invoke des geladenen Modells (1 = hey_hannah, 3 = okay_nabu_v2): zeigt, welches Modell läuft */
+    size_t   model_bytes;       /* Größe des geladenen Modells in Byte (Override-Asset oder eingebaut) */
 } hannah_wakeword_debug_t;
 
 /**

@@ -185,6 +185,29 @@ menu "Hannah Audio"
         help
             Schrittweite pro Tastendruck für Vol+/Vol-.
 
+    config HANNAH_AEC
+        bool "Echo-Canceller (Speex-MDF, AudioLib)"
+        default n
+        depends on HANNAH_SPEAKER_ENABLED && !HANNAH_MIC_TYPE_NONE
+        help
+            Entfernt die eigene Wiedergabe aus dem Mikrofonsignal, damit das Wake Word auch
+            erkannt wird, während der Satellit selbst spricht. Speex-MDF aus AudioLib (hannah_aec_*):
+            Frequenzbereich mit Vorder-/Hintergrundfilter, schützt die Nahsprache über der eigenen
+            Wiedergabe. Die Referenz ist die Zeitachse der TX-DMA-Ausgabe (ref_timeline.c). Braucht
+            rund 30 KB internen RAM und etwa 4,5 ms Rechenzeit je 10-ms-Frame auf dem ESP32-S3
+            (Messung mit CONFIG_HANNAH_WAKEWORD_DEBUG). Refs #226
+
+    config HANNAH_AEC_FILTER_LEN
+        int "AEC: Filterlänge (Taps bei 16 kHz)"
+        default 256
+        range 160 1024
+        depends on HANNAH_AEC
+        help
+            256 Taps = 16 ms. Der Weg Lautsprecher-Mikrofon liegt auf Test01 bei ~6 ms; offline war die
+            Echo-ERLE bei 256 und 512 Taps gleich, 128 war schlechter. AudioLib rundet auf ein
+            Vielfaches der Framegröße (160) auf; der Filterzustand braucht dann rund 30 KB und liegt im
+            internen RAM, nur bei Platzmangel im PSRAM (dort deutlich langsamer).
+
     config HANNAH_WAKEWORD_DEBUG
         bool "Wakeword-Debug-Infrastruktur aktivieren"
         default n
