@@ -62,6 +62,14 @@ CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT=70
 CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 
+# Gemessen mit diesen Optionen (Refs #463): 40 KB intern frei am Ende von app_main, 34 KB im Steady State ohne Sendspin.
+# Der Standard-Heap-Watchdog (20 KB, ein heuristischer Startwert) und die Sendspin-Schwelle (56 KB) passen dazu nicht:
+# Sendspin kostet im Betrieb ca. 7 KB, in Spitzen auf dem Rev4-Build bis ca. 23 KB unter den Startwert. Mit 12 KB bleibt der
+# Watchdog ein Netz gegen echte Erschöpfung (die gemessenen Ausfälle traten bei unter 1 KB frei auf), Sendspin startet
+# ab 36 KB. Die Spitze von 23 KB ist vom Rev4-Build übernommen, für Rev5 geschätzt.
+CONFIG_HANNAH_HEAP_WATCHDOG_THRESHOLD_BYTES=12288
+CONFIG_HANNAH_SENDSPIN_MIN_INTERNAL_FREE=36864
+
 # Echo-Canceller (Refs #226): Speex-MDF aus AudioLib, damit das Wake Word auch
 # erkannt wird, während der Satellit selbst spricht (Filterlänge 256 Taps = Standard)
 CONFIG_HANNAH_AEC=y

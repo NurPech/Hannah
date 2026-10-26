@@ -5,6 +5,11 @@
 -->
 
 
+## 0.102.5 (2026-10-26)
+### Satellite Firmware
+
+* Changed: on Rev. 5, Sendspin now starts with 36 KB of free internal memory instead of 56 KB, and the heap watchdog restarts the satellite only below 12 KB instead of 20 KB. With the changes from 0.102.4 a Rev. 5 satellite has 40 KB free after start-up and 34 KB later, which is stable, but the old limits kept Sendspin off. The old watchdog limit was a rough first guess and never measured. Other revisions keep their limits (Refs #463)
+
 ## 0.102.4 (2026-10-26)
 ### Satellite Firmware
 
