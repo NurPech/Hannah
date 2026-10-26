@@ -10,6 +10,19 @@ menu "Hannah Sendspin"
             CONFIG_HANNAH_SPK_SAMPLE_RATE=48000 (TTS wird dann ×3 hochgerechnet), die
             zugehörigen Einstellungen stehen in sdkconfig.defaults (Refs #440).
 
+    config HANNAH_SENDSPIN_MIN_INTERNAL_FREE
+        int "Sendspin startet nur, wenn beim Start mindestens so viele Byte internes RAM frei sind (0 = immer)"
+        default 57344
+        depends on HANNAH_SENDSPIN_ENABLED
+        help
+            Der Sendspin-Client braucht internes RAM für seine Threads und Sockets, danach
+            kommen WLAN, MQTT und TLS dazu. Ist beim Start zu wenig frei, scheiterten
+            mDNS, Thread-Anlage und andere Tasks, der Satellit stürzte ab oder startete
+            vom Heap-Watchdog neu (Rev5, Refs #463). Mit dieser Schwelle bleibt Sendspin
+            dann aus (Logzeile mit dem freien Heap) und der Rest läuft weiter. Der Wert
+            ist die Summe aus Heap-Watchdog-Schwelle (20 KB), dem Verbrauch des Clients
+            und dem Bedarf der Tasks, die nach dem Start noch anlaufen, und ist geschätzt.
+
     config HANNAH_SENDSPIN_GIVE_UP_S
         int "Sendspin gibt auf, wenn nach N Sekunden kein Music Assistant verbunden war (0 = nie)"
         default 600

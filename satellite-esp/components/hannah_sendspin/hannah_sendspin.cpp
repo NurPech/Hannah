@@ -223,6 +223,7 @@ struct Network : SendspinNetworkProvider {
 static bool mdns_start(const std::string &client_id)
 {
     esp_err_t err = mdns_init();
+    const bool inited = (err == ESP_OK);
     if (err == ESP_OK) err = mdns_hostname_set(g_hostname.c_str());
     if (err == ESP_OK) err = mdns_instance_name_set(g_name.c_str());
     if (err == ESP_OK) {
@@ -233,7 +234,9 @@ static bool mdns_start(const std::string &client_id)
         ESP_LOGE(TAG, "mDNS-Start fehlgeschlagen: %s | heap intern frei=%u groesster Block=%u", esp_err_to_name(err),
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
-        mdns_free();  // halb initialisierten Zustand aufraeumen
+        // Nur nach gelungenem mdns_init(): scheitert schon das, ist mDNS nicht aufgebaut und mdns_free() greift auf
+        // eine nicht angelegte Queue zu (assert in xQueueSemaphoreTake, Refs #463).
+        if (inited) mdns_free();
         return false;
     }
     ESP_LOGI(TAG, "mDNS: _sendspin._tcp, Instanz=%s, name=%s, Port %u, Hostname %s", client_id.c_str(),
@@ -518,6 +521,16 @@ static void sendspin_task(void *)
 
 extern "C" void hannah_sendspin_start(void)
 {
+#if CONFIG_HANNAH_SENDSPIN_MIN_INTERNAL_FREE > 0
+    // Zu wenig internes RAM: gar nicht erst anfangen (Refs #463). Sonst scheitern mDNS, Threads und andere Tasks, und der
+    // Satellit stürzt ab oder startet vom Heap-Watchdog neu.
+    const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (free_internal < CONFIG_HANNAH_SENDSPIN_MIN_INTERNAL_FREE) {
+        ESP_LOGE(TAG, "Sendspin bleibt aus: internes RAM frei=%u < %d Byte (CONFIG_HANNAH_SENDSPIN_MIN_INTERNAL_FREE)",
+                 static_cast<unsigned>(free_internal), CONFIG_HANNAH_SENDSPIN_MIN_INTERNAL_FREE);
+        return;
+    }
+#endif
     // Interner Stack (der Task ruft den NVS-Persistenz-Provider der Bibliothek auf, Flash-Zugriffe brauchen ihn im internen
     // RAM). Kleiner als die 8 KB des Spikes; die Statistik meldet den freien Stack ("stack frei").
     if (xTaskCreate(sendspin_task, "sendspin", 6144, nullptr, 5, nullptr) != pdPASS)

@@ -55,6 +55,13 @@ CONFIG_HANNAH_WAKEWORD_DEBUG=y
 # per NVS/WebUI)
 CONFIG_HANNAH_SPK_OUTPUT_GAIN_PERCENT=70
 
+# Internes RAM (Refs #463): auf Rev5 bleiben nach dem Start nur ca. 12 KB frei (TDM, AEC, BLE). Der WLAN-Code im IRAM
+# nimmt bei diesem Chip Platz aus demselben SRAM weg, den sonst der Heap bekäme (IRAM-Segmente im Image: ca. 120 KB);
+# laut IDF-Beschreibung kostet jede der beiden Optionen mehr als 17 KB IRAM. Der Preis ist etwas weniger WLAN-
+# Durchsatz und kurze WLAN-Aussetzer, während Flash beschrieben wird (OTA). Nur Rev5, Rev4 hat das Problem nicht.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+
 # Echo-Canceller (Refs #226): Speex-MDF aus AudioLib, damit das Wake Word auch
 # erkannt wird, während der Satellit selbst spricht (Filterlänge 256 Taps = Standard)
 CONFIG_HANNAH_AEC=y

@@ -5,6 +5,12 @@
 -->
 
 
+## 0.102.4 (2026-10-26)
+### Satellite Firmware
+
+* Fixed: a Rev. 5 satellite no longer crashes when the network discovery (mDNS) for Music Assistant cannot even be started because the internal memory is full. The clean-up after the failed start touched a part of mDNS that did not exist yet and stopped the satellite with an error. It now only cleans up when the start had worked (Refs #463)
+* Fixed: a Rev. 5 satellite has more free internal memory after start-up, and no longer restarts every few seconds because of it. Measured on Rev. 5, the start-up used up almost all of the internal memory (about 12 KB left, 5 KB later), so Sendspin, the network discovery and other tasks could not start. Three changes: the Wi-Fi code is no longer kept in the fast instruction memory (that memory comes out of the same pool as the free memory; costs a little Wi-Fi speed), the stack of the speaker task sits in the external memory, and Sendspin only starts if enough internal memory is free (`CONFIG_HANNAH_SENDSPIN_MIN_INTERNAL_FREE`), otherwise it stays off and the rest keeps running. The echo canceller stays in the internal memory on purpose, in the external memory it takes too long for each 10 ms frame (Refs #463)
+
 ## 0.102.3 (2026-10-26)
 ### Satellite Firmware
 

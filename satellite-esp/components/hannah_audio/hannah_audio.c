@@ -2171,7 +2171,12 @@ void hannah_audio_init(void)
 #endif
 #if CONFIG_HANNAH_SPEAKER_ENABLED
     s_speaker_parked_sem = xSemaphoreCreateBinary();
-    xTaskCreatePinnedToCore(speaker_task, "speaker", 4096, NULL, 5, NULL, 1);
+    /* Stack im PSRAM (Refs #463): spart 4,8 KB internes RAM, das auf Rev5 fehlt. Der Task macht keine Flash-Zugriffe
+     * (die brauchen einen internen Stack, auch NVS-Lesen), er skaliert, kopiert in die I2S-Puffer und publiziert MQTT. */
+    if (xTaskCreatePinnedToCoreWithCaps(speaker_task, "speaker", 4096, NULL, 5, NULL, 1, MALLOC_CAP_SPIRAM) != pdPASS) {
+        ESP_LOGW(TAG, "speaker_task im PSRAM nicht anlegbar — weiche auf internen RAM aus.");
+        xTaskCreatePinnedToCore(speaker_task, "speaker", 4096, NULL, 5, NULL, 1);
+    }
     heap_mark("spk_task");
 #endif
 
