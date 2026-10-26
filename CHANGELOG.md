@@ -5,6 +5,11 @@
 -->
 
 
+## 0.102.2 (2026-10-26)
+### Satellite Firmware
+
+* Fixed: a Rev. 5 satellite has more free internal memory after start-up. The 32 KB buffer that holds the speech output before it is played now sits in the external memory (PSRAM) instead of the internal one. The I2S driver copies the audio into its own buffers anyway, so playback does not change. On Rev. 5, the internal memory was so full after start-up that Sendspin and other tasks could not start and the satellite restarted every few seconds (Refs #463)
+
 ## 0.102.1 (2026-10-26)
 ### Satellite Firmware
 

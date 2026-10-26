@@ -104,8 +104,8 @@ static const char *TAG = "hannah_audio";
 
 /* VAD_SILENCE_FRAMES wird zur Laufzeit aus hannah_config_get()->vad_silence_ms berechnet */
 
-/* Speaker-Ring-Buffer (internes DRAM, NOSPLIT — kein malloc/free pro Chunk)
- * 32KB ≈ ~22 Chunks × 29ms @ 24kHz = ~640ms Buffer — I2S-DMA braucht cache-kohärenten Speicher */
+/* Speaker-Ring-Buffer (PSRAM, NOSPLIT — kein malloc/free pro Chunk)
+ * 32KB ≈ ~22 Chunks × 29ms @ 24kHz = ~640ms Buffer */
 #define SPK_RINGBUF_SIZE (32 * 1024)
 
 /* Mic-Warmup: erste Frames nach Boot verwerfen (PDM-Transienten, Fehlauslöser) */
@@ -2012,8 +2012,14 @@ void hannah_audio_init(void)
         ESP_LOGW(TAG, "Timer zum Speichern der Lautstärke nicht angelegt — Lautstärke bleibt nicht erhalten.");
 
 #if CONFIG_HANNAH_SPEAKER_ENABLED
-    /* Internes DRAM — I2S-DMA benötigt cache-kohärenten Speicher; PSRAM ist nicht geeignet. */
-    s_spk_ringbuf = xRingbufferCreate(SPK_RINGBUF_SIZE, RINGBUF_TYPE_NOSPLIT);
+    /* PSRAM (Refs #463): der I2S-DMA liest nie aus diesem Ring, speaker_task skaliert und kopiert die Chunks per
+     * i2s_channel_write() in die DMA-Puffer des Treibers. 32 KB intern fehlten auf Rev5 beim Start (mDNS, Threads).
+     * Ohne PSRAM (Devkit ohne R8) bleibt der interne Fallback. */
+    s_spk_ringbuf = xRingbufferCreateWithCaps(SPK_RINGBUF_SIZE, RINGBUF_TYPE_NOSPLIT, MALLOC_CAP_SPIRAM);
+    if (!s_spk_ringbuf) {
+        ESP_LOGW(TAG, "Speaker-Ring im PSRAM nicht allokierbar — weiche auf internen RAM aus.");
+        s_spk_ringbuf = xRingbufferCreate(SPK_RINGBUF_SIZE, RINGBUF_TYPE_NOSPLIT);
+    }
     s_spk_mutex   = xSemaphoreCreateMutex();
     /* Mix-Warteschlange für das Ducking der Sendspin-Musik (Refs #440), PSRAM: wird nur
      * per memcpy gelesen, der DMA sieht sie nie. Ohne sie fällt die Musik auf Verwerfen
