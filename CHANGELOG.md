@@ -5,6 +5,11 @@
 -->
 
 
+## 0.102.3 (2026-10-26)
+### Satellite Firmware
+
+* Added: the satellite now writes the free internal memory and the largest free block to its log after each step inside the audio start-up (speaker, echo canceller, microphone, wake word and the audio tasks). The audio start-up uses about 77 KB of internal memory on Rev. 5, and this shows which part of it is responsible. The speech output buffer in the external memory (0.102.2) did not free internal memory on Rev. 5, because it was probably already there (Refs #463)
+
 ## 0.102.2 (2026-10-26)
 ### Satellite Firmware
 

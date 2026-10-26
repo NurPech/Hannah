@@ -1988,8 +1988,18 @@ static void on_music_volume_set(int vol)
 /* ------------------------------------------------------------------ */
 /* Öffentliche API                                                       */
 
+/* Internes Freiheap nach einem Init-Schritt (Refs #463): hannah_audio_init verbraucht auf Rev5 rund 77 KB internen
+ * RAM, die Aufschlüsselung fehlt. Der kombinierte Heap ist vom PSRAM dominiert und sagt dazu nichts. */
+static void heap_mark(const char *after)
+{
+    ESP_LOGI(TAG, "Heap intern nach %-9s frei=%u groesster Block=%u", after,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
 void hannah_audio_init(void)
 {
+    heap_mark("start");
     /* Zuletzt eingestellte Lautstärke aus dem NVS (Refs #445); ohne gespeicherten Wert bleibt
      * CONFIG_HANNAH_VOLUME_DEFAULT. hannah_config_init() läuft vorher (main.c). */
     uint8_t saved_volume;
@@ -2012,9 +2022,10 @@ void hannah_audio_init(void)
         ESP_LOGW(TAG, "Timer zum Speichern der Lautstärke nicht angelegt — Lautstärke bleibt nicht erhalten.");
 
 #if CONFIG_HANNAH_SPEAKER_ENABLED
-    /* PSRAM (Refs #463): der I2S-DMA liest nie aus diesem Ring, speaker_task skaliert und kopiert die Chunks per
-     * i2s_channel_write() in die DMA-Puffer des Treibers. 32 KB intern fehlten auf Rev5 beim Start (mDNS, Threads).
-     * Ohne PSRAM (Devkit ohne R8) bleibt der interne Fallback. */
+    /* PSRAM: der I2S-DMA liest nie aus diesem Ring, speaker_task skaliert und kopiert die Chunks per
+     * i2s_channel_write() in die DMA-Puffer des Treibers. Ohne PSRAM (Devkit ohne R8) bleibt der interne Fallback.
+     * Gemessen (Refs #463): das Umlegen hat das interne Freiheap auf Rev5 nicht verändert, der Ring lag mit
+     * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512 vermutlich schon vorher im PSRAM. */
     s_spk_ringbuf = xRingbufferCreateWithCaps(SPK_RINGBUF_SIZE, RINGBUF_TYPE_NOSPLIT, MALLOC_CAP_SPIRAM);
     if (!s_spk_ringbuf) {
         ESP_LOGW(TAG, "Speaker-Ring im PSRAM nicht allokierbar — weiche auf internen RAM aus.");
@@ -2029,7 +2040,9 @@ void hannah_audio_init(void)
                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_mix_fifo)
         ESP_LOGW(TAG, "Mix-Warteschlange: PSRAM-Allokation fehlgeschlagen — kein Ducking.");
+    heap_mark("ring");
     speaker_init();
+    heap_mark("spk_init");
 #endif
 #if CONFIG_HANNAH_AEC
     /* Echo-Canceller (Refs #226) — nur sinnvoll, wenn Lautsprecher und Mikrofon existieren (Kconfig). Lebt
@@ -2041,9 +2054,11 @@ void hannah_audio_init(void)
                  CONFIG_HANNAH_AEC_FILTER_LEN, CONFIG_HANNAH_AEC_FILTER_LEN * 1000 / SAMPLE_RATE);
     else
         ESP_LOGE(TAG, "Echo-Canceller nicht allokierbar — AEC aus.");
+    heap_mark("aec");
 #endif
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
     mic_init();
+    heap_mark("mic_init");
 
 #if CONFIG_HANNAH_WAKEWORD_DEBUG
     /* Debug-WAV-Snapshot (#180): Ringpuffer + Ausgabepuffer auf PSRAM. */
@@ -2117,8 +2132,10 @@ void hannah_audio_init(void)
     ESP_ERROR_CHECK(gpio_config(&hw_mute_cfg));
     gpio_set_level(CONFIG_HANNAH_MUTE_HW_GPIO, 1);
 
+    heap_mark("gpio");
 #if CONFIG_HANNAH_WAKEWORD_ENABLED
     hannah_wakeword_init();
+    heap_mark("wakeword");
 #endif
 
 #if CONFIG_HANNAH_SPEAKER_ENABLED
@@ -2146,13 +2163,16 @@ void hannah_audio_init(void)
     if (xTaskCreatePinnedToCoreWithCaps(ww_task, "ww", 8192, NULL, 4, &s_ww_task, 1, MALLOC_CAP_SPIRAM) != pdPASS)
         ESP_LOGE(TAG, "ww_task konnte nicht angelegt werden — keine Wake-Word-Erkennung.");
 #endif
+    heap_mark("ww_task");
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);
+    heap_mark("mic_task");
 #else
     update_idle_led();
 #endif
 #if CONFIG_HANNAH_SPEAKER_ENABLED
     s_speaker_parked_sem = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(speaker_task, "speaker", 4096, NULL, 5, NULL, 1);
+    heap_mark("spk_task");
 #endif
 
     ESP_LOGI(TAG, "hannah_audio initialisiert (Mic=%s, Speaker=%s).",
