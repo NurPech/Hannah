@@ -216,15 +216,29 @@ struct Network : SendspinNetworkProvider {
 
 // Instanzname = Client-ID (so melden sich auch MA und andere Sendspin-Geräte an), der freundliche Name steht
 // im TXT-Feld "name".
-static void mdns_start(const std::string &client_id)
+//
+// Nicht fatal (Refs #461): auf Rev5 scheiterte mdns_init() mit ESP_ERR_NO_MEM (internes RAM erschöpft), und das
+// ESP_ERROR_CHECK riss den ganzen Satelliten in eine Boot-Schleife. Ohne mDNS findet Music Assistant den Satelliten
+// nicht, Sendspin ist dann nutzlos, der Rest (Wake Word, Sprachbefehle) soll aber weiterlaufen.
+static bool mdns_start(const std::string &client_id)
 {
-    ESP_ERROR_CHECK(mdns_init());
-    ESP_ERROR_CHECK(mdns_hostname_set(g_hostname.c_str()));
-    ESP_ERROR_CHECK(mdns_instance_name_set(g_name.c_str()));
-    mdns_txt_item_t txt[] = {{"name", g_name.c_str()}, {"path", "/sendspin"}};
-    ESP_ERROR_CHECK(mdns_service_add(client_id.c_str(), "_sendspin", "_tcp", kSendspinPort, txt, 2));
+    esp_err_t err = mdns_init();
+    if (err == ESP_OK) err = mdns_hostname_set(g_hostname.c_str());
+    if (err == ESP_OK) err = mdns_instance_name_set(g_name.c_str());
+    if (err == ESP_OK) {
+        mdns_txt_item_t txt[] = {{"name", g_name.c_str()}, {"path", "/sendspin"}};
+        err = mdns_service_add(client_id.c_str(), "_sendspin", "_tcp", kSendspinPort, txt, 2);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mDNS-Start fehlgeschlagen: %s | heap intern frei=%u groesster Block=%u", esp_err_to_name(err),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
+        mdns_free();  // halb initialisierten Zustand aufraeumen
+        return false;
+    }
     ESP_LOGI(TAG, "mDNS: _sendspin._tcp, Instanz=%s, name=%s, Port %u, Hostname %s", client_id.c_str(),
              g_name.c_str(), kSendspinPort, g_hostname.c_str());
+    return true;
 }
 
 // --------------------------------------------------------------------------- Verbindungsdiagnose (Refs #457)
@@ -369,7 +383,12 @@ static void sendspin_task(void *)
     player.update_muted(false);
     ESP_LOGI(TAG, "Sendspin-Client gestartet");
 
-    mdns_start(client.client_id());
+    if (!mdns_start(client.client_id())) {
+        ESP_LOGE(TAG, "Sendspin bleibt aus: ohne mDNS findet Music Assistant den Satelliten nicht");
+        client.stop();
+        vTaskDelete(nullptr);
+        return;
+    }
 
     bool was_connected = false;
     bool ever_connected = false;
@@ -434,7 +453,12 @@ static void sendspin_task(void *)
                 vTaskDelete(nullptr);
                 return;
             }
-            mdns_start(client.client_id());
+            if (!mdns_start(client.client_id())) {
+                ESP_LOGE(TAG, "mDNS nach der Pause nicht startbar, Sendspin bleibt aus");
+                client.stop();
+                vTaskDelete(nullptr);
+                return;
+            }
             ESP_LOGI(TAG, "Sendspin sucht wieder nach Music Assistant (%d s)", CONFIG_HANNAH_SENDSPIN_GIVE_UP_S);
             search_start_us = esp_timer_get_time();
 #if CONFIG_HANNAH_SENDSPIN_DIAG_PERIOD_S > 0

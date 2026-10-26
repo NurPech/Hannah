@@ -16,6 +16,7 @@
 #include "esp_partition.h"
 #include "esp_flash.h"
 #include "esp_core_dump.h"
+#include "esp_heap_caps.h"
 #include "esp_ota_ops.h"
 #include "driver/gpio.h"
 
@@ -32,6 +33,15 @@
 #include "hannah_sendspin.h"
 
 static const char *TAG = "main";
+
+/* Internes Freiheap nach einem Init-Schritt (Refs #461): der kombinierte Heap ist seit #191 vom PSRAM
+ * dominiert und sagt nichts darüber, wer das knappe interne RAM verbraucht. */
+static void log_internal_heap(const char *after)
+{
+    ESP_LOGI(TAG, "Heap intern nach %-8s frei=%u groesster Block=%u", after,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
 
 static void on_play_asset(const char *asset_id)
 {
@@ -186,6 +196,7 @@ static void apply_partition_table_update_if_needed(void)
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hannah Satellite starting...");
+    log_internal_heap("boot");
 
     /* Muss vor allem anderen laufen, das den Flash-Bus nutzt (#280) */
     apply_partition_table_update_if_needed();
@@ -214,9 +225,11 @@ void app_main(void)
     /* Netzwerk: STA wenn Config vorhanden, sonst AP-Setup-Modus */
     hannah_net_init();
     hannah_net_set_led_brightness_callback(on_led_brightness_set);
+    log_internal_heap("net");
 
     /* Webserver — immer aktiv (STA: erreichbar über LAN-IP, AP: 192.168.4.1) */
     hannah_webserver_start();
+    log_internal_heap("webserv");
 
     /* Reset-Grund + Neustart-Zähler (#165, ermittelt in hannah_net_init() oben) —
      * erst jetzt loggen, damit es im Log-Ringpuffer landet (siehe /log bzw.
@@ -244,22 +257,28 @@ void app_main(void)
     hannah_asset_set_play_result_callback(on_play_asset_result);
     hannah_asset_init();
     hannah_net_set_registered_callback(on_satellite_registered);
+    log_internal_heap("asset");
 
     /* Audio-Pipeline */
     hannah_audio_init();
+    log_internal_heap("audio");
 
     /* SD-Karte */
     hannah_sd_init();
+    log_internal_heap("sd");
 
     /* OTA-Update-Check (Poll im Hintergrund, kein Flash-Vorgang) */
     hannah_ota_init();
+    log_internal_heap("ota");
 
     /* BLE-Scanner für Indoor-Lokalisierung */
     hannah_ble_init();
+    log_internal_heap("ble");
 
     /* Sendspin-Player (Musik von Music Assistant) — nur mit
      * CONFIG_HANNAH_SENDSPIN_ENABLED (Dev-Firmware, Refs #440), sonst leer */
     hannah_sendspin_start();
+    log_internal_heap("sendspin");
 
     /* LED bleibt in BOOT — hannah_audio mic_task setzt LED_STATE_IDLE nach Warmup */
     ESP_LOGI(TAG, "All components initialized.");

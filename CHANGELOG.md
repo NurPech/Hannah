@@ -4,6 +4,13 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.102.1 (2026-10-26)
+### Satellite Firmware
+
+* Fixed: a Rev. 5 satellite no longer restarts in a loop when the internal memory is too full to start the network discovery (mDNS) for Music Assistant. The failed start used to stop the whole satellite right after boot. Now it logs the error with the free internal memory, switches Sendspin off and keeps running with wake word and voice commands (Refs #461)
+* Added: the satellite now writes the free internal memory and the largest free block to its log after each start-up step (network, web server, assets, audio, SD card, OTA, BLE, Sendspin). This shows which part uses up the internal memory (Refs #461)
+
 ## 0.102.0 (2026-10-25)
 ### Satellite Firmware
 
