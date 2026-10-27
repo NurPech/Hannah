@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.102.7 (2026-10-27)
+### Satellite Firmware
+
+* Added: after a firmware update, and after a failed one, the satellite writes the smallest free stack of its update task to its log (`OTA-Stack: ota_update frei=…`). The regular stack report cannot show this value, because the satellite restarts right after a successful update. The value decides how large the stack of the update task has to be, which matters because the stacks take a large part of the scarce internal memory on Rev. 5. Log output only, nothing else changes (Refs #470)
+
 ## 0.102.6 (2026-10-27)
 ### Hannah Core
 

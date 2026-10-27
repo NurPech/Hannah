@@ -260,6 +260,16 @@ static esp_err_t ota_http_init_cb(esp_http_client_handle_t client)
     return esp_http_client_set_header(client, "Authorization", auth);
 }
 
+/* Kleinster freier Stack von ota_update seit dem Start (#470). Nach einem
+ * erfolgreichen Update startet der Satellit sofort neu, der stündliche Stack-
+ * Bericht (#469) sieht dann nur den Leerlauf — dieser Wert ist der Spitzen-
+ * bedarf mit echtem HTTPS-Download. */
+static void log_update_stack(void)
+{
+    ESP_LOGI(TAG, "OTA-Stack: ota_update frei=%u Byte (kleinster Wert seit Start)",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+
 static void ota_update_task(void *arg)
 {
     while (1) {
@@ -309,10 +319,12 @@ static void ota_update_task(void *arg)
             } else {
                 ESP_LOGI(TAG, "OTA erfolgreich — Neustart.");
             }
+            log_update_stack();
             hannah_net_mark_restart_source("ota");
             esp_restart();
         } else {
             ESP_LOGE(TAG, "OTA fehlgeschlagen: %s", esp_err_to_name(err));
+            log_update_stack();
             hannah_asset_remount();
             hannah_wakeword_reinit();
             hannah_audio_reinit_after_ota_failure();
