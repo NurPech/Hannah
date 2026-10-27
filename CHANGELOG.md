@@ -4,6 +4,26 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.102.6 (2026-10-27)
+### Hannah Core
+
+* Changed: Core requires `hannah-grpc-lib` 0.12 (below 0.13.0)
+
+### Hannah Proxy
+
+* Changed: the Proxy uses `hannah-proto-go` 5.5, is built with Go 1.26 and uses newer versions of its Go libraries (among them `golang.org/x/net` 0.60)
+
+### VoiceID
+
+* Changed: VoiceID requires `hannah-grpc-lib` 0.12 (below 0.13.0)
+
+### AutoDeploy
+
+* Changed: `hannah-grpc-lib` may now be 0.12.x for AutoDeploy, the upper bound stays, so that a broken library cannot keep the updater from working
+
+### Satellite Firmware
+
+* Added: the satellite now writes the smallest free stack of every task to its log, 10 minutes after start-up and then every hour. The permanent task stacks take a large part of the scarce internal memory on Rev. 5 (for example 20 KB for the update tasks and 16 KB for the asset sync), but nobody knows how much of each stack is really used. The measured values show which stacks can be made smaller or moved to the external memory. Log output only, nothing else changes (`CONFIG_HANNAH_TASK_STACK_REPORT`, on by default) (Refs #469)
 
 ## 0.102.5 (2026-10-26)
 ### Satellite Firmware

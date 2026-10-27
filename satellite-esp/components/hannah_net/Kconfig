@@ -93,4 +93,16 @@ menu "Hannah Network"
             nicht anhand von Heap-Logs aus echten Vorfällen kalibriert.
             0 deaktiviert den Heap-Watchdog vollständig.
 
+    config HANNAH_TASK_STACK_REPORT
+        bool "Stack-Verbrauch aller Tasks regelmäßig loggen"
+        default y
+        select FREERTOS_USE_TRACE_FACILITY
+        help
+            Der Heartbeat-Task loggt 10 Minuten nach dem Start und danach
+            stündlich pro Task den kleinsten freien Stack seit dem Start
+            (Byte). Die dauerhaften Task-Stacks sind einer der großen Posten
+            im knappen internen RAM; erst mit echten Werten lässt sich
+            entscheiden, welche sich verkleinern oder ins PSRAM verlegen
+            lassen (#469). Reine Logausgabe, keine Verhaltensänderung.
+
 endmenu

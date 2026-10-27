@@ -307,9 +307,44 @@ static void heartbeat_task_wdt_setup(void)
     esp_task_wdt_add(NULL);
 }
 
+#if CONFIG_HANNAH_TASK_STACK_REPORT
+/* Stack-Verbrauch aller Tasks (#469): usStackHighWaterMark ist der kleinste
+ * freie Stack seit dem Start in Byte. Die dauerhaften Task-Stacks sind einer
+ * der großen Posten im knappen internen RAM (OTA 20 KB, Asset-Sync 16 KB, ...);
+ * erst mit echten Werten lässt sich entscheiden, welche sich verkleinern oder
+ * ins PSRAM verlegen lassen. Die Task-Liste liegt kurz im PSRAM, nicht im
+ * internen Heap, den wir hier gerade vermessen. */
+static void log_task_stacks(void)
+{
+    UBaseType_t cap = uxTaskGetNumberOfTasks() + 4;
+    TaskStatus_t *tasks = heap_caps_malloc(cap * sizeof(TaskStatus_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!tasks) {
+        ESP_LOGW(TAG, "Task-Stacks: kein PSRAM für die Task-Liste.");
+        return;
+    }
+    UBaseType_t n = uxTaskGetSystemState(tasks, cap, NULL);
+    ESP_LOGI(TAG, "Task-Stacks: %u Tasks, frei = kleinster freier Stack seit Start (Byte)",
+             (unsigned)n);
+    for (UBaseType_t i = 0; i < n; i++) {
+        ESP_LOGI(TAG, "Stack: %-16s frei=%u prio=%u",
+                 tasks[i].pcTaskName,
+                 (unsigned)tasks[i].usStackHighWaterMark,
+                 (unsigned)tasks[i].uxCurrentPriority);
+    }
+    heap_caps_free(tasks);
+}
+#endif
+
 static void heartbeat_task(void *arg)
 {
     heartbeat_task_wdt_setup();
+
+#if CONFIG_HANNAH_TASK_STACK_REPORT
+    /* Erster Bericht nach 10 Minuten (alle Init-Tasks laufen, die Start-
+     * Spitzen von MQTT und Sendspin sind vorbei), danach stündlich. */
+    int64_t next_stack_report_s = 600;
+#endif
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_HANNAH_HEARTBEAT_INTERVAL_S * 1000));
@@ -349,6 +384,14 @@ static void heartbeat_task(void *arg)
                  (unsigned long)esp_get_minimum_free_heap_size(),
                  (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  s_mqtt_outbox_size);
+
+#if CONFIG_HANNAH_TASK_STACK_REPORT
+        int64_t uptime_s = esp_timer_get_time() / 1000000;
+        if (uptime_s >= next_stack_report_s) {
+            log_task_stacks();
+            next_stack_report_s = uptime_s + 3600;
+        }
+#endif
 
         /* GOT_IP/MQTT_CONNECTED feuern nur einmal pro Verbindung, MQTT_DATA nur
          * bei eingehenden Befehlen — im ruhigen Idle-Betrieb kommt sonst über
