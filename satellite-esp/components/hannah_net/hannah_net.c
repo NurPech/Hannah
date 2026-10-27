@@ -1113,7 +1113,8 @@ void hannah_net_init(void)
         wifi_start_ap();
     }
 
-    xTaskCreate(udp_receive_task, "udp_rx",   8192, NULL, 6, NULL);
+    /* 4096 statt 8192 (#472): gemessen 1,2 KB belegt. */
+    xTaskCreate(udp_receive_task, "udp_rx",   4096, NULL, 6, NULL);
     xTaskCreate(heartbeat_task,   "heartbeat", 4096, NULL, 3, NULL);
     ESP_LOGI(TAG, "hannah_net initialisiert.");
 }

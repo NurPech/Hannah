@@ -436,7 +436,8 @@ void hannah_sensors_init(void)
     s_ready = sensor_init();
     if (!s_ready) { ESP_LOGE(TAG, "Sensor-Initialisierung fehlgeschlagen"); return; }
 
-    xTaskCreate(sensor_task, "sensors", 8192, NULL, 3, NULL);
+    /* 6144 statt 8192 (#472): gemessen 3,0 KB belegt. */
+    xTaskCreate(sensor_task, "sensors", 6144, NULL, 3, NULL);
     ESP_LOGI(TAG, "Sensor-Task gestartet");
 }
 

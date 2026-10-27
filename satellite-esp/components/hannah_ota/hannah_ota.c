@@ -387,7 +387,9 @@ void hannah_ota_init(void)
 {
     s_ota_sem = xSemaphoreCreateBinary();
     hannah_net_set_ota_ok_callback(on_ota_ok);
-    xTaskCreate(ota_poll_task,   "ota_poll",   12288, NULL, 3, NULL);
+    /* ota_poll 8192 statt 12288 (#472): gemessen 4,9 KB belegt (Versions-Check mit TLS).
+     * ota_update bleibt bei 8192, bis der Spitzenwert aus einem echten Update vorliegt (#470). */
+    xTaskCreate(ota_poll_task,   "ota_poll",   8192,  NULL, 3, NULL);
     xTaskCreate(ota_update_task, "ota_update", 8192,  NULL, 5, NULL);
     ESP_LOGI(TAG, "OTA-Check aktiv (Erstprüfung in %ds, Intervall %ds).",
              OTA_STARTUP_DELAY_S, CONFIG_HANNAH_OTA_POLL_INTERVAL_S);

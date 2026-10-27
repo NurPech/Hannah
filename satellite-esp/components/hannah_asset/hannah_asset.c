@@ -497,7 +497,9 @@ void hannah_asset_init(void)
     s_sync_trigger   = xSemaphoreCreateBinary();
     hannah_net_set_asset_relevant_callback(asset_relevant_cb);
 
-    xTaskCreate(sync_task, "asset_sync", 16384, NULL, 3, NULL);
+    /* 12288 statt 16384 (#472): gemessen 9,1 KB belegt (Manifest-Abruf mit TLS),
+     * der Rest ist Reserve. Der Stack liegt im knappen internen RAM. */
+    xTaskCreate(sync_task, "asset_sync", 12288, NULL, 3, NULL);
 }
 
 bool hannah_asset_play(const char *asset_id)

@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.102.8 (2026-10-27)
+### Satellite Firmware
+
+* Changed: four tasks of the satellite got a smaller stack, which frees 14 KB of internal memory. The network receive task goes from 8 KB to 4 KB, the asset sync from 16 KB to 12 KB, the update check from 12 KB to 8 KB and the sensor task from 8 KB to 6 KB. Each of them used far less than it had, measured on a Rev. 5 satellite. The stack of the update task stays as it is until its peak value from a real update is known. The freed memory gives Sendspin and the update download more room on Rev. 5, where the internal memory is the bottleneck. Nothing else changes (Refs #472)
+
 ## 0.102.7 (2026-10-27)
 ### Satellite Firmware
 
