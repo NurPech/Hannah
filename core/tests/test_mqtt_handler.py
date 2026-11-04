@@ -1,7 +1,12 @@
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+from paho.mqtt.client import MQTTErrorCode, convert_disconnect_error_code_to_reason_code
+
+from hannah import mqtt_handler
 from hannah.mqtt_handler import MQTTHandler
 
 
@@ -293,3 +298,130 @@ class TestPublishSyslogTarget:
         handler._client.publish.assert_called_once_with(
             "hannah/syslog", '{"host": "10.0.0.5", "port": 5514}', qos=1, retain=True,
         )
+
+
+class TestConnectionLogging:
+    """#460: seit connect_async() blieb ein nicht erreichbarer Broker und jeder Abbruch
+    einer bestehenden Verbindung komplett still im Log."""
+
+    @pytest.fixture
+    def handler(self, caplog):
+        caplog.set_level(logging.INFO, logger="hannah.mqtt_handler")
+        return MQTTHandler({"host": "192.0.2.10", "port": 1888}, {})
+
+    @pytest.fixture
+    def clock(self, monkeypatch):
+        now = {"t": 1000.0}
+        monkeypatch.setattr(mqtt_handler.time, "monotonic", lambda: now["t"])
+        return now
+
+    @staticmethod
+    def _records(caplog, level):
+        return [r.getMessage() for r in caplog.records if r.levelno == level]
+
+    def test_callbacks_are_registered(self, handler):
+        assert handler._client.on_connect_fail == handler._on_connect_fail
+        assert handler._client.on_disconnect == handler._on_disconnect
+
+    def test_first_connect_failure_names_host_and_port(self, handler, clock, caplog):
+        handler._on_connect_fail(handler._client, None)
+
+        warnings = self._records(caplog, logging.WARNING)
+        assert len(warnings) == 1
+        assert "192.0.2.10:1888" in warnings[0]
+
+    def test_repeated_connect_failures_are_throttled(self, handler, clock, caplog):
+        for _ in range(5):
+            handler._on_connect_fail(handler._client, None)
+            clock["t"] += 10.0  # 50 s in total, below the interval
+
+        assert len(self._records(caplog, logging.WARNING)) == 1
+
+    def test_connect_failure_is_logged_again_after_the_interval(self, handler, clock, caplog):
+        handler._on_connect_fail(handler._client, None)
+        clock["t"] += mqtt_handler.CONNECT_FAIL_LOG_INTERVAL_S
+        handler._on_connect_fail(handler._client, None)
+
+        warnings = self._records(caplog, logging.WARNING)
+        assert len(warnings) == 2
+        assert "2. Versuch" in warnings[1]
+
+    def test_lost_connection_is_a_warning_with_reason_code(self, handler, caplog):
+        reason = convert_disconnect_error_code_to_reason_code(MQTTErrorCode.MQTT_ERR_CONN_LOST)
+
+        handler._on_disconnect(handler._client, None, None, reason, None)
+
+        warnings = self._records(caplog, logging.WARNING)
+        assert len(warnings) == 1
+        assert "192.0.2.10:1888" in warnings[0]
+        assert str(reason) in warnings[0]
+
+    def test_requested_disconnect_is_not_a_warning(self, handler, caplog):
+        reason = convert_disconnect_error_code_to_reason_code(MQTTErrorCode.MQTT_ERR_SUCCESS)
+
+        handler._on_disconnect(handler._client, None, None, reason, None)
+
+        assert self._records(caplog, logging.WARNING) == []
+        assert handler._had_connection_problem is False
+
+    def test_first_failure_after_a_lost_connection_is_logged_immediately(self, handler, clock, caplog):
+        handler._on_connect_fail(handler._client, None)
+        reason = convert_disconnect_error_code_to_reason_code(MQTTErrorCode.MQTT_ERR_CONN_LOST)
+        handler._on_disconnect(handler._client, None, None, reason, None)
+        caplog.clear()
+
+        handler._on_connect_fail(handler._client, None)  # no clock advance
+
+        assert len(self._records(caplog, logging.WARNING)) == 1
+
+    def test_recovery_is_logged_with_the_number_of_failed_attempts(self, handler, clock, caplog):
+        handler._on_connect_fail(handler._client, None)
+        handler._on_connect_fail(handler._client, None)
+        caplog.clear()
+
+        handler._on_connect(MagicMock(), None, None, 0, None)
+
+        infos = self._records(caplog, logging.INFO)
+        assert any("wiederhergestellt nach 2 fehlgeschlagenen Versuchen" in m for m in infos)
+
+    def test_first_successful_connect_is_not_reported_as_recovery(self, handler, caplog):
+        handler._on_connect(MagicMock(), None, None, 0, None)
+
+        infos = self._records(caplog, logging.INFO)
+        assert any("192.0.2.10:1888 verbunden" in m for m in infos)
+        assert not any("wiederhergestellt" in m for m in infos)
+
+    def test_state_is_reset_after_a_successful_connect(self, handler, clock):
+        handler._on_connect_fail(handler._client, None)
+
+        handler._on_connect(MagicMock(), None, None, 0, None)
+
+        assert handler._connect_fail_count == 0
+        assert handler._had_connection_problem is False
+        assert handler._last_connect_fail_log is None
+
+    def test_refused_connection_names_the_broker(self, handler, caplog):
+        handler._on_connect(MagicMock(), None, None, 5, None)
+
+        errors = self._records(caplog, logging.ERROR)
+        assert len(errors) == 1
+        assert "192.0.2.10:1888" in errors[0]
+
+    def test_discovery_says_when_the_broker_is_not_connected(self, handler, caplog):
+        handler._client = MagicMock()
+        handler._client.is_connected.return_value = False
+
+        handler.publish_discovery("10.0.0.5", 7775)
+
+        message = self._records(caplog, logging.INFO)[-1]
+        assert "wird nach dem Connect gesendet" in message
+
+    def test_discovery_is_plain_when_the_broker_is_connected(self, handler, caplog):
+        handler._client = MagicMock()
+        handler._client.is_connected.return_value = True
+
+        handler.publish_discovery("10.0.0.5", 7775)
+
+        message = self._records(caplog, logging.INFO)[-1]
+        assert message.startswith("Discovery → hannah/server")
+        assert "Connect" not in message

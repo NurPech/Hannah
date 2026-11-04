@@ -1331,16 +1331,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     # analog ein. Bewusst über den bestehenden agent_satellite_update-Kanal
                     # statt eines neuen Proto-Felds: der Push selbst ist bereits das
                     # "gesehen"-Signal, der Adapter stempelt seine eigene Ankunftszeit.
-                    with self._proxy_sat_lock:
-                        proxy_satellites_snapshot = dict(self._proxy_satellites)
-                    db_sats = {s["device_id"]: s for s in self._get_db_satellites()}
-                    for device_id, info in proxy_satellites_snapshot.items():
-                        self._upsert_satellite(device_id)
-                        display_name = db_sats.get(device_id, {}).get("display_name") or ""
-                        self.agent_satellite_update(
-                            device_id, info.get("room", ""), info.get("addr", ""), True,
-                            display_name=display_name,
-                        )
+                    self._push_satellite_states()
                     if not discovery_published and hb.udp_host and hb.udp_port:
                         log.info(
                             f"[grpc] Proxy-Discovery: {hb.udp_host}:{hb.udp_port}"
@@ -1383,6 +1374,44 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
                     f"{_PROXY_REVERT_GRACE_SECONDS}s wiederhergestellt, falls kein Proxy zurückkehrt"
                 )
             log.info(f"[grpc] Proxy '{proxy_id}' getrennt")
+
+    def _push_satellite_states(self):
+        """Pushes the actual state of every known satellite to the adapter (#422): online for
+        the ones connected via the Proxy, offline for all others that have a room.
+
+        Runs on every Proxy heartbeat and is the safety net behind the one-shot events
+        (NotifySatelliteRegistered/Gone). The adapter only changes `online` on an incoming
+        push, so a lost or overtaken offline event would leave a failed satellite online in
+        ioBroker for good. Every cycle therefore states the whole truth again, so ioBroker
+        corrects itself within one heartbeat, whichever event got lost.
+
+        The state is only read after the database accesses and the pushes happen under the
+        same lock: a NotifySatelliteGone arriving during this cycle either lands before the
+        read (the satellite is pushed offline) or after the pushes (its own offline push
+        follows). It can no longer be overtaken by an online push from a stale copy."""
+        with self._proxy_sat_lock:
+            connected_ids = list(self._proxy_satellites)
+        for device_id in connected_ids:
+            self._upsert_satellite(device_id)
+        db_sats = {s["device_id"]: s for s in self._get_db_satellites()}
+
+        with self._proxy_sat_lock:
+            connected = dict(self._proxy_satellites)
+            for device_id, info in connected.items():
+                display_name = db_sats.get(device_id, {}).get("display_name") or ""
+                self.agent_satellite_update(
+                    device_id, info.get("room", ""), info.get("addr", ""), True,
+                    display_name=display_name,
+                )
+            for device_id, sat in db_sats.items():
+                room_id = sat.get("room_id") or ""
+                if device_id in connected or not room_id:
+                    # Without a room the adapter has nowhere to put the satellite
+                    continue
+                self.agent_satellite_update(
+                    device_id, room_id, "", False,
+                    display_name=sat.get("display_name") or "",
+                )
 
     def _revert_proxy_state(self):
         """Fired after the grace period once no proxy has reconnected — restores

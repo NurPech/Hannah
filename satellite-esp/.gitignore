@@ -5,6 +5,5 @@ sdkconfig.local
 sdkconfig.ci
 sdkconfig.sendspin
 managed_components/
-dependencies.lock
 .history
 .history_trim

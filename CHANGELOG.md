@@ -4,6 +4,38 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.102.10 (2026-11-04)
+### Hannah Core
+
+* Fixed: the Core container image builds again. It was moved to Python 3.15 in the previous release, but there is no `av` package for Python 3.15 yet, so the image build failed. Core stays on Python 3.14 until that changes (Refs #501)
+
+### VoiceID
+
+* Fixed: the VoiceID container image builds again. It was moved to Python 3.15 in the previous release, but there is no `sentencepiece` package for Python 3.15 yet, so the image build failed. VoiceID stays on Python 3.14 until that changes (Refs #502)
+
+### Satellite Firmware
+
+* Fixed: the firmware build now uses fixed versions of its libraries (`dependencies.lock` is part of the repository). Before, every build fetched the newest library versions, and a new version of the TensorFlow Lite library (1.4.2) broke the build of the wake word component without any change in Hannah. Library updates now arrive through a deliberate update of the lock file. The firmware code does not change, but the next release builds a new firmware version with the library versions of the lock file (Refs #503)
+
+## 0.102.9 (2026-11-04)
+### Hannah Core
+
+* Fixed: a satellite that went offline could stay online in ioBroker for good. The offline message and the regular online message that Core sends every 10 seconds could arrive in the wrong order, and nothing corrected it afterwards. Core now sends the state of every known satellite with every heartbeat of the Proxy: online for the connected ones, offline for the others that have a room. Whatever message got lost, ioBroker corrects itself within about 10 seconds (Refs #422)
+* Fixed: Core now says in its log when the MQTT broker cannot be reached, for example because of a wrong host or port. The first failed attempt is logged as a warning with host and port, further attempts follow at most once a minute. A lost connection is logged as a warning with the reason, and the reconnect as an info line. Before, a start without a reachable broker only showed `Verbinde mit MQTT-Broker …` and nothing else. The discovery line now also says when the message is still waiting for the broker connection (Refs #460)
+
+### Hannah Proxy
+
+* Changed: the Proxy uses newer versions of its Go libraries (among them gRPC 1.85 and `hannah-grpc-lib` 0.10)
+
+### Telegram
+
+* Changed: the Telegram container image is built on Python 3.15 (before: 3.14)
+
+### VoiceID
+
+* Changed: the VoiceID container image is built on Python 3.15 (before: 3.14)
+
 ## 0.102.8 (2026-10-27)
 ### Satellite Firmware
 

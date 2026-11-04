@@ -1,6 +1,7 @@
 import json
 import logging
 import threading
+import time
 from typing import Callable, Optional
 
 import paho.mqtt.client as mqtt
@@ -8,6 +9,11 @@ import paho.mqtt.client as mqtt
 from hannah.log_shipping import TRANSCRIPT
 
 log = logging.getLogger(__name__)
+
+# Mindestabstand zwischen zwei "Broker nicht erreichbar"-Zeilen (#460). paho versucht es im
+# Hintergrund mit Backoff immer wieder; ohne Drosselung stünde bei einem falschen Port
+# minütlich dieselbe Zeile im Log, mit ihr nur der erste Fehlschlag und danach ein Lebenszeichen.
+CONNECT_FAIL_LOG_INTERVAL_S = 60.0
 
 
 class MQTTHandler:
@@ -53,8 +59,17 @@ class MQTTHandler:
         self._busy_devices: set[str] = set()
         self._busy_lock = threading.Lock()
 
+        # Verbindungszustand fürs Logging (#460): Fehlschläge seit dem letzten Connect, Zeitpunkt
+        # der letzten geloggten Fehlzeile und ob es überhaupt ein Problem gab, das beim
+        # nächsten erfolgreichen Connect als "wiederhergestellt" gemeldet werden muss.
+        self._connect_fail_count = 0
+        self._last_connect_fail_log: Optional[float] = None
+        self._had_connection_problem = False
+
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self._client.on_connect = self._on_connect
+        self._client.on_connect_fail = self._on_connect_fail
+        self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
         self._client.will_set("hannah/status", "offline", qos=1, retain=True)
 
@@ -247,7 +262,13 @@ class MQTTHandler:
                 udp_host = s.getsockname()[0]
         payload = json.dumps({"host": udp_host, "port": udp_port})
         self._client.publish(topic, payload, qos=1, retain=True)
-        log.info(f"Discovery → {topic}: {payload}")
+        if self._client.is_connected():
+            log.info(f"Discovery → {topic}: {payload}")
+        else:
+            # QoS 1 bleibt in paho's Warteschlange und geht nach dem Connect raus, ist
+            # aber bis dahin nicht veröffentlicht (#460).
+            log.info(f"Discovery → {topic}: {payload} (noch nicht mit dem Broker verbunden, "
+                     f"wird nach dem Connect gesendet)")
 
     def publish_syslog_target(self, payload: str, topic: str = "hannah/syslog"):
         """Syslog-Ziel der Satelliten (#417), retained: {"host": ..., "port": ...}, bei Host ""
@@ -286,10 +307,50 @@ class MQTTHandler:
         self._client.publish(topic, msg, qos=1)
         log.debug(f"→ {topic}: {msg}")
 
+    def _broker_address(self) -> str:
+        return f"{self._cfg.get('host', 'localhost')}:{self._cfg.get('port', 1883)}"
+
+    def _on_connect_fail(self, client, userdata):
+        """Der TCP-/Verbindungsaufbau zum Broker ist gescheitert (down, falscher Port, Netz,
+        DNS). paho versucht es im Hintergrund weiter und meldet jeden Versuch hier, deshalb
+        gedrosselt loggen (#460)."""
+        self._connect_fail_count += 1
+        self._had_connection_problem = True
+        now = time.monotonic()
+        if (self._last_connect_fail_log is None
+                or now - self._last_connect_fail_log >= CONNECT_FAIL_LOG_INTERVAL_S):
+            self._last_connect_fail_log = now
+            log.warning(f"MQTT-Broker {self._broker_address()} nicht erreichbar "
+                        f"({self._connect_fail_count}. Versuch), Core versucht es weiter. "
+                        f"Host, Port und Broker prüfen")
+
+    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
+        if not reason_code.is_failure:
+            log.info("MQTT-Verbindung getrennt")
+            return
+        self._had_connection_problem = True
+        # Das nächste Scheitern beim Wiederverbinden soll sofort in den Log, nicht erst nach
+        # der Drosselung des vorherigen Zyklus.
+        self._connect_fail_count = 0
+        self._last_connect_fail_log = None
+        log.warning(f"MQTT-Verbindung zu {self._broker_address()} verloren "
+                    f"(Reason-Code: {reason_code}), Core verbindet automatisch neu")
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code != 0:
-            log.error(f"MQTT Verbindungsfehler: {reason_code}")
+            log.error(f"MQTT Verbindungsfehler: {reason_code} (Broker {self._broker_address()})")
+            self._had_connection_problem = True
             return
+
+        if self._had_connection_problem:
+            attempts = (f" nach {self._connect_fail_count} fehlgeschlagenen Versuchen"
+                        if self._connect_fail_count else "")
+            log.info(f"MQTT-Verbindung zu {self._broker_address()} wiederhergestellt{attempts}")
+        else:
+            log.info(f"MQTT-Broker {self._broker_address()} verbunden")
+        self._had_connection_problem = False
+        self._connect_fail_count = 0
+        self._last_connect_fail_log = None
 
         client.publish("hannah/status", "online", qos=1, retain=True)
 

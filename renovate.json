@@ -55,6 +55,17 @@
         "gitlabci-include"
       ],
       "automerge": true
+    },
+    {
+      "description": "Core and VoiceID stay on Python 3.14: av and sentencepiece have no wheels for 3.15 yet (#501, #502)",
+      "matchFileNames": [
+        "core/Dockerfile",
+        "voiceid/Dockerfile"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": "/^3\\.14[.-]/"
     }
   ]
 }

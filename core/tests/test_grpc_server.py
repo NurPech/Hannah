@@ -7,7 +7,7 @@ import time
 
 import pytest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 from werkzeug.security import generate_password_hash
 
@@ -268,6 +268,103 @@ def test_register_proxy_heartbeat_pushes_last_seen_to_adapter():
     servicer.agent_satellite_update.assert_called_once_with(
         "wz-sat", "wohnzimmer", "192.168.1.50", True, display_name="Wohnzimmer01",
     )
+
+class _OneHeartbeatContext:
+    def __init__(self):
+        self._active = True
+
+    def is_active(self):
+        active = self._active
+        self._active = False
+        return active
+
+
+class TestHeartbeatPushesWholeSatelliteState:
+    """#422: ioBroker kept a failed satellite online for good. The adapter only changes
+    `online` on an incoming push, and the one-shot offline event could be overtaken by an
+    online push from a stale copy. Every heartbeat now states the whole truth."""
+
+    @staticmethod
+    def _heartbeat(servicer):
+        list(servicer.RegisterProxy(iter([ProxyHeartbeat(proxy_id="proxy-1")]), _OneHeartbeatContext()))
+
+    def test_known_satellite_that_is_not_connected_is_pushed_offline(self):
+        servicer = _make_server(
+            resolve_satellite_room=lambda _d: "wohnzimmer",
+            get_db_satellites=lambda: [
+                {"device_id": "wz-sat", "display_name": "Wohnzimmer01", "room_id": "wohnzimmer"},
+                {"device_id": "bad-sat", "display_name": "Bad01", "room_id": "bad"},
+            ],
+        )
+        servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
+        servicer.agent_satellite_update = MagicMock()
+
+        self._heartbeat(servicer)
+
+        assert servicer.agent_satellite_update.call_args_list == [
+            call("wz-sat", "wohnzimmer", "192.168.1.50", True, display_name="Wohnzimmer01"),
+            call("bad-sat", "bad", "", False, display_name="Bad01"),
+        ]
+
+    def test_satellite_without_a_room_is_not_pushed(self):
+        servicer = _make_server(
+            get_db_satellites=lambda: [
+                {"device_id": "new-sat", "display_name": "", "room_id": ""},
+                {"device_id": "none-sat", "display_name": "", "room_id": None},
+            ],
+        )
+        servicer.agent_satellite_update = MagicMock()
+
+        self._heartbeat(servicer)
+
+        servicer.agent_satellite_update.assert_not_called()
+
+    def test_gone_satellite_is_pushed_offline_by_the_next_heartbeat(self):
+        servicer = _make_server(
+            resolve_satellite_room=lambda _d: "wohnzimmer",
+            get_db_satellites=lambda: [{"device_id": "wz-sat", "display_name": "W", "room_id": "wohnzimmer"}],
+        )
+        servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
+        servicer.NotifySatelliteGone(SatelliteRegistration(device_id="wz-sat"), None)
+        servicer.agent_satellite_update = MagicMock()
+
+        self._heartbeat(servicer)
+
+        servicer.agent_satellite_update.assert_called_once_with("wz-sat", "wohnzimmer", "", False, display_name="W")
+
+    def test_gone_during_the_database_access_is_not_overtaken_by_an_online_push(self):
+        """The exact race of #422: the satellite is registered when the heartbeat starts and
+        gone when the database access of that heartbeat is done."""
+        servicer = None
+
+        def _db():
+            servicer.NotifySatelliteGone(SatelliteRegistration(device_id="wz-sat"), None)
+            return [{"device_id": "wz-sat", "display_name": "W", "room_id": "wohnzimmer"}]
+
+        servicer = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer", get_db_satellites=_db)
+        servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
+        servicer.agent_satellite_update = MagicMock()
+
+        self._heartbeat(servicer)
+
+        servicer.agent_satellite_update.assert_called_once_with("wz-sat", "wohnzimmer", "", False, display_name="W")
+
+    def test_pushes_happen_under_the_satellite_lock(self):
+        """A NotifySatelliteGone must not slip in between reading the state and pushing it."""
+        servicer = _make_server(
+            resolve_satellite_room=lambda _d: "wohnzimmer",
+            get_db_satellites=lambda: [{"device_id": "bad-sat", "display_name": "", "room_id": "bad"}],
+        )
+        servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
+        lock_held = []
+        servicer.agent_satellite_update = MagicMock(
+            side_effect=lambda *a, **k: lock_held.append(servicer._proxy_sat_lock.locked())
+        )
+
+        self._heartbeat(servicer)
+
+        assert lock_held == [True, True]
+
 
 class TestRoomsGroupsRpcs:
     """#27 Phase 1 — reine Verdrahtung, RoomManager selbst ist in test_room_manager.py
