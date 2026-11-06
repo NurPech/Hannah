@@ -28,6 +28,7 @@ PROTO_VERSION_METADATA_KEY = "x-proto-version"
 COMPONENT_METADATA_KEY = "x-component"
 COMPONENT_VERSION_METADATA_KEY = "x-component-version"
 COMPONENT_ID_METADATA_KEY = "x-component-id"
+COMPONENT_HOST_METADATA_KEY = "x-component-host"
 
 _MAX_IDENTITY_LENGTH = 64
 
@@ -81,11 +82,13 @@ class ProtocolVersionInterceptor(grpc.ServerInterceptor):
 
 @dataclass(frozen=True)
 class CallerIdentity:
-    """Wer ruft: Name, Version und Instanz-ID, die hannah-grpc-lib (ab Python 0.9.0) bei jedem
-    Call mitschickt (#396). Rein informativ, keine Authentifizierung."""
+    """Wer ruft: Name, Version, Instanz-ID und Host, die hannah-grpc-lib (ab Python 0.9.0, der Host
+    erst in einer späteren Version) bei jedem Call mitschickt (#396, #506). Rein informativ, keine
+    Authentifizierung."""
     component: str
     version: str = ""
     instance_id: str = ""
+    host: str = ""
 
 
 def read_caller(metadata: dict) -> CallerIdentity | None:
@@ -98,7 +101,8 @@ def read_caller(metadata: dict) -> CallerIdentity | None:
     component = value(COMPONENT_METADATA_KEY)
     if not component:
         return None
-    return CallerIdentity(component, value(COMPONENT_VERSION_METADATA_KEY), value(COMPONENT_ID_METADATA_KEY))
+    return CallerIdentity(component, value(COMPONENT_VERSION_METADATA_KEY), value(COMPONENT_ID_METADATA_KEY),
+                          value(COMPONENT_HOST_METADATA_KEY))
 
 
 class OutdatedComponentInterceptor(grpc.ServerInterceptor):

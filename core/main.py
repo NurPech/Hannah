@@ -14,6 +14,7 @@ import uuid
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 from typing import Callable, Optional
@@ -60,6 +61,7 @@ from hannah.memory import LongTermMemory
 from hannah.room_manager import RoomManager
 from hannah.satellite_manager import SatelliteManager
 from hannah.settings_manager import SettingsManager
+from hannah.version_check import VersionChecker
 from hannah.weather import WeatherCache
 from hannah.trigger_engine import TriggerEngine
 from hannah.ble_location import BleLocationEngine, BleTag
@@ -2542,6 +2544,7 @@ def main():
         ],
         list_activity=activity_log_manager.list_activity,
         stream_activity_audio=activity_log_manager.get_audio_chunks,
+        public_versions=VersionChecker(lambda: settings_manager.get_settings_dict("version_check")).public_versions,
         create_message=message_manager.create_message,
         list_messages=message_manager.get_messages,
         delete_message=message_manager.delete_message,
@@ -2925,8 +2928,10 @@ def main():
     )
     syslog_target.start()
     # Core has no stream to itself, so it enters itself into the component registry (#398); the
-    # instance ID is the one hannah-grpc-lib names in Core's own calls
-    grpc_servicer.components.register_permanent("core", HANNAH_VERSION, hannah_identity.instance_id())
+    # instance ID is the one hannah-grpc-lib names in Core's own calls, the host the one it names
+    # as x-component-host (the same name the log collector shows), else the host name (#506)
+    own_host = dict(hannah_identity.metadata()).get("x-component-host") or socket.gethostname()
+    grpc_servicer.components.register_permanent("core", HANNAH_VERSION, hannah_identity.instance_id(), own_host)
     outdated_notifier = OutdatedComponentNotifier(get_db, _user_manager, message_manager)
     grpc_srv = GrpcServer(cfg.get("grpc", {}), grpc_servicer, outdated_notifier=outdated_notifier)
     grpc_srv.start()

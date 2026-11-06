@@ -128,6 +128,15 @@ DEFAULT_SYSLOG_SETTINGS: dict = {
     "fallback_port": 514,
 }
 
+# Versionsabgleich (#504): Core fragt beim ersten GetComponentVersions-Call den Version-Aggregator
+# nach den öffentlichen Versionen und hält die Antwort cache_ttl_s Sekunden. enabled = false schaltet
+# den ausgehenden Abruf ab, url ist der Aggregator-Endpunkt (siehe hannah.version_check).
+DEFAULT_VERSION_CHECK_SETTINGS: dict = {
+    "enabled": True,
+    "url": "https://hannah-versions.leonie.network/versions",
+    "cache_ttl_s": 3600,
+}
+
 
 class SettingsManager:
     def __init__(self, db: Callable):
@@ -208,6 +217,10 @@ class SettingsManager:
         if not self.get_settings_dict("syslog"):
             cat = self.ensure_category("syslog")
             for name, value in DEFAULT_SYSLOG_SETTINGS.items():
+                self.create_setting(cat, name, value)
+        if not self.get_settings_dict("version_check"):
+            cat = self.ensure_category("version_check")
+            for name, value in DEFAULT_VERSION_CHECK_SETTINGS.items():
                 self.create_setting(cat, name, value)
 
     def run_data_migrations(self) -> None:

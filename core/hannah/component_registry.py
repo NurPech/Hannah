@@ -116,15 +116,17 @@ _EXPIRY_CHECK_INTERVAL_S = 1.0
 
 
 class ComponentEntry:
-    """Eine laufende Instanz einer Komponente: Komponente, Version, Instanz-ID, erste und letzte
-    Sichtung, ob der letzte Call über den eingefrorenen N−1-Pfad kam, und wie viele Streams
-    gerade offen sind. `permanent` gilt für Core selbst, der keinen Stream zu sich hat."""
+    """Eine laufende Instanz einer Komponente: Komponente, Version, Instanz-ID, Host (Name des
+    Systems, auf dem sie läuft, leer solange sie keinen schickt), erste und letzte Sichtung, ob der
+    letzte Call über den eingefrorenen N−1-Pfad kam, und wie viele Streams gerade offen sind.
+    `permanent` gilt für Core selbst, der keinen Stream zu sich hat."""
 
     def __init__(self, component: str, version: str, instance_id: str, now_epoch: float, now_mono: float,
-                 legacy: bool = False, permanent: bool = False):
+                 legacy: bool = False, permanent: bool = False, host: str = ""):
         self.component = component
         self.version = version
         self.instance_id = instance_id
+        self.host = host
         self.first_seen = now_epoch
         self.last_seen = now_epoch
         self.legacy = legacy
@@ -178,7 +180,7 @@ class ComponentTracker:
             entry = self._entries.get(name)
             if entry is None:
                 entry = ComponentEntry(caller.component, caller.version, caller.instance_id,
-                                       self._wall_clock(), now, legacy=legacy)
+                                       self._wall_clock(), now, legacy=legacy, host=caller.host)
                 self._entries[name] = entry
                 self._make_room_locked(keep=entry)
                 self._registry.register(KIND_COMPONENT, name, entry)
@@ -186,6 +188,7 @@ class ComponentTracker:
             else:
                 version_changed = entry.version != caller.version
                 entry.version = caller.version
+                entry.host = caller.host or entry.host
                 entry.legacy = legacy
                 entry.last_seen = self._wall_clock()
                 entry._last_seen_mono = now
@@ -205,11 +208,12 @@ class ComponentTracker:
             entry.open_streams = max(0, entry.open_streams - 1)
             self._expire_locked(now, throttle=False)
 
-    def register_permanent(self, component: str, version: str, instance_id: str) -> ComponentEntry:
+    def register_permanent(self, component: str, version: str, instance_id: str, host: str = "") -> ComponentEntry:
         """Trägt eine Komponente ein, die nie ausläuft (Core selbst: er hat keinen Stream zu sich)."""
         now = self._clock()
         with self._lock:
-            entry = ComponentEntry(component, version, instance_id, self._wall_clock(), now, permanent=True)
+            entry = ComponentEntry(component, version, instance_id, self._wall_clock(), now, permanent=True,
+                                   host=host)
             self._entries[entry.key] = entry
             self._registry.register(KIND_COMPONENT, entry.key, entry)
             return entry
@@ -232,7 +236,7 @@ class ComponentTracker:
                     roles.setdefault((caller.component, caller.instance_id), []).append({"kind": kind, "name": name})
             return [
                 {
-                    "component": e.component, "version": e.version, "instance_id": e.instance_id,
+                    "component": e.component, "version": e.version, "instance_id": e.instance_id, "host": e.host,
                     "first_seen": e.first_seen, "last_seen": e.last_seen, "legacy": e.legacy,
                     "open_streams": e.open_streams, "roles": roles.get((e.component, e.instance_id), []),
                 }
@@ -270,6 +274,6 @@ class ComponentTracker:
     def _log_seen(entry: ComponentEntry) -> None:
         log.info(
             f"[components] {entry.component} {entry.version or '(ohne Version)'} "
-            f"(Instanz {entry.instance_id[:8] or '?'}) spricht mit Core"
+            f"(Instanz {entry.instance_id[:8] or '?'}{', Host ' + entry.host if entry.host else ''}) spricht mit Core"
             f"{' über den eingefrorenen alten Pfad' if entry.legacy else ''}"
         )

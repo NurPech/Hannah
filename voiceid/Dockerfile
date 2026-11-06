@@ -1,6 +1,6 @@
 # Stays on Python 3.14: sentencepiece (a dependency of speechbrain) has no wheel for 3.15 yet (#502).
 # renovate.json holds the base image back.
-FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966
 
 WORKDIR /app
 

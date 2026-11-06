@@ -4,6 +4,40 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.103.1 (2026-11-06)
+### Hannah Core
+
+* Changed: `GetComponentVersions` names each running component instance by the host it runs on, instead of a random ID that changes with every restart. The field is still called `instance_id`, the interface does not change. Components send their host name with every call as soon as they run `hannah-grpc-lib` 0.13.0 (Python), 0.11.0 (Go) or 0.12.0 (TypeScript) or newer; until then they keep showing their ID. Core itself shows its own host name. The name is the one the log collector shows for the instance (`HANNAH_LOG_INSTANCE`, else the host name, `container` for a container without its own host name). Two instances of one component on the same host show the same name (Refs #506)
+* Changed: Core runs with `hannah-grpc-lib` 0.13 and names its own host the way the log collector shows it for Core (Refs #506)
+
+### Telegram
+
+* Changed: Telegram runs with `hannah-grpc-lib` 0.13 and names the host it runs on to Core with every call, so the component list shows it by host instead of a random ID (Refs #506)
+
+### VoiceID
+
+* Changed: VoiceID runs with `hannah-grpc-lib` 0.13 and names the host it runs on to Core with every call, so the component list shows it by host instead of a random ID (Refs #506)
+
+### AutoDeploy
+
+* Changed: AutoDeploy runs with `hannah-grpc-lib` 0.13 and names the host it runs on to Core with every call, so the component list shows it by host instead of a random ID (Refs #506)
+
+### Hannah Proxy
+
+* Changed: the Proxy runs with `hannah-grpc-lib` 0.11 (Go) and names the host it runs on to Core with every call, so the component list shows it by host instead of a random ID. It needs `hannah-proto-go` 5.6, which comes along (Refs #506)
+
+## 0.103.0 (2026-11-06)
+### Hannah Core
+
+* Added: Core can now tell which of the connected components are out of date. The new call `GetComponentVersions` lists every running component instance with its version and compares it with the latest public version of that component (same version, update available, or newer than the public one, which is not an error and is what a release candidate on your own system looks like). Satellites are not part of it, they already get their update state from the update server. The public versions come from the version aggregator (`https://hannah-versions.leonie.network/versions`): Core asks for them with the first call, keeps the answer for an hour, and keeps the last good answer when the aggregator cannot be reached, so the call never fails because of it. The lookup is switched on by default and is the only outgoing request of this feature; it can be switched off, pointed at another URL, and its cache time changed in the new settings category `version_check` (`enabled`, `url`, `cache_ttl_s`). Needs `hannah-proto` 5.6.0 and `hannah-grpc-lib` 0.12.1 (Refs #504)
+
+### Telegram
+
+* Changed: the Telegram container image uses a newer Python base image (digest update, no change in behaviour)
+
+### VoiceID
+
+* Changed: the VoiceID container image uses a newer Python base image (digest update, no change in behaviour)
 
 ## 0.102.10 (2026-11-04)
 ### Hannah Core

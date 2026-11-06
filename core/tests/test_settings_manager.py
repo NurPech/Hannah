@@ -8,6 +8,7 @@ from hannah.settings_manager import (
     DEFAULT_NLU_SETTINGS,
     DEFAULT_PRESENCE_SETTINGS,
     DEFAULT_SYSLOG_SETTINGS,
+    DEFAULT_VERSION_CHECK_SETTINGS,
     DEFAULT_VOICE_ENROLLMENT_SETTINGS,
     SettingsManager,
 )
@@ -140,6 +141,22 @@ class TestSeedDefaults:
 
         assert manager.get_settings_dict("syslog") == {"fallback_host": "10.0.0.7"}
 
+    def test_seeds_version_check_on_and_with_the_aggregator_url(self, manager):
+        """#504: der Versionsabgleich ist ab Werk an, der Abruf lässt sich in den Settings abschalten."""
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("version_check") == DEFAULT_VERSION_CHECK_SETTINGS
+        assert DEFAULT_VERSION_CHECK_SETTINGS["enabled"] is True
+        assert DEFAULT_VERSION_CHECK_SETTINGS["url"].endswith("/versions")
+
+    def test_does_not_overwrite_a_switched_off_version_check(self, manager):
+        cat_id = manager.ensure_category("version_check")
+        manager.create_setting(cat_id, "enabled", False)
+
+        manager.seed_defaults()
+
+        assert manager.get_settings_dict("version_check") == {"enabled": False}
+
     def test_idempotent_on_repeated_calls(self, manager):
         manager.seed_defaults()
         manager.seed_defaults()
@@ -149,11 +166,12 @@ class TestSeedDefaults:
         assert manager.get_settings_dict("voice_enrollment") == DEFAULT_VOICE_ENROLLMENT_SETTINGS
         assert manager.get_settings_dict("presence") == DEFAULT_PRESENCE_SETTINGS
         assert manager.get_settings_dict("syslog") == DEFAULT_SYSLOG_SETTINGS
+        assert manager.get_settings_dict("version_check") == DEFAULT_VERSION_CHECK_SETTINGS
         # + llm.system_prompt
         assert len(manager.get_settings()) == (
             len(DEFAULT_NLU_SETTINGS) + len(DEFAULT_AUTOMATION_WORDS)
             + len(DEFAULT_VOICE_ENROLLMENT_SETTINGS) + len(DEFAULT_PRESENCE_SETTINGS)
-            + len(DEFAULT_SYSLOG_SETTINGS) + 1
+            + len(DEFAULT_SYSLOG_SETTINGS) + len(DEFAULT_VERSION_CHECK_SETTINGS) + 1
         )
 
 

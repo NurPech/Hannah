@@ -4,6 +4,8 @@ github.com/NurPech/hannah-proto-go/v5 v5.4.0 h1:FibAwWZ8EeVDdjbrfYwWoRRh/xxtk37h
 github.com/NurPech/hannah-proto-go/v5 v5.4.0/go.mod h1:vEstl0T0uf00iVu6Pi0s8gExwzpvAnOwCK+UvAsBAxQ=
 github.com/NurPech/hannah-proto-go/v5 v5.5.0 h1:FP+u2I83p4zq41Dmb+AOho1fQ6pOTIT8r0iHCQkIFCY=
 github.com/NurPech/hannah-proto-go/v5 v5.5.0/go.mod h1:vEstl0T0uf00iVu6Pi0s8gExwzpvAnOwCK+UvAsBAxQ=
+github.com/NurPech/hannah-proto-go/v5 v5.6.0 h1:uAwccDkVNK6mbAE3gKxi8iN3ZX7hIFJOXUsUxuxNBqY=
+github.com/NurPech/hannah-proto-go/v5 v5.6.0/go.mod h1:BT6HmsA2LM+DaxpsLNyxIgDYtdKNAMEcIWeH/x2O0ac=
 github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
@@ -14,6 +16,8 @@ gitlab.com/gessinger/hannah-grpc-lib/go v0.9.0 h1:GDdl2KrFYFpsLZr1PBUCdzEvcsK3Ff
 gitlab.com/gessinger/hannah-grpc-lib/go v0.9.0/go.mod h1:xwD14Z1yHL71/h8tC2pGY7KCPvtjPLLUGINrFymAc74=
 gitlab.com/gessinger/hannah-grpc-lib/go v0.10.0 h1:nYLSO9XDO9QFGNM+gx3plmIwuV5YsqR9TRIPmeEwmZw=
 gitlab.com/gessinger/hannah-grpc-lib/go v0.10.0/go.mod h1:ZpBUbAbVtipodzrc64VztNQp8nzxVLP7T2NRSV35iUA=
+gitlab.com/gessinger/hannah-grpc-lib/go v0.11.0 h1:VtQfQLPp0Wpsl5dlMq3yabD57HqI9tO+eoX1+cQUHMc=
+gitlab.com/gessinger/hannah-grpc-lib/go v0.11.0/go.mod h1:Ib3ZUpw2fFRFgqetsOmFT+j3hD6cv9k1A+buZ/6AEAQ=
 go.yaml.in/yaml/v2 v2.4.2 h1:DzmwEr2rDGHl7lsFgAHxmNz/1NlQ7xLIrlN2h5d1eGI=
 go.yaml.in/yaml/v2 v2.4.2/go.mod h1:081UH+NErpNdqlCXm3TtEran0rJZGxAYx9hb/ELlsPU=
 go.yaml.in/yaml/v3 v3.0.3 h1:bXOww4E/J3f66rav3pX3m8w6jDE4knZjGOw8b5Y6iNE=

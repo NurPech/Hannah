@@ -81,6 +81,17 @@ def test_a_heartbeat_enters_the_component_into_the_registry(setup):
     assert (entry.component, entry.version, entry.legacy) == ("timer", "0.4.0", False)
 
 
+def test_the_host_header_reaches_the_registry(setup):
+    """#506 — x-component-host kommt über einen echten Call an."""
+    registry, tracker, _interceptor, _core, stub = setup
+
+    stub.Heartbeat(pb.HeartbeatRequest(), metadata=_identity("timer", "0.4.0", "t1") + (("x-component-host", "psrvhva01"),))
+    stub.Heartbeat(pb.HeartbeatRequest(), metadata=_identity("proxy", "1.0.0", "p1"))
+
+    assert registry.get(KIND_COMPONENT, "timer/t1").host == "psrvhva01"
+    assert registry.get(KIND_COMPONENT, "proxy/p1").host == ""
+
+
 def test_a_call_without_identity_is_not_tracked(setup):
     registry, _tracker, _interceptor, _core, stub = setup
 

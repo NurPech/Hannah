@@ -3,8 +3,8 @@ module dev.kernstock.net/gessinger/voice/hannah/proxy
 go 1.26.0
 
 require (
-	github.com/NurPech/hannah-proto-go/v5 v5.5.0
-	gitlab.com/gessinger/hannah-grpc-lib/go v0.10.0
+	github.com/NurPech/hannah-proto-go/v5 v5.6.0
+	gitlab.com/gessinger/hannah-grpc-lib/go v0.11.0
 	google.golang.org/grpc v1.85.0
 	sigs.k8s.io/yaml v1.6.0
 )

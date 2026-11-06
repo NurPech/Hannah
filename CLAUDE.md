@@ -163,6 +163,7 @@ Kein TLS auf UDP (zu teuer für ESP32, im LAN akzeptabel).
 | `AgentConnect` | Bidirektionaler Stream zum ioBroker-Adapter — State-Updates rein, Control-Commands + `resident_answered`-Events raus |
 | `SubscribeInfrastructure` / `LogCollectorConnect` | Service Discovery (#335): Log-Collector meldet sich per Stream an (Verdrängung wie `ChannelConnect`), Komponenten bekommen Snapshot + Deltas der verfügbaren Infrastruktur-Dienste. Grundlage ist die gemeinsame Component-Registry (`core/hannah/component_registry.py`) |
 | `ChannelConnect` / `GetChannels` / `CreateLinkToken` | Konto-Verknüpfung per Deep-Link (#334): Channel-Adapter (Telegram) meldet sich per Stream an und löst darüber Link-Codes ein / laufende Dienste + ob verknüpfbar / Einmal-Link für einen User (10 Min, nur im Speicher, `core/hannah/link_tokens.py`) |
+| `GetComponentVersions` | Version-Check (#504): alle laufenden Komponenten-Instanzen aus der Component-Registry mit lokaler und letzter öffentlicher Version (Version-Aggregator, Abruf beim ersten Call, Cache, abschaltbar in der Settings-Kategorie `version_check`) und SemVer-Vergleich; Satelliten ausgenommen. Nur `hannah.v2` (`core/hannah/version_check.py`) |
 
 ### MQTT (Hannah Core ↔ Satelliten)
 

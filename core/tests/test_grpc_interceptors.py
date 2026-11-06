@@ -149,7 +149,8 @@ class TestOutdatedComponentInterceptor:
         """#396 — hannah-grpc-lib sagt, wer ruft."""
         notifier = MagicMock()
         interceptor = OutdatedComponentInterceptor(notifier, legacy_prefix=LEGACY_PREFIX)
-        extra = (("x-component", "telegram"), ("x-component-version", "1.2.3"), ("x-component-id", "abc123"))
+        extra = (("x-component", "telegram"), ("x-component-version", "1.2.3"), ("x-component-id", "abc123"),
+                 ("x-component-host", "psrvhva01"))
 
         interceptor.intercept_service(
             MagicMock(return_value=_unary_handler()),
@@ -157,7 +158,7 @@ class TestOutdatedComponentInterceptor:
         )
 
         notifier.notify_legacy_call.assert_called_once_with(
-            "ChannelConnect", "3", CallerIdentity("telegram", "1.2.3", "abc123"))
+            "ChannelConnect", "3", CallerIdentity("telegram", "1.2.3", "abc123", "psrvhva01"))
 
     def test_caller_identity_is_passed_on_the_current_path_too(self):
         notifier = MagicMock()
@@ -175,9 +176,21 @@ class TestOutdatedComponentInterceptor:
         assert read_caller({"x-component": "  "}) is None
 
     def test_identity_values_from_outside_are_cut_to_a_bounded_length(self):
-        caller = read_caller({"x-component": "x" * 500, "x-component-version": "1" * 500, "x-component-id": "a" * 500})
+        caller = read_caller({"x-component": "x" * 500, "x-component-version": "1" * 500, "x-component-id": "a" * 500,
+                              "x-component-host": "h" * 500})
 
-        assert len(caller.component) == len(caller.version) == len(caller.instance_id) == 64
+        assert len(caller.component) == len(caller.version) == len(caller.instance_id) == len(caller.host) == 64
+
+    def test_the_host_is_part_of_the_caller_identity(self):
+        """#506 — hannah-grpc-lib sagt auch, auf welchem Host die Instanz läuft."""
+        caller = read_caller({"x-component": "proxy", "x-component-version": "1.2.3", "x-component-id": "abc",
+                              "x-component-host": "  psrvhva01 "})
+
+        assert caller == CallerIdentity("proxy", "1.2.3", "abc", "psrvhva01")
+
+    def test_a_caller_without_a_host_header_has_an_empty_host(self):
+        """Eine Komponente mit älterer hannah-grpc-lib schickt keinen Host."""
+        assert read_caller({"x-component": "proxy", "x-component-id": "abc"}).host == ""
 
     def test_unimplemented_method_is_not_reported(self):
         """handler is None (Methode existiert nicht mehr) — kein Fall für #358, das

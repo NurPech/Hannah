@@ -301,6 +301,34 @@ def test_a_call_of_another_component_cleans_up_the_expired(registry, tracker, cl
     assert _names(registry) == ["proxy/p1"]
 
 
+def test_the_host_of_a_caller_is_kept_and_listed(tracker):
+    """#506"""
+    entry = tracker.seen(CallerIdentity("proxy", "1.0.0", "abc", "psrvhva01"))
+
+    assert entry.host == "psrvhva01"
+    assert tracker.snapshot()[0]["host"] == "psrvhva01"
+
+
+def test_a_caller_without_a_host_has_none_listed(tracker):
+    tracker.seen(_caller("proxy", "1.0.0", "abc"))
+
+    assert tracker.snapshot()[0]["host"] == ""
+
+
+def test_a_later_call_fills_in_the_host_and_one_without_keeps_it(tracker):
+    tracker.seen(CallerIdentity("proxy", "1.0.0", "abc"))
+    tracker.seen(CallerIdentity("proxy", "1.0.0", "abc", "psrvhva01"))
+    tracker.seen(CallerIdentity("proxy", "1.0.0", "abc"))
+
+    assert tracker.snapshot()[0]["host"] == "psrvhva01"
+
+
+def test_core_names_its_own_host(tracker):
+    tracker.register_permanent("core", "0.95.0", "c0", "psrvhva01")
+
+    assert tracker.snapshot()[0]["host"] == "psrvhva01"
+
+
 def test_core_itself_never_expires(tracker, clock):
     tracker.register_permanent("core", "0.95.0", "c0")
 

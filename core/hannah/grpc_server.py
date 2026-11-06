@@ -31,7 +31,7 @@ from hannah.models.satellite import Satellite
 from hannah.grpc_interceptors import (
     ProtocolVersionInterceptor, OutdatedComponentInterceptor, read_caller, read_proto_version,
 )
-from hannah import grpc_v1
+from hannah import grpc_v1, version_check
 from hannah.link_tokens import LinkTokenStore, LOOKUP_EXPIRED, LOOKUP_OK
 from hannah.component_registry import (
     ComponentRegistry, ComponentTracker, KIND_CHANNEL, KIND_LOG_COLLECTOR, EVENT_REGISTERED,
@@ -317,6 +317,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         create_message: Optional[Callable[..., dict]] = None,                    # (user_id, content, source) → dict
         list_messages: Optional[Callable[..., list]] = None,                     # (requestor_id, filter_user_id) → [{id, user_id, content, source, created_at}]
         delete_message: Optional[Callable[[int, int], bool]] = None,             # (requestor_id, id) → bool
+        public_versions: Optional[Callable[[], object]] = None,                  # () → version_check.PublicVersions
     ):
         self._user_manager          = user_manager
         self._satellite_manager     = satellite_manager
@@ -406,6 +407,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_automation_register    = on_automation_register or (lambda _automation: [])
         self._list_activity             = list_activity or (lambda *_: ([], False))
         self._stream_activity_audio     = stream_activity_audio or (lambda *_: None)
+        self._public_versions           = public_versions or (lambda: version_check.PublicVersions({}, False, 0))
 
         self._subscribers: list[_Subscriber] = []
         self._subs_lock = threading.Lock()
@@ -2113,6 +2115,30 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         the call metadata, and the OutdatedComponentInterceptor entered it into the registry
         (and refreshed its last sighting) before this handler runs."""
         return pb.HeartbeatResponse()
+
+    def GetComponentVersions(self, _request, _context):
+        """Die laufenden Komponenten-Instanzen mit ihrer Version und dem SemVer-Vergleich gegen die
+        letzte öffentliche Version (#504). Scheitert nie am Aggregator: ohne öffentliche Versionen
+        kommt nur der laufende Stand, latest_available ist dann false."""
+        public = self._public_versions()
+        comparisons = {
+            None: pb.VERSION_COMPARISON_UNSPECIFIED,
+            version_check.UP_TO_DATE: pb.VERSION_COMPARISON_UP_TO_DATE,
+            version_check.UPDATE_AVAILABLE: pb.VERSION_COMPARISON_UPDATE_AVAILABLE,
+            version_check.NEWER_THAN_PUBLIC: pb.VERSION_COMPARISON_NEWER_THAN_PUBLIC,
+        }
+        instances = version_check.component_versions(self._components.snapshot(), public.versions)
+        return pb.GetComponentVersionsResponse(
+            components=[
+                pb.ComponentVersionInfo(
+                    component=i["component"], instance_id=i["instance_id"], version=i["version"],
+                    latest_version=i["latest_version"], comparison=comparisons[i["comparison"]],
+                )
+                for i in instances
+            ],
+            latest_available=public.available,
+            latest_checked_at=public.checked_at,
+        )
 
     # ------------------------------------------------------------------
     # Infrastructure (#335)
