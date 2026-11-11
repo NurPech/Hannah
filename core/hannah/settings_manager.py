@@ -135,6 +135,9 @@ DEFAULT_VERSION_CHECK_SETTINGS: dict = {
     "enabled": True,
     "url": "https://hannah-versions.leonie.network/versions",
     "cache_ttl_s": 3600,
+    # #507: Mailbox-Nachricht an die Admins, wenn ein Update länger als notify_after_h Stunden aussteht
+    "notify_admins": True,
+    "notify_after_h": 24,
 }
 
 
@@ -238,6 +241,15 @@ class SettingsManager:
             db.execute('INSERT INTO "applied_migrations" ("name") VALUES (?)', (name,))
             db.commit()
 
+    def _add_missing_settings(self, category_path: str, defaults: dict) -> None:
+        """Legt fehlende Settings einer bestehenden Kategorie mit ihrem Default an — vorhandene
+        Werte bleiben unangetastet. Eine fehlende Kategorie bleibt fehlend (sie legt seed_defaults() an)."""
+        cat_id = self.get_category_id(category_path)
+        if cat_id is None:
+            return
+        for name, value in defaults.items():
+            self.create_setting(cat_id, name, value)
+
     def _add_missing_category_words(self, words: dict[str, str]) -> None:
         """Ergänzt fehlende Schlüssel in nlu.category_words — vorhandene Einträge (auch
         abweichend gemappte) bleiben unangetastet. Ohne gespeicherte category_words
@@ -274,5 +286,11 @@ _DATA_MIGRATIONS: list[tuple[str, Callable[[SettingsManager], None]]] = [
     # #317: umgangssprachliche Zweifach-L-Schreibweise + Plural für Rollläden
     ("317_blind_category_words", lambda m: m._add_missing_category_words({
         "rolladen": "blind", "rolllaeden": "blind", "rollaeden": "blind",
+    })),
+    # #507: Admin-Benachrichtigung bei ausstehenden Updates — bestehende version_check-Kategorie
+    # bekommt die neuen Schalter, damit sie in der Admin-UI auftauchen
+    ("507_version_check_notify_settings", lambda m: m._add_missing_settings("version_check", {
+        "notify_admins": DEFAULT_VERSION_CHECK_SETTINGS["notify_admins"],
+        "notify_after_h": DEFAULT_VERSION_CHECK_SETTINGS["notify_after_h"],
     })),
 ]

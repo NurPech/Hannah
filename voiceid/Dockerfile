@@ -1,6 +1,6 @@
 # Stays on Python 3.14: sentencepiece (a dependency of speechbrain) has no wheel for 3.15 yet (#502).
 # renovate.json holds the base image back.
-FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 WORKDIR /app
 
@@ -24,10 +24,15 @@ COPY app.py log_shipping.py ./
 ARG VERSION=dev
 RUN echo "${VERSION#v}" > VERSION
 
-# Daten-Verzeichnis (wird als Volume gemountet)
+# Voice profiles: persistent copy on a volume, working copy (RAM) on a second one.
+# Both directories are created and owned by appuser here, so that Docker copies
+# that ownership into a fresh named volume — otherwise the volume is root-owned
+# and enrollment fails with "Permission denied" (#512).
+ENV VOICEID_DISK_PATH=/var/lib/hannah-voiceid/profiles \
+    VOICEID_MEM_PATH=/mnt/hannah_mem
 RUN useradd -r -u 1000 appuser && \
-    mkdir -p /etc/hannah-voiceid /home/appuser && \
-    chown -R appuser:appuser /app /etc/hannah-voiceid /home/appuser
+    mkdir -p /etc/hannah-voiceid /home/appuser "${VOICEID_DISK_PATH}" "${VOICEID_MEM_PATH}" && \
+    chown -R appuser:appuser /app /etc/hannah-voiceid /home/appuser /var/lib/hannah-voiceid "${VOICEID_MEM_PATH}"
 USER appuser
 
 CMD ["python", "app.py", "--config", "/etc/hannah-voiceid/config.yaml"]

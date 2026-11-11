@@ -226,6 +226,23 @@ class TestRunDataMigrations:
         applied = {r[0] for r in db_module.get_db().execute('SELECT "name" FROM "applied_migrations"').fetchall()}
         assert "317_blind_category_words" in applied
 
+    def test_adds_notify_settings_to_existing_version_check_and_keeps_user_values(self, manager):
+        """#507: bestehende version_check-Kategorie bekommt die neuen Schalter, eigene Werte bleiben."""
+        cat_id = manager.ensure_category("version_check")
+        manager.create_setting(cat_id, "enabled", False)
+        manager.create_setting(cat_id, "notify_after_h", 48)
+
+        manager.run_data_migrations()
+
+        assert manager.get_settings_dict("version_check") == {
+            "enabled": False, "notify_after_h": 48, "notify_admins": True,
+        }
+
+    def test_without_version_check_category_the_notify_migration_creates_nothing(self, manager):
+        manager.run_data_migrations()
+
+        assert manager.get_settings_dict("version_check") == {}
+
 
 class TestCleanupLegacySettings:
     """#257: iobroker.state_names used to be migrated into the DB (deploy/

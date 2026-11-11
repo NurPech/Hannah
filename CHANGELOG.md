@@ -4,6 +4,31 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.103.3 (2026-11-11)
+### Hannah Core
+
+* Changed: the Core container image uses a newer Python base image (digest update, no change in behaviour)
+
+### Telegram
+
+* Changed: the Telegram container image uses a newer Python base image (digest update, no change in behaviour)
+
+### VoiceID
+
+* Changed: the VoiceID container image uses a newer Python base image (digest update, no change in behaviour)
+* Fixed: in the container, VoiceID could not save voice profiles: enrolling a voice failed with "Permission denied" and every voice was reported as unknown. The profile directories now belong to the VoiceID user, and the profiles live in their own volume `hannah_voiceid_profiles` (`/var/lib/hannah-voiceid/profiles`), so they survive an update of the container. Existing container installations: add the new volume to your compose file (see the installation guide), pull the new image and re-create the VoiceID container. If saving still fails with "Permission denied", remove the container and the old `hannah_mem` volume and start VoiceID again. Nothing is lost either way, because no profile could be saved before (Refs #512)
+
+## 0.103.2 (2026-11-07)
+### Hannah Core
+
+* Added: when an update for a component has been pending for more than 24 hours, Hannah puts a message into the message box of every admin (trust level 10, except Hannah's own user). One message per component and public version: a restart of Core does not repeat it, and a newer public version starts a new 24 hours. The message names the component, the version it runs and the current one. Core checks every 15 minutes, using the version check from 0.103.0. In the `version_check` settings, `notify_admins` switches the messages off and `notify_after_h` sets the number of hours (Refs #507)
+* Changed: updates of the packages Core uses for speech recognition, speech output with Piper, decoding the confirmation sounds and the MySQL activity log are now checked against what Core really uses of them before an update is accepted. A package that renamed or dropped something Core needs shows up when the update is reviewed and not on your Raspberry Pi (Refs #505)
+
+### VoiceID
+
+* Changed: updates of the speaker recognition package VoiceID uses are now checked against what VoiceID really uses of it before an update is accepted, so a broken update shows up in the review and not when VoiceID starts (Refs #505)
+
 ## 0.103.1 (2026-11-06)
 ### Hannah Core
 

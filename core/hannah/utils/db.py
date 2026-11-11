@@ -224,6 +224,24 @@ CREATE TABLE IF NOT EXISTS "outdated_component_notices" (
 	"notified_at"	TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY("method","proto_version")
 );
+
+-- Ausstehende Komponenten-Updates (#507): seit wann steht welche öffentliche Version aus,
+-- und welcher Admin wurde darüber schon benachrichtigt. Siehe hannah.pending_updates.
+CREATE TABLE IF NOT EXISTS "pending_update_seen" (
+	"component"	TEXT NOT NULL,
+	"version"	TEXT NOT NULL,
+	"first_seen"	INTEGER NOT NULL,
+	PRIMARY KEY("component","version")
+);
+
+CREATE TABLE IF NOT EXISTS "pending_update_notified" (
+	"component"	TEXT NOT NULL,
+	"version"	TEXT NOT NULL,
+	"user_id"	INTEGER NOT NULL,
+	"notified_at"	TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY("component","version","user_id"),
+	FOREIGN KEY("user_id") REFERENCES "users"("id") ON DELETE CASCADE
+);
 """
 
 

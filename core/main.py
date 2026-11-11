@@ -68,6 +68,7 @@ from hannah.ble_location import BleLocationEngine, BleTag
 from hannah.alarms import AlarmManager, format_duration
 from hannah.messages import MessageManager
 from hannah.outdated_components import OutdatedComponentNotifier
+from hannah.pending_updates import PendingUpdateNotifier
 from hannah.__version__ import VERSION as HANNAH_VERSION
 from hannah_grpc import identity as hannah_identity
 
@@ -92,6 +93,9 @@ def _date_answer() -> str:
 # Opus unterstützt nur 8/12/16/24/48kHz — TTS-Ausgaben (Piper 22050Hz, Azure
 # 24000Hz) werden dafür beim Encode auf diese Rate resampled (#244).
 _OPUS_ENCODE_RATE = 48000
+
+# Abstand der Prüfung auf länger ausstehende Komponenten-Updates (#507)
+PENDING_UPDATES_CHECK_INTERVAL_S = 900
 
 
 def _ogg_opus_to_pcm16k(audio_ogg: bytes) -> bytes:
@@ -2445,6 +2449,8 @@ def main():
         device_control.handle_slot_update(update)
         iobroker.handle_slot_ack(update)
 
+    version_checker = VersionChecker(lambda: settings_manager.get_settings_dict("version_check"))
+
     grpc_servicer = HannahServicer(
         user_manager=_user_manager,
         satellite_manager=satellite_manager,
@@ -2544,7 +2550,7 @@ def main():
         ],
         list_activity=activity_log_manager.list_activity,
         stream_activity_audio=activity_log_manager.get_audio_chunks,
-        public_versions=VersionChecker(lambda: settings_manager.get_settings_dict("version_check")).public_versions,
+        public_versions=version_checker.public_versions,
         create_message=message_manager.create_message,
         list_messages=message_manager.get_messages,
         delete_message=message_manager.delete_message,
@@ -2940,6 +2946,25 @@ def main():
     # Graceful Shutdown
 
     stop = threading.Event()
+
+    # Ausstehende Komponenten-Updates (#507): alle 15 Minuten prüfen, ob ein Update länger als die
+    # Schwelle offen ist, und die Admins per Mailbox informieren. Die öffentlichen Versionen kommen
+    # aus dem Cache des VersionChecker (TTL), die Prüfung fragt den Aggregator also nicht öfter.
+    pending_updates = PendingUpdateNotifier(
+        get_db, _user_manager, message_manager,
+        get_instances=grpc_servicer.components.snapshot,
+        get_public_versions=version_checker.public_versions,
+        get_settings=lambda: settings_manager.get_settings_dict("version_check"),
+    )
+
+    def _pending_updates_loop():
+        while not stop.wait(PENDING_UPDATES_CHECK_INTERVAL_S):
+            try:
+                pending_updates.check()
+            except Exception:
+                log.exception("[pending_updates] Prüfung fehlgeschlagen")
+
+    threading.Thread(target=_pending_updates_loop, name="pending-updates", daemon=True).start()
 
     def on_signal(sig, frame):
         log.info("Shutdown ...")

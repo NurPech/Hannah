@@ -57,15 +57,29 @@
       "automerge": true
     },
     {
-      "description": "Core and VoiceID stay on Python 3.14: av and sentencepiece have no wheels for 3.15 yet (#501, #502)",
+      "description": "Core and VoiceID stay on Python 3.14: av and sentencepiece have no wheels for 3.15 yet (#501, #502). The test jobs for the container images in .gitlab-ci.yml run on the same version and move together with the Dockerfiles (#505)",
       "matchFileNames": [
         "core/Dockerfile",
-        "voiceid/Dockerfile"
+        "voiceid/Dockerfile",
+        ".gitlab-ci.yml"
       ],
       "matchPackageNames": [
         "python"
       ],
-      "allowedVersions": "/^3\\.14[.-]/"
+      "matchCurrentValue": "/^3\\.14/",
+      "allowedVersions": "/^3\\.14[.-]/",
+      "groupName": "python 3.14 (Core and VoiceID images and test jobs)"
+    },
+    {
+      "description": "The Core test job for the native Pi installation stays on the Python minor of the Pi (Debian 13, 3.13) until AutoDeploy manages the Python version (#509, #505)",
+      "matchFileNames": [
+        ".gitlab-ci.yml"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "matchCurrentValue": "/^3\\.13/",
+      "allowedVersions": "/^3\\.13[.-]/"
     }
   ]
 }
