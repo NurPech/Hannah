@@ -46,9 +46,9 @@ CONFIG_HANNAH_SD_MOSI_GPIO=5
 CONFIG_HANNAH_SD_CLK_GPIO=6
 CONFIG_HANNAH_SD_MISO_GPIO=7
 
-# Wakeword-Debug (Refs #222) — /debug/wav(/capture) für die laufende
-# Stille-Untersuchung der TDM-Mics
-CONFIG_HANNAH_WAKEWORD_DEBUG=y
+# Wakeword-Debug (CONFIG_HANNAH_WAKEWORD_DEBUG) bleibt für öffentliche Builds aus:
+# mit dem Flag läuft ein 4-s-Mikrofon-Ringpuffer dauerhaft mit, den /debug/wav(/capture)
+# ohne Anmeldung ausliefert (Refs #513). Wer es braucht, setzt es in einem eigenen Build.
 
 # Speaker-Output-Gain — Rev5-Lautsprecher subjektiv zu laut, 70% Original-
 # Pegel = 100% für den Satelliten (Refs #232, Schätzwert, ggf. nachjustiert

@@ -4,6 +4,10 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.103.4 (2026-11-11)
+### Satellite Firmware
+
+* Changed: the Rev. 5 firmware no longer ships with the wakeword debug tooling enabled. With it, the satellite kept the last 4 seconds of microphone audio in memory at all times and handed them out to anyone in the network through `/debug/wav` and `/debug/wav/capture` without a login. Both addresses stay in place and now answer "no capture available". The audio buffer was never stored permanently and is not sent to Hannah (Refs #513)
 
 ## 0.103.3 (2026-11-11)
 ### Hannah Core

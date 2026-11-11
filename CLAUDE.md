@@ -40,7 +40,7 @@ hannah/                          ← Mono-Repo
 │   │   ├── alarms.py            ← Wecker (AlarmManager)
 │   │   ├── ble_location.py      ← BLE-Indoor-Lokalisierung
 │   │   ├── tool_agent.py        ← LLM-Tool-Calling-Agent (Geräte lesen/setzen über die Registry)
-│   │   ├── weather.py           ← Wetter (OpenWeatherMap)
+│   │   ├── weather.py           ← Wetter-Cache (Daten kommen vom ioBroker-Adapter, Core ruft keinen Wetterdienst selbst auf)
 │   │   └── audio.py             ← Audio-Utilities (Resampling, VAD)
 |   ├── main.py                  ← Einstiegspunkt, Orchestrierung
 │   └── config.yaml              ← Infra-/Bootstrap-Config; NLU-Wortlisten, llm.system_prompt, ble.tags und cars liegen in der DB (hannah.db, Settings-Tabelle) statt hier — siehe GetSettings/UpdateConfig gRPC. nlu wird bei leerer DB automatisch mit generischen Defaults befüllt (SettingsManager.seed_defaults(), #114). iobroker.state_names ist seit #257 kein DB-Setting mehr, sondern ein hartkodierter Fallback in core/hannah/iobroker.py (DEFAULT_IOBROKER_STATE_NAMES) für Adapter <1.1.0 (hannah-proto <3.8.0), nicht mehr nutzereditierbar
