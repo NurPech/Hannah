@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from hannah_proto.v2 import hannah_pb2 as pb
 
-from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied
+from hannah.iobroker import GUEST_TRUST_LEVEL, TRUST_DENIED_TEXT, TrustLevelDenied, _camel_to_words
 from hannah.llm import CLASSIFY_PROMPT, parse_classification
 from hannah.log_shipping import TRANSCRIPT
 from hannah.nlu_devices import categories_of
@@ -45,6 +45,35 @@ def _unwrap_text_speak(content: str) -> str:
         return match.group(2).strip()
     match = _TEXT_SPEAK_LINE.match(content or "")
     return match.group(1).strip() if match else content
+
+
+# Absage, wenn der aktuelle Satz kein Gerät nennt, das das LLM schalten will (#515). Sie geht direkt
+# in die gesprochene Antwort, damit das LLM nicht in der nächsten Runde weitere Geräte nachschiebt.
+UNNAMED_DEVICE_TEXT = "Welches Gerät meinst du? Nenn mir bitte den Namen."
+
+# Wörter, die "jedes Gerät dieser Kategorie" meinen ("alle Lichter aus")
+_QUANTIFIERS = ("alle", "alles", "sämtliche", "saemtliche", "überall", "ueberall")
+
+# Kategorien, die nur über den Namen geschaltet werden, nie über "alle Steckdosen": an einer
+# Steckdose hängt irgendetwas, auch der Rechner oder der Pi mit Core selbst (#515).
+_NAME_ONLY_CLASSES = (pb.DeviceClass.DEVICE_CLASS_SOCKET, pb.DeviceClass.DEVICE_CLASS_GENERIC_BINARY_SWITCH)
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-zäöüß0-9]+", (text or "").lower())
+
+
+def _same_word(a: str, b: str) -> bool:
+    """Ob zwei Wörter dasselbe meinen: gleich, oder eines beginnt mit dem anderen (Lampe/Lampen,
+    Kodi/Kodis). Das Teilwort muss ab vier Zeichen lang sein, sonst träfe fast alles fast alles."""
+    if a == b:
+        return True
+    short, long = sorted((a, b), key=len)
+    return len(short) >= 4 and long.startswith(short)
+
+
+def _mentions(candidates: list[str], spoken: list[str]) -> bool:
+    return any(_same_word(c, s) for c in candidates for s in spoken)
 
 
 # Letzte Nachricht des Classifier-Aufrufs (#407). Dieselben Kriterien wie CLASSIFY_PROMPT, nur
@@ -324,6 +353,11 @@ class ToolAgent:
             "\n- Nutze das speak-Tool um deine Antwort auszugeben."
             "\n- Rufe nie dasselbe Tool zweimal hintereinander auf."
             "\n- Nach dem Sammeln aller nötigen Informationen: speak aufrufen und danach stoppen."
+            "\n- Steuere ein Gerät (set_device_state) nur, wenn der aktuelle Satz des Nutzers das Gerät "
+            "oder Raum und Kategorie eindeutig nennt. Leite ein Gerät niemals aus dem Gesprächsverlauf "
+            "oder aus der Liste der aktiven Geräte ab."
+            "\n- Ist unklar, welches Gerät gemeint ist, frage mit speak nach. Erfinde nie einen Befehl."
+            "\n- Sage nie, dass du etwas getan hast oder tun wirst, wenn du dafür kein Tool aufgerufen hast."
         )
         _NOW_NOTE = (
             f"\n\n[Aktuelles Datum/Uhrzeit: {_WEEKDAYS_DE[_now.weekday()]}, {_now.strftime('%d.%m.%Y')}, "
@@ -412,7 +446,7 @@ class ToolAgent:
                     log.warning("[tool_agent] Duplikat-Aufruf blockiert: %s(%s)", func_name, args, extra=TRANSCRIPT)
                 else:
                     called.add(call_key)
-                    result = self._dispatch(func_name, args, spoken, user_id, trust_level)
+                    result = self._dispatch(func_name, args, spoken, user_id, trust_level, utterance=text)
                 result_chars = len(result) if isinstance(result, str) else len(json.dumps(result, ensure_ascii=False))
                 log.info("[tool_agent] %s → %d chars", func_name, result_chars)
                 # Die Argumente tragen Nutzertext, z.B. den gesprochenen Text bei speak.
@@ -440,7 +474,7 @@ class ToolAgent:
 
     def _dispatch(
         self, name: str, args: dict, spoken: list[str], user_id: str = "",
-        trust_level: int | None = GUEST_TRUST_LEVEL,
+        trust_level: int | None = GUEST_TRUST_LEVEL, utterance: str = "",
     ) -> object:
         if name == "get_all_devices":
             return self._get_all_devices()
@@ -455,7 +489,7 @@ class ToolAgent:
         if name == "set_device_state":
             return self._set_device_state(
                 args.get("device_id", ""), args.get("slot_id", ""), args.get("value"), trust_level, spoken,
-                state_id=args.get("state_id", ""),
+                state_id=args.get("state_id", ""), utterance=utterance,
             )
         if name == "set_automation":
             return self._set_automation(args.get("automation", ""), bool(args.get("enabled", True)), user_id)
@@ -557,9 +591,33 @@ class ToolAgent:
             f"Zustand: {self._slots_text(dev)}"
         )
 
+    def _utterance_names(self, device: TypedDevice, utterance: str) -> bool:
+        """Ob der aktuelle Satz des Nutzers das Gerät nennt (#515): sein Name (ein Wort davon
+        genügt) oder, bei Geräten, die man gemeinsam schaltet, die Kategorie zusammen mit dem
+        Raum oder mit "alle". Der Gesprächsverlauf zählt nicht, und die Liste der aktiven Geräte
+        auch nicht: Das LLM soll nicht aus dem, was es sieht, selbst auf ein Ziel schließen."""
+        spoken = _words(utterance)
+        if not spoken:
+            return False
+        name_words = [w for w in _words(_camel_to_words(device.name)) if len(w) >= 3 and not w.isdigit()]
+        if _mentions(name_words, spoken):
+            return True
+        if device.device_class in _NAME_ONLY_CLASSES:
+            return False
+        category_words = [_CLASS_NAMES.get(device.device_class, "").lower()]
+        for code in categories_of(device):
+            category_words.append(code)
+            category_words.extend(_CATEGORY_ALIASES.get(code, ()))
+        if not _mentions([w for w in category_words if w], spoken):
+            return False
+        if any(q in spoken for q in _QUANTIFIERS):
+            return True
+        room_words = [w for w in _words(self._room_name(device.room)) if len(w) >= 4]
+        return _mentions(room_words, spoken)
+
     def _set_device_state(
         self, device_id: str, slot_id: str, value: object, trust_level: int | None, spoken: list[str],
-        state_id: str = "",
+        state_id: str = "", utterance: str = "",
     ) -> dict:
         if self._controller is None:
             return {"ok": False, "error": "Die Gerätesteuerung ist nicht verfügbar."}
@@ -572,6 +630,14 @@ class ToolAgent:
         device = self._registry.get(device_id)
         if device is None:
             return {"ok": False, "error": f"Gerät '{device_id}' nicht gefunden."}
+        if not self._utterance_names(device, utterance):
+            # #515: Der Nutzer hat dieses Gerät nicht genannt. Die Rückfrage geht direkt in die
+            # gesprochene Antwort, run() endet damit nach diesem Batch und das LLM kann nicht in der
+            # nächsten Runde weitere Geräte schalten.
+            log.warning("[tool_agent] set_device_state(%s) abgelehnt: der Satz nennt das Gerät nicht", device_id)
+            if UNNAMED_DEVICE_TEXT not in spoken:
+                spoken.append(UNNAMED_DEVICE_TEXT)
+            return {"ok": False, "error": "Der Nutzer hat kein Gerät genannt. Es wurde nichts geschaltet. Frage nach, welches Gerät gemeint ist."}
         slot = device.slots.get(slot_id)
         if slot is None:
             return {"ok": False, "error": f"{device.name} hat keinen Slot '{slot_id}'. Bekannt: {', '.join(device.slots)}."}

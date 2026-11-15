@@ -69,6 +69,7 @@ static volatile bool           s_ap_mode        = false;
 static volatile bool           s_ap_pending_exit = false;  /* Recovery erfolgreich, wartet auf letzten AP-Client */
 static bool                    s_sntp_started   = false;
 static volatile int64_t        s_last_net_activity_ms = 0;  /* Netzwerk-Watchdog, siehe net_activity_mark() */
+static volatile bool           s_register_unconfirmed = false;  /* Register gesendet, Core/Proxy hat noch nicht geantwortet (#516) */
 
 /* Neustart-Diagnose (#165) — siehe hannah_net.h für die öffentliche API. */
 #define DIAG_NVS_NAMESPACE  "diag"
@@ -211,7 +212,12 @@ static void udp_connect(const char *host, int port)
     ESP_LOGI(TAG, "UDP-Socket → Proxy %s:%d (listen :%d)",
              host, port, CONFIG_HANNAH_UDP_LISTEN_PORT);
     send_register();
-    if (s_registered_cb) s_registered_cb();
+    /* #516: "registriert" heißt, dass Core oder der Proxy geantwortet haben, nicht, dass die
+     * Anmeldung abgeschickt wurde. UDP kennt keine Verbindung, und der Broker hält hannah/server
+     * retained, die Meldung kommt also nach jedem Boot an, auch wenn niemand mehr zuhört. Der
+     * Callback (Connect-Sound) feuert deshalb erst beim ersten heartbeat_ack, siehe
+     * udp_receive_task(). */
+    s_register_unconfirmed = true;
 }
 
 static void udp_receive_task(void *arg)
@@ -269,6 +275,12 @@ static void udp_receive_task(void *arg)
 
             } else if (strcmp(jtype->valuestring, "heartbeat_ack") == 0) {
                 net_activity_mark();
+                if (s_register_unconfirmed) {
+                    /* Erste Antwort von Core oder Proxy seit udp_connect() (#516) */
+                    s_register_unconfirmed = false;
+                    ESP_LOGI(TAG, "Core/Proxy hat geantwortet — als registriert gemeldet.");
+                    if (s_registered_cb) s_registered_cb();
+                }
             }
 
             cJSON_Delete(root);

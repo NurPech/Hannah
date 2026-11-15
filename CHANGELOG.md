@@ -4,6 +4,15 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.103.5 (2026-11-11)
+### Hannah Core
+
+* Fixed: Hannah no longer switches devices that the spoken sentence did not name. A misheard sentence could make the language model switch off devices on its own, one after the other, picking them from the conversation or from the list of devices that are on. Now a device is only switched if the sentence names it, or names a category together with the room or with "all" (sockets only by their name, never as "all sockets"). Otherwise Hannah asks which device is meant and switches nothing. The language model also gets rules that say the same, and that it must not announce an action it did not carry out (Refs #515)
+
+### Satellite Firmware
+
+* Fixed: the satellite no longer plays its connect sound when it only sent its registration. It plays it once Core or the Proxy has answered. Before, a satellite announced "connected" after every restart even when Core and the Proxy were off and only the MQTT broker was reachable (Refs #516)
+
 ## 0.103.4 (2026-11-11)
 ### Satellite Firmware
 

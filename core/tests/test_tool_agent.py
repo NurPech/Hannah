@@ -8,7 +8,7 @@ from hannah_proto.v2 import hannah_pb2 as pb
 
 from hannah.device_control import DeviceController
 from hannah.llm import DummyLLM
-from hannah.tool_agent import ToolAgent
+from hannah.tool_agent import UNNAMED_DEVICE_TEXT, ToolAgent
 from hannah.typed_devices import DeviceRegistry, Slot, TypedDevice
 
 C = pb.DeviceClass
@@ -250,7 +250,7 @@ class TestToolDispatch:
         assert "eingeschaltet, 40%" in result
 
     def test_set_device_state_sends_the_slot(self):
-        result = self.agent._set_device_state(self.DEVICE_ID, "on", True, None, [])
+        result = self.agent._set_device_state(self.DEVICE_ID, "on", True, None, [], utterance="Schalte die Decke an")
 
         assert result == {"ok": True}
         assert [(d, s, v.boolean) for d, s, v in self.sent] == [(self.DEVICE_ID, "on", True)]
@@ -258,24 +258,24 @@ class TestToolDispatch:
     def test_set_device_state_reports_an_unreachable_adapter(self):
         self.agent._controller._send_set_slot = lambda *_: False
 
-        assert self.agent._set_device_state(self.DEVICE_ID, "on", True, None, []) == {"ok": False}
+        assert self.agent._set_device_state(self.DEVICE_ID, "on", True, None, [], utterance="Schalte die Decke an") == {"ok": False}
 
     def test_set_device_state_refuses_a_read_only_slot(self):
         self.registry.replace("v2", [_typed("m", "Messer", _slot(K.SLOT_KIND_POWER, 5.0, writable=False))])
 
-        result = self.agent._set_device_state("m", "power", 10, None, [])
+        result = self.agent._set_device_state("m", "power", 10, None, [], utterance="Stell das Messer ein")
 
         assert result["ok"] is False and "nur lesbar" in result["error"]
         assert self.sent == []
 
     def test_set_device_state_names_the_known_slots_for_an_unknown_one(self):
-        result = self.agent._set_device_state(self.DEVICE_ID, "farbe", "#FF0000", None, [])
+        result = self.agent._set_device_state(self.DEVICE_ID, "farbe", "#FF0000", None, [], utterance="Schalte die Decke an")
 
         assert result["ok"] is False
         assert "on, brightness" in result["error"]
 
     def test_set_device_state_tells_the_llm_about_a_wrong_value(self):
-        result = self.agent._set_device_state(self.DEVICE_ID, "brightness", "hell", None, [])
+        result = self.agent._set_device_state(self.DEVICE_ID, "brightness", "hell", None, [], utterance="Schalte die Decke an")
 
         assert result["ok"] is False and "BRIGHTNESS" in result["error"]
         assert self.sent == []
@@ -283,20 +283,20 @@ class TestToolDispatch:
     @pytest.mark.parametrize("text, expected", [("true", True), ("True", True), (" false ", False)])
     def test_set_device_state_accepts_a_boolean_sent_as_text(self, text, expected):
         """#456 — das LLM schickt 'true' statt true; ohne Umwandlung schaltete nichts."""
-        result = self.agent._set_device_state(self.DEVICE_ID, "on", text, None, [])
+        result = self.agent._set_device_state(self.DEVICE_ID, "on", text, None, [], utterance="Schalte die Decke an")
 
         assert result == {"ok": True}
         assert [(d, s, v.boolean) for d, s, v in self.sent] == [(self.DEVICE_ID, "on", expected)]
 
     @pytest.mark.parametrize("text, expected", [("40", 40.0), ("12,5", 12.5)])
     def test_set_device_state_accepts_a_number_sent_as_text(self, text, expected):
-        result = self.agent._set_device_state(self.DEVICE_ID, "brightness", text, None, [])
+        result = self.agent._set_device_state(self.DEVICE_ID, "brightness", text, None, [], utterance="Schalte die Decke an")
 
         assert result == {"ok": True}
         assert [(d, s, v.number) for d, s, v in self.sent] == [(self.DEVICE_ID, "brightness", expected)]
 
     def test_set_device_state_still_refuses_text_that_is_no_boolean(self):
-        result = self.agent._set_device_state(self.DEVICE_ID, "on", "vielleicht", None, [])
+        result = self.agent._set_device_state(self.DEVICE_ID, "on", "vielleicht", None, [], utterance="Schalte die Decke an")
 
         assert result["ok"] is False and "ON" in result["error"]
         assert self.sent == []
@@ -311,7 +311,7 @@ class TestToolDispatch:
             "x.Lampe", "Lampe", _slot(K.SLOT_KIND_ON, False, state_id="x.Lampe.on"), origin="v1",
         )])
 
-        result = self.agent._dispatch("set_device_state", {"state_id": "x.Lampe.on", "value": True}, [], "", None)
+        result = self.agent._dispatch("set_device_state", {"state_id": "x.Lampe.on", "value": True}, [], "", None, utterance="Schalte die Lampe an")
 
         assert result == {"ok": True}
         self.set_state.assert_called_once_with("x.Lampe.on", True)
@@ -465,7 +465,7 @@ class TestToolAgentTrustLevel:
         agent, sent = self._agent()
         spoken: list[str] = []
 
-        result = agent._dispatch("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True}, spoken, "", 0)
+        result = agent._dispatch("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True}, spoken, "", 0, utterance="Schließ die Haustür auf")
 
         assert sent == []
         assert result["ok"] is False
@@ -475,7 +475,7 @@ class TestToolAgentTrustLevel:
         agent, sent = self._agent()
         spoken: list[str] = []
 
-        result = agent._dispatch("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True}, spoken, "", 8)
+        result = agent._dispatch("set_device_state", {"device_id": self.DEVICE_ID, "slot_id": "on", "value": True}, spoken, "", 8, utterance="Schließ die Haustür auf")
 
         assert len(sent) == 1
         assert result == {"ok": True}
@@ -501,6 +501,144 @@ class TestToolAgentTrustLevel:
         agent.run("schließ die Haustür auf")
 
         assert sent == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Der Satz muss das Gerät nennen (#515)
+
+
+class TestToolAgentNamedDeviceGuard:
+    """Am 11.11.2026 schaltete das LLM nach "Sachen Reinschieben." (ein Whisper-Aussetzer) die
+    Steckdose "Kodi" aus, an der der Pi mit Core hängt, und eine Runde später die des Rechners.
+    Geschaltet wird nur, was der aktuelle Satz nennt."""
+
+    ROOM_NAMES = {"wohnzimmer": "Wohnzimmer", "schlafzimmer": "Schlafzimmer", "fluegel": "Flügel Süd"}
+
+    def _agent(self, llm=None) -> tuple[ToolAgent, list]:
+        registry = _registry(
+            _typed("kodi", "Kodi", _slot(K.SLOT_KIND_ON, True), device_class=C.DEVICE_CLASS_SOCKET, room="fluegel"),
+            _typed("computer", "Computer", _slot(K.SLOT_KIND_ON, True), device_class=C.DEVICE_CLASS_SOCKET, room="schlafzimmer"),
+            _typed("decke", "Decke", _slot(K.SLOT_KIND_ON, False), room="wohnzimmer"),
+            _typed("spot", "Deckenlampe_Spot1", _slot(K.SLOT_KIND_ON, False), room="schlafzimmer"),
+        )
+        sent: list = []
+        agent = ToolAgent(llm or MagicMock(), _make_iobroker(), registry=registry, room_names=lambda: self.ROOM_NAMES)
+        agent.set_device_control(DeviceController(
+            registry, send_set_slot=lambda *args: sent.append(args) or True, send_set_state=MagicMock(return_value=True),
+        ))
+        return agent, sent
+
+    @staticmethod
+    def _set(device_id: str, value: bool = False, call_id: str = "call_1") -> dict:
+        return _tool_call("set_device_state", {"device_id": device_id, "slot_id": "on", "value": value}, call_id)
+
+    def test_the_sentences_from_the_log_switch_nothing_not_even_in_a_later_round(self):
+        llm = MagicMock()
+        llm.chat_with_tools.side_effect = [
+            _llm_response(tool_calls=[_tool_call("get_active_devices", {})]),
+            _llm_response(tool_calls=[self._set("kodi")]),
+            _llm_response(tool_calls=[self._set("computer")]),  # kommt nie an
+        ]
+        agent, sent = self._agent(llm)
+
+        answer = agent.run("Sachen Reinschieben.", trust_level=10)
+
+        assert answer == UNNAMED_DEVICE_TEXT
+        assert sent == []
+        assert llm.chat_with_tools.call_count == 2
+
+    @pytest.mark.parametrize("sentence", ["Ich mach den nochmal aus.", "Sachen Reinschieben.", "Schalte ihn aus.", ""])
+    @pytest.mark.parametrize("device_id", ["kodi", "computer", "decke", "spot"])
+    def test_a_sentence_without_the_device_switches_none_of_them(self, sentence, device_id):
+        agent, sent = self._agent()
+        spoken: list[str] = []
+
+        result = agent._dispatch("set_device_state", {"device_id": device_id, "slot_id": "on", "value": False}, spoken, "", 10, utterance=sentence)
+
+        assert result["ok"] is False
+        assert sent == []
+        assert spoken == [UNNAMED_DEVICE_TEXT]
+
+    def test_the_history_does_not_name_the_device(self):
+        llm = MagicMock()
+        llm.chat_with_tools.return_value = _llm_response(tool_calls=[self._set("computer")])
+        agent, sent = self._agent(llm)
+        history = [{"role": "user", "content": "Schalte den Computer an."}, {"role": "assistant", "content": "Erledigt."}]
+
+        answer = agent.run("Ich mach den nochmal aus.", history=history, trust_level=10)
+
+        assert answer == UNNAMED_DEVICE_TEXT
+        assert sent == []
+
+    def test_a_named_device_is_switched(self):
+        llm = MagicMock()
+        llm.chat_with_tools.side_effect = [
+            _llm_response(tool_calls=[self._set("computer")]),
+            _llm_response(tool_calls=[_tool_call("speak", {"text": "Erledigt."})]),
+        ]
+        agent, sent = self._agent(llm)
+
+        answer = agent.run("Schalte den Computer aus.", trust_level=10)
+
+        assert answer == "Erledigt."
+        assert [(d, s, v.boolean) for d, s, v in sent] == [("computer", "on", False)]
+
+    def test_a_named_device_does_not_let_another_one_through(self):
+        agent, sent = self._agent()
+        spoken: list[str] = []
+
+        agent._dispatch("set_device_state", {"device_id": "computer", "slot_id": "on", "value": False}, spoken, "", 10, utterance="Schalte den Computer aus.")
+        agent._dispatch("set_device_state", {"device_id": "kodi", "slot_id": "on", "value": False}, spoken, "", 10, utterance="Schalte den Computer aus.")
+
+        assert [(d, s, v.boolean) for d, s, v in sent] == [("computer", "on", False)]
+        assert spoken == [UNNAMED_DEVICE_TEXT]
+
+    @pytest.mark.parametrize("sentence", ["Mach das Licht im Wohnzimmer an.", "Mach alle Lichter an."])
+    def test_a_category_with_a_room_or_with_all_switches_a_light(self, sentence):
+        agent, sent = self._agent()
+
+        result = agent._dispatch("set_device_state", {"device_id": "decke", "slot_id": "on", "value": True}, [], "", 10, utterance=sentence)
+
+        assert result == {"ok": True}
+        assert len(sent) == 1
+
+    def test_a_category_alone_is_not_enough(self):
+        agent, sent = self._agent()
+        spoken: list[str] = []
+
+        agent._dispatch("set_device_state", {"device_id": "decke", "slot_id": "on", "value": True}, spoken, "", 10, utterance="Mach das Licht an.")
+
+        assert sent == []
+        assert spoken == [UNNAMED_DEVICE_TEXT]
+
+    def test_a_category_with_the_wrong_room_is_not_enough(self):
+        agent, sent = self._agent()
+
+        agent._dispatch("set_device_state", {"device_id": "decke", "slot_id": "on", "value": True}, [], "", 10, utterance="Mach das Licht im Schlafzimmer an.")
+
+        assert sent == []
+
+    @pytest.mark.parametrize("sentence", ["Schalte alle Steckdosen aus.", "Mach die Steckdose im Schlafzimmer aus."])
+    def test_a_socket_is_only_switched_by_its_name(self, sentence):
+        agent, sent = self._agent()
+
+        agent._dispatch("set_device_state", {"device_id": "computer", "slot_id": "on", "value": False}, [], "", 10, utterance=sentence)
+
+        assert sent == []
+
+    def test_one_word_of_the_name_is_enough_and_inflection_is_fine(self):
+        agent, sent = self._agent()
+
+        result = agent._dispatch("set_device_state", {"device_id": "spot", "slot_id": "on", "value": True}, [], "", 10, utterance="Schalte die Deckenlampen an.")
+
+        assert result == {"ok": True}
+        assert len(sent) == 1
+
+    def test_the_tool_rules_say_it_too(self):
+        system = ToolAgent._messages("Hallo", "", None)[0]["content"]
+
+        assert "nur, wenn der aktuelle Satz" in system
+        assert "Erfinde nie einen Befehl" in system
 
 
 # ──────────────────────────────────────────────────────────────────────────────
