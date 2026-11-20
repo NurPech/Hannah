@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from hannah.iobroker import Device
+from hannah.nlu_devices import NluDevice
 from hannah.nlu import NLU, build_category_clarification_question, resolve_clarification_answer, resolve_yes_no
 
 
@@ -238,9 +238,9 @@ class TestCaptureIntents:
         assert intent.satellite_id == "flur01_id"
 
 
-def _make_device(key: str, room: str, category: str = "window") -> Device:
-    return Device(id=f"{room}.{key}", name=key, key=key, room=room,
-                  room_display_name=room.title(), floor="EG", category=category)
+def _make_device(key: str, room: str, category: str = "window") -> NluDevice:
+    return NluDevice(id=f"{room}.{key}", name=key, key=key, room=room,
+                     categories=frozenset({category}) if category else frozenset(), category=category)
 
 
 class TestFindDeviceRoomScoped:

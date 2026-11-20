@@ -18,9 +18,9 @@ from hannah_proto.v1 import hannah_pb2_grpc as pb1_grpc
 from hannah_proto.v2 import hannah_pb2 as pb
 from hannah_proto.v2 import hannah_pb2_grpc as pb_grpc
 
-from hannah import grpc_v1
+from hannah import grpc_v1, legacy_devices
 from hannah.grpc_server import GrpcServer, HannahServicer
-from hannah.iobroker import IoBrokerClient
+from hannah.typed_devices import DeviceRegistry
 
 
 # ------------------------------------------------------------------
@@ -200,8 +200,8 @@ def _light(iobroker_suffix: str, canonical: str, value: str, state_type, writabl
 
 @pytest.fixture
 def device_server():
-    iobroker = IoBrokerClient({"host": "localhost", "port": 8093})
-    iobroker.handle_device_snapshot([
+    registry = DeviceRegistry()
+    legacy_devices.load_snapshot(registry, [
         _light("on", "on", "true", pb1.StateType.BOOLEAN),
         _light("level", "level", "60", pb1.StateType.NUMERIC),
     ])
@@ -211,7 +211,7 @@ def device_server():
         user_manager=user_manager, satellite_manager=MagicMock(), handle_text=MagicMock(),
         handle_voice=MagicMock(), announce=MagicMock(), notificate=MagicMock(),
         get_satellites=MagicMock(), get_car_state=MagicMock(),
-        get_devices=iobroker.get_devices_snapshot, control_device=control,
+        get_typed_devices=registry.devices, control_device=control,
     )
     port = _free_port()
     server = GrpcServer({"host": "127.0.0.1", "port": port}, servicer)
@@ -244,7 +244,8 @@ class TestDevices:
         assert device.device_class == pb.DEVICE_CLASS_LIGHT
         slots = {s.slot_id: s for s in device.slots}
         assert slots["on"].kind == pb.SLOT_KIND_ON and slots["on"].value.boolean is True
-        assert slots["level"].kind == pb.SLOT_KIND_BRIGHTNESS and slots["level"].value.number == 60
+        # the slot of a v1 device is named after its kind, as for every client since the registry (#387)
+        assert slots["brightness"].kind == pb.SLOT_KIND_BRIGHTNESS and slots["brightness"].value.number == 60
 
     def test_v1_control_passes_state_and_value_through(self, device_server):
         ch, control = device_server

@@ -293,7 +293,7 @@ class ToolAgent:
         # kommt nachträglich (set_device_control), er entsteht in main.py erst später.
         self._registry = registry if registry is not None else DeviceRegistry()
         self._controller = None
-        self._room_names = room_names or (lambda: getattr(iobroker, "rooms", {}))
+        self._room_names = room_names or (lambda: {})
         self._user_manager = user_manager
         self._automations = automations or {}
         self._push_automation_update = push_automation_update or (lambda *_: None)
@@ -526,12 +526,18 @@ class ToolAgent:
             text += f" (Werte: {', '.join(slot.options)})"
         return text
 
+    @staticmethod
+    def _down_tag(device: TypedDevice) -> str:
+        """Der Zusatz für ein Gerät, das sich als nicht erreichbar meldet (#523): seine Werte sind der
+        letzte bekannte Stand, das LLM soll sie nicht als aktuell wiedergeben."""
+        return " — NICHT ERREICHBAR (Werte sind der letzte bekannte Stand)" if not device.available else ""
+
     def _slots_text(self, device: TypedDevice) -> str:
         return ", ".join(self._slot_text(s) for s in device.slots.values()) or "keine Slots"
 
     def _get_all_devices(self) -> str:
         lines = [
-            f"- {self._room_name(d.room)}: {d.name} ({self._class_name(d)}) [ID: {d.device_id}]"
+            f"- {self._room_name(d.room)}: {d.name} ({self._class_name(d)}){self._down_tag(d)} [ID: {d.device_id}]"
             for d in self._registry.devices()
         ]
         if not lines:
@@ -558,7 +564,10 @@ class ToolAgent:
                 continue
             matched_room = room_name
             for dev in self._registry.devices_in_room(room_id):
-                lines.append(f"- {dev.name} ({self._class_name(dev)}) [ID: {dev.device_id}, Slots: {self._slots_text(dev)}]")
+                lines.append(
+                    f"- {dev.name} ({self._class_name(dev)}){self._down_tag(dev)}"
+                    f" [ID: {dev.device_id}, Slots: {self._slots_text(dev)}]"
+                )
         if not lines:
             return f"Kein Raum '{room}' gefunden."
         return f"Geräte im {matched_room} ({len(lines)}):\n" + "\n".join(lines)
@@ -575,7 +584,7 @@ class ToolAgent:
     def _get_devices_by_category(self, category: str) -> str:
         wanted = category.lower().strip()
         lines = [
-            f"- {self._room_name(d.room)}: {d.name} [ID: {d.device_id}, Slots: {self._slots_text(d)}]"
+            f"- {self._room_name(d.room)}: {d.name}{self._down_tag(d)} [ID: {d.device_id}, Slots: {self._slots_text(d)}]"
             for d in self._registry.devices() if wanted and self._matches_category(d, wanted)
         ]
         if not lines:
@@ -587,7 +596,7 @@ class ToolAgent:
         if not dev:
             return f"Gerät '{device_id}' nicht gefunden."
         return (
-            f"Gerät: {dev.name} ({self._room_name(dev.room)}, {self._class_name(dev)})\n"
+            f"Gerät: {dev.name} ({self._room_name(dev.room)}, {self._class_name(dev)}){self._down_tag(dev)}\n"
             f"Zustand: {self._slots_text(dev)}"
         )
 
@@ -643,6 +652,9 @@ class ToolAgent:
             return {"ok": False, "error": f"{device.name} hat keinen Slot '{slot_id}'. Bekannt: {', '.join(device.slots)}."}
         if not slot.writable:
             return {"ok": False, "error": f"Der Slot '{slot_id}' von {device.name} ist nur lesbar."}
+        if not device.available:
+            # #523: ein Gerät, das sich als nicht erreichbar meldet, bekommt keinen Befehl
+            return {"ok": False, "error": f"{device.name} ist gerade nicht erreichbar. Es wurde nichts geschaltet."}
         value = _coerce_llm_value(slot.kind, value)
         try:
             result = self._controller.set_slot(device_id, slot_id, value, trust_level=trust_level)
@@ -655,6 +667,8 @@ class ToolAgent:
             return {"ok": False, "error": "Keine Berechtigung: der Nutzer darf dieses Gerät nicht steuern."}
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        if result.unreachable:
+            return {"ok": False, "error": f"{device.name} ist gerade nicht erreichbar. Es wurde nichts geschaltet."}
         return {"ok": result.sent}
 
     def _set_automation(self, automation: str, enabled: bool, user_id: str) -> dict:
@@ -676,6 +690,9 @@ class ToolAgent:
 
     @staticmethod
     def _is_active(dev: TypedDevice) -> bool:
+        if not dev.available:
+            # der letzte bekannte Stand eines nicht erreichbaren Geräts sagt nicht, ob es gerade läuft (#523)
+            return False
         on = ToolAgent._slot_value(dev, K.SLOT_KIND_ON)
         if on is not None:
             return bool(on)

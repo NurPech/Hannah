@@ -1,7 +1,11 @@
+import threading
+import time
+
 import pytest
-from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient, Device, GUEST_TRUST_LEVEL, TrustLevelDenied
-from hannah.nlu import Intent
-from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
+from hannah_proto.v2 import hannah_pb2 as pb
+from hannah.iobroker import _camel_to_words, _iaq_label, IoBrokerClient
+from hannah.typed_devices import ORIGIN_V1, DeviceRegistry, Slot, TypedDevice
+from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue
 
 
 class TestCamelToWords:
@@ -75,538 +79,54 @@ class TestIaqLabel:
         assert _iaq_label(286) == "schlecht"
 
 
-class TestDescribeCategoryAirQuality:
-    @pytest.fixture
-    def client(self):
-        return IoBrokerClient({"host": "localhost", "port": 8093})
-
-    def _device(self, **current):
-        return Device(
-            id="hannah.0.satellites.sensors.kueche-esp",
-            name="Kueche",
-            key="kueche",
-            room="kueche",
-            room_display_name="Küche",
-            floor="EG",
-            category="air_quality_sensor",
-            current=current,
-        )
-
-    def test_full_reading(self, client):
-        dev = self._device(iaq=286.0, co2_equiv=1654.0, voc_equiv=6.85)
-        result = client._describe_category("air_quality_sensor", [dev], "Küche")
-        assert "schlecht" in result
-        assert "1654.0 ppm" in result
-        assert "6.8 ppm" in result or "6.9 ppm" in result
-
-    def test_uncalibrated_defaults(self, client):
-        dev = self._device(iaq=50.0, co2_equiv=500.0, voc_equiv=0.5)
-        result = client._describe_category("air_quality_sensor", [dev], "Küche")
-        assert "gut" in result
-
-    def test_unknown_category_returns_none(self, client):
-        assert client._describe_category("does_not_exist", [], "Küche") is None
-
-
-class TestDescribeCategoryHumidity:
-    @pytest.fixture
-    def client(self):
-        return IoBrokerClient({"host": "localhost", "port": 8093})
-
-    def _device(self, **current):
-        return Device(
-            id="javascript.0.virtualDevice.Luftfeuchtigkeit.OG.Schlafzimmer.Raumfeuchte",
-            name="Raumfeuchte",
-            key="raumfeuchte",
-            room="schlafzimmer",
-            room_display_name="Schlafzimmer",
-            floor="OG",
-            category="humidity_sensor",
-            current=current,
-        )
-
-    def test_reading(self, client):
-        dev = self._device(current=54.3)
-        result = client._describe_category("humidity_sensor", [dev], "Schlafzimmer")
-        assert "54.3 %" in result
-
-
-class TestSocketPowerQuery:
-    """#121 — "socket" hat als einzige _CATEGORY_STATES-Kategorie zusätzlich einen
-    regulären on/off-Schaltzustand. Die Watt-Antwort darf normale an/aus-Abfragen
-    nicht kapern (Regression: naive Umsetzung ließ z.B. "ist die Steckdose an?"
-    nur noch die Watt-Zahl beantworten), greift nur bei qs=="power"."""
-
-    @pytest.fixture
-    def client(self):
-        return IoBrokerClient({"host": "localhost", "port": 8093})
-
-    def _device(self, **current):
-        return Device(
-            id="javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer",
-            name="PC",
-            key="pc",
-            room="schlafzimmer",
-            room_display_name="Schlafzimmer",
-            floor="OG",
-            category="socket",
-            current=current,
-        )
-
-    def test_describe_category_reports_watt(self, client):
-        dev = self._device(power=42.0)
-        result = client._describe_category("socket", [dev], "Schlafzimmer")
-        assert "42.0 Watt" in result
-
-    def test_category_query_applies_only_for_power(self, client):
-        assert client._category_query_applies("socket", "power") is True
-        assert client._category_query_applies("socket", "on") is False
-        assert client._category_query_applies("socket", None) is False
-
-    def test_other_categories_unaffected_by_guard(self, client):
-        """Kategorien ohne konkurrierenden on/off-Zustand greifen weiter unabhängig von qs."""
-        assert client._category_query_applies("temperature_sensor", None) is True
-        assert client._category_query_applies("temperature_sensor", "on") is True
-        assert client._category_query_applies("does_not_exist", "power") is False
-
-    def test_describe_device_power_query_returns_watt(self, client):
-        dev = self._device(on=True, power=42.0)
-        result = client._describe_device(dev, "power")
-        assert "42.0 Watt" in result
-
-    def test_describe_device_on_query_returns_status_not_watt(self, client):
-        """Regression-Guard: 'ist die Steckdose an?' (qs='on') darf nicht in die
-        Watt-Kategorie-Antwort abbiegen."""
-        dev = self._device(on=True, power=42.0)
-        result = client._describe_device(dev, "on")
-        assert "an" in result
-        assert "Watt" not in result
-
-    def test_describe_device_default_still_mentions_power(self, client):
-        """Der bestehende on/off-Fallback hängt Watt weiterhin optional in Klammern an."""
-        dev = self._device(on=True, power=42.0)
-        result = client._describe_device(dev, None)
-        assert "an" in result
-        assert "42.0 W" in result or "42 W" in result
-
-
-class TestAnswerQueryEmptyMessages:
-    """#276 — 'Ich kenne keine Geräte im X.' wurde bisher auch dann gezeigt, wenn der
-    Raum Geräte hat, nur keins zur gefragten Kategorie passt (z.B. 'ist die Tür im
-    Flur Keller offen?' in einem Raum ohne Tür-Gerät, aber mit Licht/Sensor) — klang
-    so, als kenne Hannah den Raum gar nicht. Muss zwischen 'Raum wirklich leer' und
-    'Raum bekannt, nur Kategorie ohne Treffer' unterscheiden."""
-
-    @pytest.fixture
-    def client(self):
-        c = IoBrokerClient({"host": "localhost", "port": 8093})
-        c.rooms = {"flur_keller": "Flur Keller"}
-        c.devices = {
-            "flur_keller": {
-                "flur": Device(
-                    id="javascript.0.virtualDevice.Licht.UG.Flur", name="Flur", key="flur",
-                    room="flur_keller", room_display_name="Flur Keller", floor="UG",
-                    category="light", current={"on": False},
-                ),
-            },
-        }
-        return c
-
-    def test_room_with_devices_but_no_category_match(self, client):
-        intent = Intent(name="Query", room="Flur Keller", room_id="flur_keller", category_filter="door")
-        result = client.answer_query(intent)
-        assert result == "Ich kenne keine Türen im Flur Keller."
-
-    def test_room_truly_unknown_still_uses_generic_message(self, client):
-        intent = Intent(name="Query", room="Nirgendwo", room_id="nirgendwo", category_filter="door")
-        result = client.answer_query(intent)
-        assert result == "Ich kenne keine Geräte im Nirgendwo."
-
-    def test_room_with_matching_category_unaffected(self, client):
-        """Regression-Guard: die neue Unterscheidung darf den Erfolgsfall nicht anfassen."""
-        intent = Intent(name="Query", room="Flur Keller", room_id="flur_keller", category_filter="light")
-        result = client.answer_query(intent)
-        assert result is not None
-        assert "kenne keine" not in result
-
-
-class TestHandleDeviceSnapshotNameCollision:
-    """#275 — zwei verschiedene Geräte im selben Raum, die (mangels expliziten Namens)
-    auf denselben abgeleiteten Anzeigenamen fallen, dürfen sich in Hannahs internem
-    Geräte-Dict nicht gegenseitig überschreiben. Fund: Fenster.OG.Bad + Licht.OG.Bad
-    lieferten beide 'Bad' als device.device (iobroker.hannah fällt ohne common.name auf
-    den letzten ID-Pfadteil zurück), was vorher zum stillen Verschwinden eines der
-    beiden Geräte in self.devices[room_key] führte."""
-
-    def _device_msg(self, category_path: str, device_type: str, state: str = "open") -> AgentDevice:
-        return AgentDevice(
-            state_id=f"javascript.0.virtualDevice.{category_path}.OG.Bad.{state}",
-            device_id=f"javascript.0.virtualDevice.{category_path}.OG.Bad",
-            canonical_key=state,
-            room="bad_oben",
-            device="Bad",
-            device_type=device_type,
-            value=AgentStateValue(value="false", ack=True),
-            room_names={"de": "Bad oben"},
-        )
-
-    def test_both_devices_survive_in_the_room(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("Fenster", "window"),
-            self._device_msg("Licht", "light", state="on"),
-        ])
-
-        room_devices = list(client.devices["bad_oben"].values())
-        assert len(room_devices) == 2
-        assert {d.category for d in room_devices} == {"window", "light"}
-
-    def test_both_devices_individually_reachable_by_id(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("Fenster", "window"),
-            self._device_msg("Licht", "light", state="on"),
-        ])
-
-        window = client._devices_by_id["javascript.0.virtualDevice.Fenster.OG.Bad"]
-        light = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Bad"]
-        assert window.category == "window"
-        assert light.category == "light"
-
-
-class TestHandleDeviceSnapshotCategoryMerge:
-    """#133 — ein Geschwister-State ohne erkennbare Kategorie (z.B. ein power-Meter-State
-    ohne passende Role/Funktion, resolveType() liefert '') darf die Kategorie eines
-    bereits erkannten Geschwister-States (z.B. der 'on'-State eines Steckdosen-Geräts,
-    resolveType() liefert 'socket') nicht überschreiben — erster nicht-leerer Wert gewinnt,
-    unabhängig von der Verarbeitungsreihenfolge im Snapshot."""
-
-    def _device_msg(self, state: str, device_type: str) -> AgentDevice:
-        return AgentDevice(
-            state_id=f"javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer.{state}",
-            device_id="javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer",
-            canonical_key=state,
-            room="schlafzimmer",
-            device="Computer",
-            device_type=device_type,
-            value=AgentStateValue(value="false", ack=True),
-            room_names={"de": "Schlafzimmer"},
-        )
-
-    def test_category_less_state_does_not_blank_out_a_resolved_sibling(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        # power (kategorielos) zuerst, on (socket) danach
-        client.handle_device_snapshot([
-            self._device_msg("power", ""),
-            self._device_msg("on", "socket"),
-        ])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer"]
-        assert dev.category == "socket"
-
-    def test_resolved_category_survives_regardless_of_order(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        # on (socket) zuerst, power (kategorielos) danach
-        client.handle_device_snapshot([
-            self._device_msg("on", "socket"),
-            self._device_msg("power", ""),
-        ])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer"]
-        assert dev.category == "socket"
-
-    def test_first_non_empty_category_wins_on_conflict(self):
-        """Kein Flip-Flop bei widersprüchlichen nicht-leeren Kategorien zwischen
-        Geschwister-States — der erste nicht-leere Wert bleibt bestehen."""
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("on", "socket"),
-            self._device_msg("power", "temperature_sensor"),
-        ])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Stecker.OG.Schlafzimmer.Computer"]
-        assert dev.category == "socket"
-
-
-class TestHandleDeviceSnapshotStateTypes:
-    """#117 — state_type/enum_values aus AgentDevice landen pro canon-key auf dem Device
-    und werden von get_devices_snapshot() unverändert durchgereicht."""
-
-    def _device_msg(self, state: str, state_type: "StateType.V", enum_values: dict[str, str] | None = None) -> AgentDevice:
-        return AgentDevice(
-            state_id=f"javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe.{state}",
-            device_id="javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe",
-            canonical_key=state,
-            room="schlafzimmer",
-            device="Deckenlampe",
-            device_type="light",
-            value=AgentStateValue(value="true", ack=True),
-            room_names={"de": "Schlafzimmer"},
-            state_type=state_type,
-            enum_values=EnumValues(values=enum_values) if enum_values else None,
-        )
-
-    def test_boolean_state_type_is_cached_without_enum_values(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([self._device_msg("on", StateType.BOOLEAN)])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe"]
-        assert dev.state_types["on"] == StateType.BOOLEAN
-        assert "on" not in dev.enum_values
-
-    def test_enum_state_type_carries_its_values(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("mode", StateType.ENUM, {"0": "Aus", "1": "An", "2": "Auto"}),
-        ])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe"]
-        assert dev.state_types["mode"] == StateType.ENUM
-        assert dev.enum_values["mode"] == {"0": "Aus", "1": "An", "2": "Auto"}
-
-    def test_get_devices_snapshot_includes_state_types_and_enum_values(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("on", StateType.BOOLEAN),
-            self._device_msg("mode", StateType.ENUM, {"0": "Aus", "1": "An"}),
-        ])
-
-        [room] = client.get_devices_snapshot()
-        [device] = room["devices"]
-        assert device["state_types"]["on"] == StateType.BOOLEAN
-        assert device["state_types"]["mode"] == StateType.ENUM
-        assert device["state_enum_values"] == {"mode": {"0": "Aus", "1": "An"}}
-
-
-class TestHandleDeviceSnapshotWritable:
-    """#144 — AgentDevice.writable landet pro canon-key auf dem Device und wird von
-    get_devices_snapshot() unverändert durchgereicht."""
-
-    def _device_msg(self, state: str, writable: bool) -> AgentDevice:
-        return AgentDevice(
-            state_id=f"javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe.{state}",
-            device_id="javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe",
-            canonical_key=state,
-            room="schlafzimmer",
-            device="Deckenlampe",
-            device_type="light",
-            value=AgentStateValue(value="true", ack=True),
-            room_names={"de": "Schlafzimmer"},
-            writable=writable,
-        )
-
-    def test_writable_and_read_only_states_are_cached_per_key(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("on", True),
-            self._device_msg("power", False),
-        ])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe"]
-        assert dev.state_writable["on"] is True
-        assert dev.state_writable["power"] is False
-
-    def test_get_devices_snapshot_includes_state_writable(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("on", True),
-            self._device_msg("power", False),
-        ])
-
-        [room] = client.get_devices_snapshot()
-        [device] = room["devices"]
-        assert device["state_writable"] == {"on": True, "power": False}
-
-
-class TestHandleDeviceSnapshotInverted:
-    """#270: AgentDevice.inverted landet auf dem Device, damit execute()/
-    _describe_category invertierte Rolladen/Markisen erkennen können."""
-
-    def _device_msg(self, inverted: bool) -> AgentDevice:
-        return AgentDevice(
-            state_id="javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks.level",
-            device_id="javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks",
-            canonical_key="level",
-            room="kueche",
-            device="Rolladenlinks",
-            device_type="blind",
-            value=AgentStateValue(value="70", ack=True),
-            room_names={"de": "Küche"},
-            inverted=inverted,
-        )
-
-    def test_inverted_flag_is_stored_on_device(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([self._device_msg(True)])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks"]
-        assert dev.inverted is True
-
-    def test_default_is_not_inverted(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([self._device_msg(False)])
-
-        dev = client._devices_by_id["javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks"]
-        assert dev.inverted is False
-
-
 class TestHandleStateUpdate:
-    """Regression: live updates go through state_names reverse-lookup, the initial
-    gRPC snapshot does not — a suffix missing from state_names freezes that field
-    forever after the first snapshot (Refs #21 follow-up bug). Now logged (once per
-    suffix) instead of silently dropped, so a stale config.yaml deployment shows up
-    in the logs instead of just quietly freezing values."""
+    """#522: ein Live-Update bestätigt wartende Befehle und pflegt den State-Cache. Die Live-Werte der
+    Geräte stehen in der typisierten Registry (legacy_devices.apply_state_update)."""
 
     @pytest.fixture
     def client(self):
-        return IoBrokerClient({
-            "host": "localhost",
-            "port": 8093,
-            "state_names": {"iaq": "iaq", "co2_equiv": "co2_equiv", "on": "on"},
-        })
+        return IoBrokerClient({"host": "localhost", "port": 8093})
 
-    def _device(self, device_id):
-        dev = Device(
-            id=device_id, name="Sofaecke", key="sofaecke",
-            room="wohnzimmer", room_display_name="Wohnzimmer", floor="EG",
-            category="air_quality_sensor",
-        )
-        return dev
+    def _pending(self, expected):
+        return {
+            "expected": expected, "device": "sat-1", "deadline": time.monotonic() + 30, "label": "Lampe im Bad",
+            "confirmed": False, "requester_name": "",
+        }
 
-    def test_mapped_suffix_updates_cache(self, client):
-        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
-        dev = self._device(device_id)
-        client._devices_by_id[device_id] = dev
+    def test_a_state_without_a_room_updates_the_state_cache(self, client):
+        client._state_cache["weather.temp"] = 1.0
 
-        client.handle_state_update(f"{device_id}.iaq", "98")
+        client.handle_state_update("weather.temp", "12.5")
 
-        assert dev.current["iaq"] == 98
+        assert client._state_cache["weather.temp"] == 12.5
 
-    def test_unmapped_suffix_is_dropped_but_logged(self, client, caplog):
-        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
-        dev = self._device(device_id)
-        dev.current["voc_equiv"] = 0.5  # value from the initial snapshot
-        client._devices_by_id[device_id] = dev
+    def test_the_expected_value_confirms_a_pending_command(self, client):
+        feedback = []
+        client.set_feedback_handler(lambda device, success, text: feedback.append((device, success)))
+        client._pending["x.lamp.on"] = self._pending(True)
 
-        with caplog.at_level("WARNING"):
-            client.handle_state_update(f"{device_id}.voc_equiv", "0.95")
+        client.handle_state_update("x.lamp.on", "true")
 
-        # "voc_equiv" is missing from state_names in this client's config —
-        # the live update never reaches the cache, snapshot value stays frozen.
-        assert dev.current["voc_equiv"] == 0.5
-        # ...but it's no longer silent — exactly this kind of deployment gap
-        # (config.yaml missing a state_names entry the code already expects)
-        # is what caused the live air-quality values to freeze in production.
-        assert "voc_equiv" in caplog.text
-        assert "DEFAULT_IOBROKER_STATE_NAMES" in caplog.text
+        assert feedback == [("sat-1", True)]
+        assert "x.lamp.on" not in client._pending
 
-    def test_canonical_key_updates_cache_despite_unmapped_suffix(self, client, caplog):
-        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
-        dev = self._device(device_id)
-        dev.current["voc_equiv"] = 0.5
-        client._devices_by_id[device_id] = dev
+    def test_another_value_fails_a_pending_command(self, client):
+        feedback = []
+        client.set_feedback_handler(lambda device, success, text: feedback.append((device, success)))
+        client._pending["x.lamp.on"] = self._pending(True)
 
-        with caplog.at_level("WARNING"):
-            client.handle_state_update(f"{device_id}.tvoc", "0.95", "voc_equiv")
+        client.handle_state_update("x.lamp.on", "false")
 
-        assert dev.current["voc_equiv"] == 0.95
-        assert "tvoc" not in caplog.text
+        assert feedback == [("sat-1", False)]
 
-    def test_canonical_key_takes_priority_over_suffix(self, client):
-        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
-        dev = self._device(device_id)
-        client._devices_by_id[device_id] = dev
+    def test_a_confirm_waiter_of_a_text_channel_is_released(self, client):
+        event = threading.Event()
+        client._confirm_waiters["x.lamp.on"] = {"expected": True, "event": event, "success": False}
 
-        client.handle_state_update(f"{device_id}.iaq", "98", "co2_equiv")
+        client.handle_state_update("x.lamp.on", "true")
 
-        assert dev.current["co2_equiv"] == 98
-        assert "iaq" not in dev.current
-
-    @pytest.mark.parametrize("empty_key", [None, ""])
-    def test_empty_canonical_key_falls_back_to_suffix(self, client, empty_key):
-        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
-        dev = self._device(device_id)
-        client._devices_by_id[device_id] = dev
-
-        client.handle_state_update(f"{device_id}.iaq", "98", empty_key)
-
-        assert dev.current["iaq"] == 98
-
-    def test_unmapped_suffix_warning_logged_only_once(self, client, caplog):
-        device_id = "javascript.0.virtualDevice.AirQuality.EG.Wohnzimmer.Sofaecke"
-        dev = self._device(device_id)
-        client._devices_by_id[device_id] = dev
-
-        with caplog.at_level("WARNING"):
-            client.handle_state_update(f"{device_id}.voc_equiv", "0.9")
-            client.handle_state_update(f"{device_id}.voc_equiv", "0.95")
-
-        assert sum("voc_equiv" in r.message for r in caplog.records) == 1
-
-
-class TestHandleDeviceSnapshotAdapterResolvedKeys:
-    """#257 — der Adapter (>=1.1.0, hannah-proto >=3.8.0) löst device_id (Grouping) und
-    canonical_key (Rolle, z.B. on/level/color) selbst auf und schickt sie direkt mit.
-    Seit #359 lehnt Core ältere Clients nicht mehr per x-proto-version ab; Geräte
-    ohne device_id werden übersprungen."""
-
-    def _device_msg(self, state_id: str, device_id: str = "", canonical_key: str = "",
-                     device_type: str = "light") -> AgentDevice:
-        return AgentDevice(
-            state_id=state_id,
-            device_id=device_id,
-            canonical_key=canonical_key,
-            room="wohnzimmer",
-            device="Deckenlampe",
-            device_type=device_type,
-            value=AgentStateValue(value="true", ack=True),
-            room_names={"de": "Wohnzimmer"},
-            writable=True,
-        )
-
-    def test_device_id_from_adapter_used_as_grouping_key(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("hm-rpc.0.NEQ1234567.STATE", device_id="hm-rpc.0.NEQ1234567"),
-        ])
-
-        assert "hm-rpc.0.NEQ1234567" in client._devices_by_id
-
-    def test_canonical_key_from_adapter_used_directly(self):
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg(
-                "hm-rpc.0.NEQ1234567.STATE",
-                device_id="hm-rpc.0.NEQ1234567",
-                canonical_key="on",
-            ),
-        ])
-
-        dev = client._devices_by_id["hm-rpc.0.NEQ1234567"]
-        assert dev.states["on"] == "hm-rpc.0.NEQ1234567.STATE"
-        assert dev.current["on"] is True
-
-    def test_missing_device_id_skips_device(self):
-        """device_id fehlt praktisch nie mehr (siehe Klassen-Docstring) — bleibt es trotzdem
-        leer, wird das Gerät übersprungen statt mit einer geratenen ID aufzutauchen."""
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("javascript.0.virtualDevice.Licht.OG.Schlafzimmer.Deckenlampe.on"),
-        ])
-
-        assert client._devices_by_id == {}
-
-    def test_missing_canonical_key_falls_back_to_raw_suffix(self):
-        """Bleibt die Rolle unaufgelöst (z.B. Homematic-eigene WORKING/DIRECTION), landet
-        der State unter seinem rohen Suffix statt zu verschwinden."""
-        client = IoBrokerClient({"host": "localhost", "port": 8093})
-        client.handle_device_snapshot([
-            self._device_msg("hm-rpc.0.NEQ1234567.WORKING", device_id="hm-rpc.0.NEQ1234567"),
-        ])
-
-        dev = client._devices_by_id["hm-rpc.0.NEQ1234567"]
-        assert "WORKING" in dev.states
-
+        assert event.is_set()
+        assert client._confirm_waiters["x.lamp.on"]["success"] is True
 
 class TestGetStateRaw:
     @pytest.fixture
@@ -625,317 +145,57 @@ class TestGetStateRaw:
         assert client.get_state_raw("nonexistent.0.state") is None
 
     def test_device_state_hit(self, client):
-        dev = Device(
-            id="virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            name="Decke", key="decke",
-            room="wohnzimmer", room_display_name="Wohnzimmer", floor="EG", category="Licht",
-        )
-        dev.current["on"] = True
-        client._devices_by_id["virtualDevice.Licht.EG.Wohnzimmer.Decke"] = dev
+        """#522: der Wert kommt live aus der Registry, nicht aus dem alten Gerätebaum."""
+        registry = DeviceRegistry()
+        slot = Slot("on", pb.SLOT_KIND_ON, state_id="virtualDevice.Licht.EG.Wohnzimmer.Decke.on", value=True)
+        registry.replace(ORIGIN_V1, [TypedDevice("virtualDevice.Licht.EG.Wohnzimmer.Decke", "Decke", "wohnzimmer",
+                                                 slots={"on": slot})])
+        client.set_slot_control(registry, controller=object())
+
         assert client.get_state_raw("virtualDevice.Licht.EG.Wohnzimmer.Decke.on") == "True"
 
-    def test_device_state_missing_suffix_returns_none(self, client):
-        dev = Device(
-            id="virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            name="Decke", key="decke",
-            room="wohnzimmer", room_display_name="Wohnzimmer", floor="EG", category="Licht",
-        )
-        client._devices_by_id["virtualDevice.Licht.EG.Wohnzimmer.Decke"] = dev
-        assert client.get_state_raw("virtualDevice.Licht.EG.Wohnzimmer.Decke.level") is None
+    def test_a_state_of_the_registry_that_the_state_cache_also_has_comes_from_the_cache(self, client):
+        client._state_cache["x.lamp.on"] = False
+        registry = DeviceRegistry()
+        registry.replace(ORIGIN_V1, [TypedDevice("lamp", "Lampe", "bad", slots={
+            "on": Slot("on", pb.SLOT_KIND_ON, state_id="x.lamp.on", value=True)})])
+        client.set_slot_control(registry, controller=object())
 
-    def test_state_cache_takes_priority_over_device(self, client):
-        client._state_cache["virtualDevice.Licht.EG.Wohnzimmer.Decke.on"] = False
-        dev = Device(
-            id="virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            name="Decke", key="decke",
-            room="wohnzimmer", room_display_name="Wohnzimmer", floor="EG", category="Licht",
-        )
-        dev.current["on"] = True
-        client._devices_by_id["virtualDevice.Licht.EG.Wohnzimmer.Decke"] = dev
-        assert client.get_state_raw("virtualDevice.Licht.EG.Wohnzimmer.Decke.on") == "False"
+        assert client.get_state_raw("x.lamp.on") == "False"
 
 
-class TestExecuteCrossRoomDevice:
-    """#268 — "Computer an" ohne Raumangabe fand device_id bereits raumübergreifend
-    eindeutig auf, aber execute() brach trotzdem an der fehlenden Raumangabe ab."""
+class TestHandleDeviceSnapshot:
+    """#522: der Snapshot-Handler hält nur noch die States ohne Raum. Geräte mit Raum gehören in die
+    typisierte Registry (legacy_devices.load_snapshot), einen Gerätebaum gibt es nicht mehr."""
 
-    def _device(self, key: str, room: str, room_display: str) -> Device:
-        return Device(
-            id=f"javascript.0.virtualDevice.Stecker.OG.{room}.{key}",
-            name=key.title(), key=key, room=room, room_display_name=room_display,
-            floor="OG", category="socket", states={"on": f"{room}.{key}.on"},
-        )
+    @staticmethod
+    def _state(state_id, value, room=""):
+        return AgentDevice(state_id=state_id, room=room, device_id="x.dev" if room else "",
+                           value=AgentStateValue(value=value, ack=True))
 
-    @pytest.fixture
-    def client(self):
-        c = IoBrokerClient({"host": "localhost", "port": 8093})
-        c.set_setter(lambda state_id, payload: True)
-        return c
+    def test_states_without_a_room_land_in_the_state_cache(self):
+        client = IoBrokerClient({})
 
-    def test_unique_device_id_resolves_without_room(self, client):
-        """Der gemeldete Bug: NLU löst 'Computer' bereits eindeutig über device_id
-        auf (nur ein Raum hat dieses Gerät) — execute() darf das nicht an der
-        fehlenden Raumangabe scheitern lassen."""
-        dev = self._device("computer", "schlafzimmer", "Schlafzimmer")
-        client.devices["schlafzimmer"] = {"computer": dev}
-        client._devices_by_id[dev.id] = dev
-
-        intent = Intent(name="TurnOn", device="Computer", device_id=dev.id)
-        assert client.execute(intent, trust_level=None) == 1
-
-    def test_device_key_fallback_after_room_clarification(self, client):
-        """Nach einer Raum-Rückfrage bei Mehrdeutigkeit ist device_id noch nicht
-        gesetzt, aber room_id + device_key sind bekannt — execute() muss das
-        Gerät dann im bestätigten Raum per Key nachschlagen."""
-        dev1 = self._device("nachtlicht", "schlafzimmer_1", "Schlafzimmer 1")
-        dev2 = self._device("nachtlicht", "schlafzimmer_2", "Schlafzimmer 2")
-        client.devices["schlafzimmer_1"] = {"nachtlicht": dev1}
-        client.devices["schlafzimmer_2"] = {"nachtlicht": dev2}
-        client._devices_by_id[dev1.id] = dev1
-        client._devices_by_id[dev2.id] = dev2
-
-        intent = Intent(
-            name="TurnOn", device_key="nachtlicht",
-            room="Schlafzimmer 2", room_id="schlafzimmer_2",
-        )
-        assert client.execute(intent, trust_level=None) == 1
-        assert intent.device_id == dev2.id
-
-    def test_no_room_and_no_device_id_still_fails(self, client):
-        intent = Intent(name="TurnOn")
-        assert client.execute(intent, trust_level=None) == 0
-
-
-class TestBlindInversionExecute:
-    """#270: invertierte Rolladen/Markisen (0%=auf/100%=zu statt Hannahs
-    0%=zu/100%=auf) — nur die semantischen "öffnen"/"schließen"-Grenzwerte
-    (intent.is_open_close) werden pro Gerät umgerechnet, nie ein explizit
-    genannter Prozentwert."""
-
-    def _device(self, key: str, inverted: bool) -> Device:
-        return Device(
-            id=f"javascript.0.virtualDevice.Rollladen.EG.Kueche.{key}",
-            name=key.title(), key=key, room="kueche", room_display_name="Küche",
-            floor="EG", category="blind", states={"level": f"kueche.{key}.level"},
-            inverted=inverted,
-        )
-
-    @pytest.fixture
-    def client(self):
-        c = IoBrokerClient({"host": "localhost", "port": 8093})
-        c._sent = []
-        c.set_setter(lambda state_id, payload: (c._sent.append((state_id, payload)), True)[1])
-        return c
-
-    def test_open_word_on_inverted_device_sends_raw_zero(self, client):
-        dev = self._device("rolladenlinks", inverted=True)
-        client.devices["kueche"] = {"rolladenlinks": dev}
-        client._devices_by_id[dev.id] = dev
-
-        intent = Intent(name="SetLevel", device_id=dev.id, value=100, is_open_close=True)
-        assert client.execute(intent, trust_level=None) == 1
-        assert client._sent == [(dev.states["level"], "0")]
-
-    def test_close_word_on_inverted_device_sends_raw_hundred(self, client):
-        dev = self._device("rolladenlinks", inverted=True)
-        client.devices["kueche"] = {"rolladenlinks": dev}
-        client._devices_by_id[dev.id] = dev
-
-        intent = Intent(name="SetLevel", device_id=dev.id, value=0, is_open_close=True)
-        assert client.execute(intent, trust_level=None) == 1
-        assert client._sent == [(dev.states["level"], "100")]
-
-    def test_open_word_on_non_inverted_device_is_unaffected(self, client):
-        dev = self._device("rolladenlinks", inverted=False)
-        client.devices["kueche"] = {"rolladenlinks": dev}
-        client._devices_by_id[dev.id] = dev
-
-        intent = Intent(name="SetLevel", device_id=dev.id, value=100, is_open_close=True)
-        assert client.execute(intent, trust_level=None) == 1
-        assert client._sent == [(dev.states["level"], "100")]
-
-    def test_explicit_percent_on_inverted_device_is_not_converted(self, client):
-        """Design-Entscheidung 1: 'auf 70 Prozent' zeigt in ioBroker exakt 70%,
-        unabhängig vom Inversions-Flag — nur öffnen/schließen wird umgerechnet."""
-        dev = self._device("rolladenlinks", inverted=True)
-        client.devices["kueche"] = {"rolladenlinks": dev}
-        client._devices_by_id[dev.id] = dev
-
-        intent = Intent(name="SetLevel", device_id=dev.id, value=70, is_open_close=False)
-        assert client.execute(intent, trust_level=None) == 1
-        assert client._sent == [(dev.states["level"], "70")]
-
-    def test_category_bulk_command_converts_only_inverted_targets(self, client):
-        """'schließe alle Rollläden' trifft ggf. gemischte Aktoren im selben
-        Raum — die Umrechnung muss pro Gerät passieren, nicht global."""
-        inv = self._device("rolladenlinks", inverted=True)
-        normal = self._device("rolladenrechts", inverted=False)
-        client.devices["kueche"] = {"rolladenlinks": inv, "rolladenrechts": normal}
-        client._devices_by_id[inv.id] = inv
-        client._devices_by_id[normal.id] = normal
-
-        intent = Intent(name="SetLevel", room="Küche", room_id="kueche",
-                         category_filter="blind", value=0, is_open_close=True)
-        assert client.execute(intent, trust_level=None) == 2
-        assert (inv.states["level"], "100") in client._sent
-        assert (normal.states["level"], "0") in client._sent
-
-
-class TestBlindInversionDescribe:
-    """#270: Ansage nennt den kanonischen Zustand (0%=zu/100%=auf), nicht den
-    rohen Aktorwert."""
-
-    @pytest.fixture
-    def client(self):
-        return IoBrokerClient({"host": "localhost", "port": 8093})
-
-    def _device(self, inverted: bool, level: float) -> Device:
-        return Device(
-            id="javascript.0.virtualDevice.Rollladen.EG.Kueche.Rolladenlinks",
-            name="Rolladenlinks", key="rolladenlinks", room="kueche",
-            room_display_name="Küche", floor="EG", category="blind",
-            current={"level": level}, inverted=inverted,
-        )
-
-    def test_inverted_device_reports_canonical_value(self, client):
-        dev = self._device(inverted=True, level=70.0)
-        result = client._describe_category("blind", [dev], "Küche")
-        assert "30" in result
-        assert "70" not in result
-
-    def test_non_inverted_device_reports_raw_value(self, client):
-        dev = self._device(inverted=False, level=30.0)
-        result = client._describe_category("blind", [dev], "Küche")
-        assert "30" in result
-
-
-class TestTrustLevelPerState:
-    """#366: Mindest-Trust-Level pro State aus AgentDevice.required_trust_level —
-    nur Setzen wird geprüft, unbekannte User zählen als Gast (0)."""
-
-    LOCK = "javascript.0.virtualDevice.Schloss.EG.Flur.Haustuer.on"
-    LIGHT = "javascript.0.virtualDevice.Licht.EG.Flur.Decke.on"
-
-    def _agent_device(self, state_id: str, name: str, required: int | None = None) -> AgentDevice:
-        dev = AgentDevice(
-            state_id=state_id, room="flur", device=name, device_type="socket",
-            device_id=state_id.rsplit(".", 1)[0], canonical_key="on",
-            value=AgentStateValue(value="false", ack=True), writable=True,
-        )
-        if required is not None:
-            dev.required_trust_level = required
-        return dev
-
-    @pytest.fixture
-    def client(self):
-        c = IoBrokerClient({"host": "localhost", "port": 8093})
-        c._sent = []
-        c.set_setter(lambda state_id, payload: (c._sent.append(state_id), True)[1])
-        c.handle_device_snapshot([
-            self._agent_device(self.LOCK, "Haustuer", required=8),
-            self._agent_device(self.LIGHT, "Decke"),
+        client.handle_device_snapshot([
+            self._state("openweathermap.0.current.temperature", "21.5"),
+            self._state("vw.0.car.parked", "true"),
         ])
-        return c
 
-    def test_snapshot_keeps_required_level_and_unset_stays_unrestricted(self, client):
-        assert client._devices_by_id[self.LOCK.rsplit(".", 1)[0]].required_trust == {"on": 8}
-        assert client._devices_by_id[self.LIGHT.rsplit(".", 1)[0]].required_trust == {}
+        assert client.get_state_raw("openweathermap.0.current.temperature") == "21.5"
+        assert client.get_state_raw("vw.0.car.parked") == "True"
 
-    def test_explicit_zero_is_kept(self):
-        c = IoBrokerClient({"host": "localhost", "port": 8093})
-        c.handle_device_snapshot([self._agent_device(self.LOCK, "Haustuer", required=0)])
-        assert c._devices_by_id[self.LOCK.rsplit(".", 1)[0]].required_trust == {"on": 0}
+    def test_a_state_with_a_room_is_not_kept_here(self):
+        client = IoBrokerClient({})
 
-    def test_may_set(self, client):
-        assert client.may_set(self.LOCK, 8) is True
-        assert client.may_set(self.LOCK, 7) is False
-        assert client.may_set(self.LOCK, GUEST_TRUST_LEVEL) is False
-        assert client.may_set(self.LIGHT, GUEST_TRUST_LEVEL) is True
-        # None = bewusst ungeprüfter Aufrufer (ioBroker-textCommand)
-        assert client.may_set(self.LOCK, None) is True
+        client.handle_device_snapshot([self._state("x.dev.on", "true", room="bad")])
 
-    def test_execute_denies_protected_device_for_guest(self, client):
-        denied: list[str] = []
-        intent = Intent(name="TurnOn", device_id=self.LOCK.rsplit(".", 1)[0])
-        assert client.execute(intent, trust_level=GUEST_TRUST_LEVEL, denied=denied) == 0
-        assert client._sent == []
-        assert denied == ["Haustuer im flur"]
+        assert client.get_state_raw("x.dev.on") is None
 
-    def test_execute_allows_protected_device_with_sufficient_trust(self, client):
-        intent = Intent(name="TurnOn", device_id=self.LOCK.rsplit(".", 1)[0])
-        assert client.execute(intent, trust_level=8) == 1
-        assert client._sent == [self.LOCK]
+    def test_a_new_snapshot_replaces_the_old_cache(self):
+        client = IoBrokerClient({})
+        client.handle_device_snapshot([self._state("a.b.c", "1")])
 
-    def test_bulk_command_skips_only_protected_devices(self, client):
-        denied: list[str] = []
-        intent = Intent(name="TurnOn", room="Flur", room_id="flur")
-        assert client.execute(intent, trust_level=GUEST_TRUST_LEVEL, denied=denied) == 1
-        assert client._sent == [self.LIGHT]
-        assert denied == ["Haustuer im flur"]
+        client.handle_device_snapshot([self._state("d.e.f", "2")])
 
-    def test_control_direct_raises_for_insufficient_trust(self, client):
-        with pytest.raises(TrustLevelDenied):
-            client.control_direct(self.LOCK.rsplit(".", 1)[0], "on", "true", trust_level=GUEST_TRUST_LEVEL)
-        assert client._sent == []
-
-    def test_control_direct_allows_sufficient_trust(self, client):
-        assert client.control_direct(self.LOCK.rsplit(".", 1)[0], "on", "true", trust_level=10) is True
-        assert client._sent == [self.LOCK]
-
-
-class TestExecuteWaitConfirm:
-    """#373: execute(wait_confirm=True) blockt synchron auf ioBroker-Bestätigung
-    (Text-Kanäle) — unabhängig vom satellitenseitigen _pending/_feedback_cb-Pfad,
-    der weiterhin asynchron über satellite_device läuft."""
-
-    LIGHT = "javascript.0.virtualDevice.Licht.EG.Flur.Decke.on"
-
-    def _agent_device(self, state_id: str, name: str) -> AgentDevice:
-        return AgentDevice(
-            state_id=state_id, room="flur", device=name, device_type="socket",
-            device_id=state_id.rsplit(".", 1)[0], canonical_key="on",
-            value=AgentStateValue(value="false", ack=True), writable=True,
-        )
-
-    @pytest.fixture
-    def client(self):
-        c = IoBrokerClient({"host": "localhost", "port": 8093})
-        c._confirm_timeout = 0.05
-        c.handle_device_snapshot([self._agent_device(self.LIGHT, "Decke")])
-        return c
-
-    def _intent(self):
-        return Intent(name="TurnOn", device_id=self.LIGHT.rsplit(".", 1)[0])
-
-    def test_confirms_immediately_when_iobroker_acks_right_away(self, client):
-        client.set_setter(lambda state_id, payload: client.handle_state_update(state_id, payload) or True)
-        offline: list[str] = []
-        count = client.execute(self._intent(), trust_level=None, wait_confirm=True, offline=offline)
-        assert count == 1
-        assert offline == []
-
-    def test_reports_offline_on_timeout(self, client):
-        client.set_setter(lambda state_id, payload: True)  # ioBroker bestätigt nie
-        offline: list[str] = []
-        count = client.execute(self._intent(), trust_level=None, wait_confirm=True, offline=offline)
-        assert count == 1
-        assert offline == ["Decke im flur"]
-
-    def test_without_wait_confirm_never_populates_offline(self, client):
-        client.set_setter(lambda state_id, payload: True)  # ioBroker bestätigt nie
-        offline: list[str] = []
-        count = client.execute(self._intent(), trust_level=None, offline=offline)
-        assert count == 1
-        assert offline == []
-
-    def test_requester_name_reaches_satellite_feedback_text(self, client, monkeypatch):
-        monkeypatch.setattr("hannah.responses.random.random", lambda: 0.0)
-        monkeypatch.setattr("hannah.responses.random.choice", lambda seq: seq[0])
-        received = {}
-        client.set_feedback_handler(
-            lambda device, success, text: received.update(device=device, success=success, text=text),
-            timeout=0.05,
-        )
-        client.set_setter(lambda state_id, payload: client.handle_state_update(state_id, payload) or True)
-        client.execute(self._intent(), satellite_device="kueche-esp", trust_level=None, requester_name="Leonie")
-        assert received == {"device": "kueche-esp", "success": True, "text": "Sehr gerne, Leonie."}
+        assert client.get_state_raw("a.b.c") is None
+        assert client.get_state_raw("d.e.f") == "2"

@@ -100,3 +100,42 @@ class TestTheNluFindsDevicesOfAV2Adapter:
 
         assert windows.category_filter == "window" and windows.device_id == "win-1"
         assert doors.category_filter == "door"
+
+
+class TestRoomsForTheNlu:
+    """#522: die Räume der NLU kommen aus der Registry und dem Raum-Katalog, nicht aus dem alten Gerätebaum."""
+
+    def _registry(self, *devices):
+        registry = DeviceRegistry()
+        registry.replace("v2", list(devices))
+        return registry
+
+    def test_a_room_with_a_device_gets_its_name_from_the_catalog(self):
+        registry = self._registry(device("Lampe", C.DEVICE_CLASS_LIGHT, K.SLOT_KIND_ON, room="bad_oben", device_id="a"))
+
+        rooms = nlu_devices.rooms_for_nlu(registry, {"bad_oben": "Bad oben", "keller": "Keller"}, {})
+
+        assert rooms == {"bad_oben": "Bad oben"}
+
+    def test_a_room_missing_in_the_catalog_falls_back_to_its_id(self):
+        registry = self._registry(device("Lampe", C.DEVICE_CLASS_LIGHT, K.SLOT_KIND_ON, room="flur", device_id="a"))
+
+        assert nlu_devices.rooms_for_nlu(registry, {}, {}) == {"flur": "flur"}
+
+    def test_a_room_without_a_device_is_not_a_room_of_the_nlu(self):
+        """Sonst blockiert ein bloßer Raumname Zeit- und Wetterfragen."""
+        assert nlu_devices.rooms_for_nlu(DeviceRegistry(), {"keller": "Keller"}, {}) == {}
+
+    def test_groups_are_added_even_without_devices(self):
+        rooms = nlu_devices.rooms_for_nlu(DeviceRegistry(), {}, {"erdgeschoss": "Erdgeschoss"})
+
+        assert rooms == {"erdgeschoss": "Erdgeschoss"}
+
+    def test_devices_of_a_hannah_v1_adapter_count_like_those_of_a_v2_adapter(self):
+        registry = DeviceRegistry()
+        registry.replace("v1", [device("Alt", C.DEVICE_CLASS_LIGHT, K.SLOT_KIND_ON, room="kueche", device_id="old")])
+        registry.replace("v2", [device("Neu", C.DEVICE_CLASS_LIGHT, K.SLOT_KIND_ON, room="bad", device_id="new")])
+
+        rooms = nlu_devices.rooms_for_nlu(registry, {"kueche": "Küche", "bad": "Bad"}, {})
+
+        assert rooms == {"kueche": "Küche", "bad": "Bad"}

@@ -15,6 +15,9 @@ hängt von der Herkunft des Geräts ab:
 
 Das Trust-Level (#366) wird pro Slot geprüft (`Slot.required_trust_level`), bei v1-Geräten
 ist das der Wert, den der Adapter pro State gemeldet hat.
+
+Ein Gerät, das sich als nicht erreichbar meldet (`TypedDevice.available`, #523), bekommt keinen
+Befehl: `SlotWrite.unreachable` sagt dem Aufrufer, warum nichts rausging.
 """
 import logging
 import threading
@@ -36,6 +39,7 @@ class SlotWrite(NamedTuple):
     found: bool                        # Gerät und Slot sind in der Registry bekannt
     sent: bool                         # der Befehl ist an einen verbundenen Adapter rausgegangen
     confirmed: Optional[bool] = None   # None = nicht gewartet
+    unreachable: bool = False          # das Gerät meldet sich als nicht erreichbar, der Befehl ging nicht raus (#523)
 
 
 def _v1_wire_value(slot: Slot, value: "pb.SlotValue"):
@@ -94,6 +98,11 @@ class DeviceController:
         if not slot.writable:
             log.warning(f"set_slot: {device.name!r}/{slot_id} ist nicht schreibbar")
             return SlotWrite(found=True, sent=False)
+        if not device.available:
+            # Ein Gerät, das der Adapter als nicht erreichbar meldet, bekommt keinen Befehl: er liefe
+            # sonst in den Bestätigungs-Timeout (#523). Der Aufrufer sagt, dass das Gerät nicht erreichbar ist.
+            log.info(f"set_slot: {device.name!r} ist nicht erreichbar, {slot_id} nicht gesetzt")
+            return SlotWrite(found=True, sent=False, unreachable=True)
 
         slot_value = slot_value_to_pb(slot.kind, value)
 

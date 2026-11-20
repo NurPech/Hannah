@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from hannah.log_shipping import TRANSCRIPT
 
 if TYPE_CHECKING:
-    from .iobroker import Device
+    from .nlu_devices import NluDevice
 
 log = logging.getLogger(__name__)
 
@@ -110,12 +110,8 @@ _COLORS: dict[str, str] = {
 
 
 def _categories_of(dev) -> frozenset:
-    """Die Kategorie-Codes eines Geräts: `categories` der Registry-Sicht (nlu_devices.NluDevice),
-    bei einem alten `Device` der eine Typ-Code seines v1-Adapters."""
-    categories = getattr(dev, "categories", None)
-    if categories is not None:
-        return categories
-    return frozenset({dev.category}) if dev.category else frozenset()
+    """Die Kategorie-Codes eines Geräts: `categories` der Registry-Sicht (nlu_devices.NluDevice)."""
+    return dev.categories
 
 
 @dataclass
@@ -158,8 +154,8 @@ class NLU:
     def __init__(self, cfg: dict, rooms: dict[str, str], devices: dict[str, dict],
                  satellites: Optional[dict[str, str]] = None):
         """
-        rooms     : {room_key: display_name}   — aus IoBrokerClient.rooms
-        devices   : {room_key: {device_key: Device}} — aus IoBrokerClient.devices
+        rooms     : {room_key: display_name}   — aus nlu_devices.rooms_for_nlu
+        devices   : {room_key: {device_key: NluDevice}} — aus nlu_devices.build_index
         satellites: {device_id: display_name} — aus SatelliteManager.get_db_satellites();
                     Satelliten sind kein Teil des Raum/Geräte-Grids und brauchen eigene
                     Namensauflösung (StartCapture/StopCapture, #230)
@@ -860,7 +856,7 @@ class NLU:
 
     def resolve_device_in_room(
         self, raw_text: str, room_key: str
-    ) -> tuple[Optional[str], Optional["Device"]]:
+    ) -> tuple[Optional[str], Optional["NluDevice"]]:
         """Sucht ein Gerät im jetzt bekannten Raum erneut, nachdem eine Raum-Rückfrage
         aufgelöst wurde (#274). Beim ersten parse()-Durchlauf war der Raum noch
         mehrdeutig — _find_room() liefert dabei trotzdem einen per Tie-Break "geratenen"
@@ -986,7 +982,7 @@ class NLU:
 
     def _fuzzy_find_devices(
         self, leftover_tokens: list[str], room_key: str, category_filter: Optional[str],
-    ) -> list["Device"]:
+    ) -> list["NluDevice"]:
         """Vergleicht die übrig gebliebenen Tokens per Ratio (difflib) gegen die Wörter der
         Gerätenamen (dev.key) im Raum, eingeschränkt auf category_filter falls bekannt (sonst
         alle Geräte im Raum, #301) — Fallback wenn der exakte Substring-Match in
@@ -1081,7 +1077,7 @@ class NLU:
 
     def _find_device(
         self, text: str, room_key: Optional[str]
-    ) -> tuple[Optional[str], Optional["Device"], list[tuple[str, str]]]:
+    ) -> tuple[Optional[str], Optional["NluDevice"], list[tuple[str, str]]]:
         """
         Sucht Gerät im erkannten Raum. War kein Raum genannt, wird raumübergreifend
         gesucht; wurde ein Raum genannt, aber dort nichts gefunden, wird NICHT in
@@ -1098,7 +1094,7 @@ class NLU:
         """
         norm_text = _normalize(text)
 
-        def _best_match(space: dict, norm_room: str) -> tuple[Optional[str], Optional["Device"]]:
+        def _best_match(space: dict, norm_room: str) -> tuple[Optional[str], Optional["NluDevice"]]:
             # Matcht gegen dev.key (der NLU-Suchbegriff), nicht gegen den Dict-Key von
             # `space` — der ist seit #275 der eindeutige device_id, damit zwei Geräte im
             # selben Raum mit zufällig gleichem Anzeigenamen (z.B. beide "Bad") sich nicht
@@ -1121,7 +1117,7 @@ class NLU:
             key, dev = _best_match(self._devices[room_key], _normalize(room_key))
             return key, dev, []
 
-        matches: list[tuple[str, str, "Device"]] = []  # (room_key, dev_key, dev)
+        matches: list[tuple[str, str, "NluDevice"]] = []  # (room_key, dev_key, dev)
         for rk, devs in self._devices.items():
             key, dev = _best_match(devs, "")
             if dev:
@@ -1232,7 +1228,7 @@ class NLU:
         return {c for devs in self._devices.values() for d in devs.values() for c in _categories_of(d)}
 
     def _dispatch_category_words(
-        self, norm_tokens: set[str], device: Optional["Device"],
+        self, norm_tokens: set[str], device: Optional["NluDevice"],
         category_filter: Optional[str], room_key: Optional[str],
     ) -> tuple[Optional[str], Optional[str], Optional[int], Optional[str], list]:
         """Kategorie-bewusste Wortauflösung (#272): Wörter wie "hoch" bedeuten je nach

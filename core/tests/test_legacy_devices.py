@@ -369,6 +369,25 @@ class TestValuesAndGrouping:
 
         assert set(devices) == {"Decke", "Stehlampe"}
 
+    def test_a_trust_level_of_zero_is_kept_and_an_unset_one_is_unrestricted(self):
+        """#366, #522: 0 ist ein Mindestlevel wie jedes andere, ein fehlendes bedeutet keine Einschränkung."""
+        devices = classify(state("Offen", "on", "false", state_type=BOOLEAN, trust=0),
+                           state("Frei", "on", "false", state_type=BOOLEAN))
+
+        assert devices["Offen"].slots["on"].required_trust_level == 0
+        assert devices["Frei"].slots["on"].required_trust_level is None
+
+    @pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+    def test_a_state_without_a_type_next_to_a_typed_one_does_not_blank_the_device_type(self, order):
+        """#133, #522: ein Geschwister-State ohne erkennbaren Typ (z.B. ein Leistungsmesser) darf den Typ
+        eines schon erkannten States nicht überschreiben, egal in welcher Reihenfolge sie kommen."""
+        states = [state("Dose", "on", "false", dtype="socket", state_type=BOOLEAN),
+                  state("Dose", "power", "4.2", dtype="", writable=False)]
+
+        dose = classify(*(states[i] for i in order))["Dose"]
+
+        assert dose.device_class == C.DEVICE_CLASS_SOCKET
+
     def test_floor_is_taken_from_the_first_state_that_has_one(self):
         first = state("Decke", "on", "true", dtype="light", state_type=BOOLEAN)
         first.floor = ""

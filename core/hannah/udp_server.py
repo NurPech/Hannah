@@ -218,19 +218,25 @@ class UDPServer:
             sat = self._satellites.get(device)
         return sat["room"] if sat else None
 
+    def _live_room(self, device: str) -> str:
+        """Aktuelle Raum-Zuweisung eines Satelliten aus der DB (#519). Der beim Register
+        gespeicherte Raum ist nur ein Schnappschuss und wird bei einer Raumänderung nicht
+        nachgezogen; ohne Zuweisung ist der Satellit raumlos ("")."""
+        return self._resolve_satellite_room(device) or ""
+
     def registered_devices(self) -> dict[str, str]:
-        """Gibt {device_name: room_name} aller aktuell registrierten Satelliten zurück."""
+        """Gibt {device_name: room_id} aller aktuell registrierten Satelliten zurück.
+        Der Raum ist die aktuelle DB-Zuweisung, nicht der Stand beim Register (#519)."""
         with self._lock:
-            return {d: s["room"] for d, s in self._satellites.items()}
+            devices = list(self._satellites)
+        return {d: self._live_room(d) for d in devices}
 
     def registered_devices_full(self) -> dict[str, dict]:
-        """Gibt {device_name: {"room": room, "addr": "ip:port"}} zurück."""
+        """Gibt {device_name: {"room": room_id, "addr": "ip:port"}} zurück (Raum: aktuelle
+        DB-Zuweisung, #519)."""
         with self._lock:
-            result = {}
-            for d, s in self._satellites.items():
-                ip, port = s.get("addr", ("", 0))
-                result[d] = {"room": s["room"], "addr": f"{ip}:{port}"}
-            return result
+            addrs = {d: s.get("addr", ("", 0)) for d, s in self._satellites.items()}
+        return {d: {"room": self._live_room(d), "addr": f"{ip}:{port}"} for d, (ip, port) in addrs.items()}
 
     # ------------------------------------------------------------------
     # Empfangs-Loop
@@ -298,7 +304,7 @@ class UDPServer:
             )
             self._send_control({"type": "registered", "ok": True}, addr)
             if self._on_satellite_change:
-                snapshot = {d: s["room"] for d, s in self._satellites.items()}
+                snapshot = self.registered_devices()
                 threading.Thread(
                     target=self._on_satellite_change, args=(snapshot,), daemon=True
                 ).start()
@@ -404,8 +410,7 @@ class UDPServer:
         for device, room in timed_out:
             log.warning(f"Satellit '{device}' (Raum: '{room}') — kein Heartbeat seit {self._HEARTBEAT_TIMEOUT:.0f}s, markiere als offline")
             if self._on_satellite_change:
-                with self._lock:
-                    snapshot = {d: s["room"] for d, s in self._satellites.items()}
+                snapshot = self.registered_devices()
                 threading.Thread(
                     target=self._on_satellite_change, args=(snapshot,), daemon=True
                 ).start()

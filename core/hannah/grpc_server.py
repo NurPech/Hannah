@@ -243,7 +243,6 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         disable_udp: Optional[Callable[[], None]] = None,
         enable_udp: Optional[Callable[[], None]] = None,
         on_proxy_discovery: Optional[Callable[[str, int], None]] = None,  # (host, port) — None args = restore own address
-        get_devices: Optional[Callable[[], list]] = None,           # → [{key,name,devices:[...]}]
         control_device: Optional[Callable[[str, str, str, int], bool]] = None,  # (device_id, state, value, trust_level) → bool, wirft TrustLevelDenied
         control_slot: Optional[Callable[[str, str, object, int], object]] = None,  # (device_id, slot_id, value, trust_level) → SlotWrite, wirft TrustLevelDenied/ValueError (#386)
         get_typed_devices: Optional[Callable[[], list]] = None,     # () → [TypedDevice] der Registry (#386)
@@ -332,7 +331,6 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._disable_udp           = disable_udp or (lambda: None)
         self._enable_udp            = enable_udp or (lambda: None)
         self._on_proxy_discovery    = on_proxy_discovery or (lambda *_: None)
-        self._get_devices           = get_devices or (lambda: [])
         self._control_device        = control_device or (lambda *_: False)
         self._control_slot          = control_slot
         self._get_typed_devices     = get_typed_devices
@@ -469,15 +467,25 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         with self._proxy_lock:
             return len(self._proxy_queues) > 0
 
+    def _live_room(self, device: str) -> str:
+        """Aktuelle Raum-Zuweisung eines Satelliten aus der DB (#519). Der bei der Registrierung
+        gespeicherte Raum ist nur ein Schnappschuss und wird bei einer Raumänderung nicht
+        nachgezogen; ohne Zuweisung ist der Satellit raumlos ("")."""
+        return self._resolve_satellite_room(device) or ""
+
     def proxy_satellites(self) -> dict[str, str]:
-        """Aktuell vom Proxy gemeldete Satelliten: {device: room}."""
+        """Aktuell vom Proxy gemeldete Satelliten: {device: room_id}. Der Raum ist die
+        aktuelle DB-Zuweisung, nicht der Stand bei der Registrierung (#519)."""
         with self._proxy_sat_lock:
-            return {dev: info["room"] for dev, info in self._proxy_satellites.items()}
+            devices = list(self._proxy_satellites)
+        return {dev: self._live_room(dev) for dev in devices}
 
     def proxy_satellites_full(self) -> dict[str, dict]:
-        """Aktuell vom Proxy gemeldete Satelliten: {device: {"room": str, "addr": str}}."""
+        """Aktuell vom Proxy gemeldete Satelliten: {device: {"room": str, "addr": str}}
+        (Raum: aktuelle DB-Zuweisung, #519)."""
         with self._proxy_sat_lock:
-            return dict(self._proxy_satellites)
+            known = {dev: dict(info) for dev, info in self._proxy_satellites.items()}
+        return {dev: {**info, "room": self._live_room(dev)} for dev, info in known.items()}
 
     def push_audio_to_proxy(self, device_id: str, pcm: bytes, sample_rate: int):
         """Push a single PlayAudioCommand (full PCM, is_last=True) to all connected proxy streams."""
@@ -1148,30 +1156,20 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         self._on_trigger_satellite_restart(device)
         return pb.StatusResponse(ok=True, message=f"Neustart-Kommando gesendet an {device}")
 
-    def device_snapshot(self) -> list:
-        """Geräteliste pro Raum in der State-basierten Form von Core, für Steuer-Menüs."""
-        return self._get_devices()
-
     def GetDevices(self, _request, _context):
-        # Geräte aus der typisierten Registry (Klasse + Slots mit Werten). Ist sie leer oder
-        # nicht verdrahtet, entsteht die Liste in der State-basierten hannah.v1-Form und wird
-        # mit den Tabellen der Lib nach hannah.v2 übersetzt. hannah.v1-Clients bekommen die
-        # State-basierte Liste unverändert (grpc_v1).
+        # Geräte aus der typisierten Registry (Klasse + Slots mit Werten). Ist sie leer, ist die Liste
+        # leer (#522). hannah.v1-Clients bekommen dieselbe Registry in State-Form (devices_response_v1).
         devices = self._get_typed_devices() if self._get_typed_devices else []
-        if devices:
-            return self._typed_devices_response(devices)
-        return translate(grpc_v1.get_devices_response(self.device_snapshot()), "v2", strict=False)
+        return self._typed_devices_response(devices)
 
     def devices_response_v1(self):
         """GetDevices für hannah.v1-Clients (Telegram, WebUI, ...): die typisierte Registry, mit den
-        Tabellen der Lib in die State-basierte Form übersetzt (#387). Ist die Registry leer, gilt
-        der alte Gerätebaum."""
+        Tabellen der Lib in die State-basierte Form übersetzt (#387). Ist die Registry leer, ist die
+        Liste leer (#522)."""
         devices = self._get_typed_devices() if self._get_typed_devices else []
-        if devices:
-            return grpc_v1.with_v1_state_format(
-                translate(self._typed_devices_response(devices), "v1", strict=False)
-            )
-        return grpc_v1.get_devices_response(self.device_snapshot())
+        return grpc_v1.with_v1_state_format(
+            translate(self._typed_devices_response(devices), "v1", strict=False)
+        )
 
     def _typed_devices_response(self, devices: list) -> "pb.GetDevicesResponse":
         try:
@@ -1216,8 +1214,9 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
 
     def ControlDevice(self, request, _context):
         # Slot-Steuerung von hannah.v2 gegen die typisierte Registry (#386). Kennt sie das Gerät
-        # nicht, bleibt der bisherige Weg: die Lib übersetzt Slot-ID + typisierten Wert in den
-        # State-Key und den Wert als String für den State-basierten Gerätebaum.
+        # nicht, geht der Aufruf wie der eines v1-Clients durch control_device: die Lib übersetzt
+        # Slot-ID + typisierten Wert in State-Key und String-Wert, IoBrokerClient.control_direct
+        # löst sie wieder über dieselbe Registry auf.
         if self._control_slot is not None:
             user, trust_level = self._requester_trust(request.source_service, request.source_user_id)
             log.info(
@@ -1234,6 +1233,8 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             except ValueError as exc:
                 return pb.StatusResponse(ok=False, message=f"Ungültiger Wert: {exc}")
             if result.found:
+                if result.unreachable:
+                    return pb.StatusResponse(ok=False, message="Gerät ist gerade nicht erreichbar")
                 return pb.StatusResponse(
                     ok=result.sent,
                     message="OK" if result.sent else "Slot nicht schreibbar oder kein Adapter verbunden",
@@ -1396,13 +1397,16 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         for device_id in connected_ids:
             self._upsert_satellite(device_id)
         db_sats = {s["device_id"]: s for s in self._get_db_satellites()}
+        # The room is the current DB assignment, read with the other database accesses (#519): the
+        # one stored at registration would push the old room back to the adapter after a room change.
+        live_rooms = {device_id: self._live_room(device_id) for device_id in connected_ids}
 
         with self._proxy_sat_lock:
             connected = dict(self._proxy_satellites)
             for device_id, info in connected.items():
                 display_name = db_sats.get(device_id, {}).get("display_name") or ""
                 self.agent_satellite_update(
-                    device_id, info.get("room", ""), info.get("addr", ""), True,
+                    device_id, live_rooms.get(device_id, info.get("room", "")), info.get("addr", ""), True,
                     display_name=display_name,
                 )
             for device_id, sat in db_sats.items():
@@ -1441,7 +1445,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
 
         with self._proxy_sat_lock:
             known = self._proxy_satellites.get(request.device_id)
-        room_id = (known or {}).get("room") or self._resolve_satellite_room(request.device_id) or ""
+        room_id = self._live_room(request.device_id)
         log.info(
             f"[grpc] SubmitSatelliteAudio: device={request.device_id!r}"
             f" room={room_id!r} bytes={len(request.audio_pcm)}"
@@ -1449,7 +1453,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         if self._on_satellite_change and request.device_id and known is None:
             with self._proxy_sat_lock:
                 self._proxy_satellites[request.device_id] = {"room": room_id, "addr": ""}
-                snapshot = {d: info["room"] for d, info in self._proxy_satellites.items()}
+            snapshot = self.proxy_satellites()
             threading.Thread(
                 target=self._on_satellite_change, args=(snapshot,), daemon=True
             ).start()
@@ -1518,7 +1522,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
             return pb.StatusResponse(ok=True, message="registered without room")
         with self._proxy_sat_lock:
             self._proxy_satellites[device] = {"room": room_id, "addr": address}
-            snapshot = {d: info["room"] for d, info in self._proxy_satellites.items()}
+        snapshot = self.proxy_satellites()
         log.info(f"[grpc] Satellit registriert via Proxy: '{device}' (Raum: '{room_id}')")
         if self._on_satellite_change:
             threading.Thread(
@@ -1531,7 +1535,7 @@ class HannahServicer(pb_grpc.HannahServiceServicer):
         device = request.device_id
         with self._proxy_sat_lock:
             self._proxy_satellites.pop(device, None)
-            snapshot = {d: info["room"] for d, info in self._proxy_satellites.items()}
+        snapshot = self.proxy_satellites()
         log.info(f"[grpc] Satellit abgemeldet via Proxy: '{device}'")
         if self._on_satellite_change:
             threading.Thread(

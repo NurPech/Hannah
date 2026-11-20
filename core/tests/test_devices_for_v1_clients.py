@@ -81,7 +81,6 @@ def channel(setup):
     servicer = HannahServicer(
         user_manager=user_manager, satellite_manager=MagicMock(), handle_text=MagicMock(), handle_voice=MagicMock(),
         announce=MagicMock(), notificate=MagicMock(), get_satellites=MagicMock(), get_car_state=MagicMock(),
-        get_devices=setup.iobroker.get_devices_snapshot,
         control_device=lambda device_id, state, value, trust: setup.iobroker.control_direct(
             device_id, state, value, trust_level=trust),
         get_typed_devices=setup.registry.devices,
@@ -122,6 +121,7 @@ class TestGetDevices:
         # Telegram compares against "True" (#388)
         assert dict(light.current) == {"on": "True", "level": "60"}
         assert light.state_types["on"] == pb1.StateType.BOOLEAN
+        assert dict(light.state_writable) == {"on": True, "level": True}
 
     def test_a_false_boolean_is_false_not_unknown(self, channel):
         room = pb1_grpc.HannahServiceStub(channel).GetDevices(Empty(), timeout=5).rooms[0]
@@ -172,16 +172,13 @@ class TestControlDevice:
         assert setup.slot_writes == []
 
 
-class TestLegacyFallbackWithoutARegistry:
-    def test_an_empty_registry_serves_the_old_device_list(self):
-        iobroker = IoBrokerClient({})
-        iobroker.handle_device_snapshot([_light_state("on", "on", "true", pb1.StateType.BOOLEAN)])
+class TestAnEmptyRegistry:
+    def test_a_hannah_v1_client_gets_an_empty_list(self):
+        """#522: es gibt keinen Rückfall auf den alten Gerätebaum mehr."""
         servicer = HannahServicer(
             user_manager=MagicMock(), satellite_manager=MagicMock(), handle_text=MagicMock(), handle_voice=MagicMock(),
             announce=MagicMock(), notificate=MagicMock(), get_satellites=MagicMock(), get_car_state=MagicMock(),
-            get_devices=iobroker.get_devices_snapshot, get_typed_devices=DeviceRegistry().devices,
+            get_typed_devices=DeviceRegistry().devices,
         )
 
-        [room] = servicer.devices_response_v1().rooms
-
-        assert room.devices[0].category == "light"
+        assert list(servicer.devices_response_v1().rooms) == []

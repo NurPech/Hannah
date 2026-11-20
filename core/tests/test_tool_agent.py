@@ -18,9 +18,7 @@ ROOMS = {"wohnzimmer": "Wohnzimmer"}
 
 def _make_iobroker() -> MagicMock:
     """Helper: IoBrokerClient-Mock (Geräte stehen seit #387 in der Registry)."""
-    iobroker = MagicMock()
-    iobroker.rooms = ROOMS
-    return iobroker
+    return MagicMock()
 
 
 def _slot(kind, value=None, *, writable=True, trust=None, state_id="", options=None) -> Slot:
@@ -182,7 +180,6 @@ class TestToolDispatch:
         self.dev = _typed(self.DEVICE_ID, "Decke", _slot(K.SLOT_KIND_ON, False), _slot(K.SLOT_KIND_BRIGHTNESS, 40.0))
         self.registry = _registry(self.dev)
         self.iobroker = _make_iobroker()
-        self.iobroker.rooms = ROOMS
         self.agent = ToolAgent(MagicMock(), self.iobroker, registry=self.registry, room_names=lambda: ROOMS)
         self.sent: list = []
         self.set_state = MagicMock(return_value=True)
@@ -259,6 +256,31 @@ class TestToolDispatch:
         self.agent._controller._send_set_slot = lambda *_: False
 
         assert self.agent._set_device_state(self.DEVICE_ID, "on", True, None, [], utterance="Schalte die Decke an") == {"ok": False}
+
+    def test_set_device_state_refuses_an_unreachable_device(self):
+        """#523: das LLM bekommt den Grund, es wird nichts gesendet."""
+        self.dev.available = False
+
+        result = self.agent._set_device_state(self.DEVICE_ID, "on", True, None, [], utterance="Schalte die Decke an")
+
+        assert result["ok"] is False
+        assert "nicht erreichbar" in result["error"]
+        assert self.sent == []
+
+    def test_an_unreachable_device_is_marked_in_every_list_and_is_not_active(self):
+        self.registry.set_slot_value(self.DEVICE_ID, "on", True)
+        self.dev.available = False
+
+        for text in (
+            self.agent._get_all_devices(), self.agent._get_device_state(self.DEVICE_ID),
+            self.agent._get_devices_in_room("wohn"), self.agent._get_devices_by_category("Licht"),
+        ):
+            assert "NICHT ERREICHBAR" in text
+        assert self.agent._get_active_devices() == "Keine Geräte sind aktuell aktiv."
+
+    def test_a_reachable_device_carries_no_mark(self):
+        assert "NICHT ERREICHBAR" not in self.agent._get_all_devices()
+        assert "NICHT ERREICHBAR" not in self.agent._get_device_state(self.DEVICE_ID)
 
     def test_set_device_state_refuses_a_read_only_slot(self):
         self.registry.replace("v2", [_typed("m", "Messer", _slot(K.SLOT_KIND_POWER, 5.0, writable=False))])

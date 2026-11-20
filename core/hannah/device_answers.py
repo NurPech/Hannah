@@ -7,6 +7,9 @@ Früher las `IoBrokerClient.answer_query` den State-basierten `Device`-Baum: ein
 Geräteklassen und Slots geantwortet: jeder Wert hat seine Art (`SlotKind`) und seine
 Einheit, ein Thermostat nennt Ist und Soll, Temperatur und Feuchte kollidieren nicht.
 
+Ein Gerät, das der Adapter als nicht erreichbar meldet (`TypedDevice.available`, #523), nennt
+keinen Wert mehr: der letzte bekannte Stand wäre sonst als aktuell dahergesagt.
+
 Die Antworttexte bleiben die der alten Abfragen, außer wo der alte Weg einen Fehler hatte.
 Geräte eines `hannah.v2`-Adapters werden hier genauso beantwortet wie die eines
 `hannah.v1`-Adapters.
@@ -145,6 +148,9 @@ class DeviceAnswers:
             return None
         lines = []
         for device in targets:
+            if not device.available:
+                lines.append(f"{device.name}: nicht erreichbar")
+                continue
             parts = []
             for kind, prefix, unit, fmt in readers:
                 value = _value(device, kind)
@@ -187,6 +193,9 @@ class DeviceAnswers:
 
     def _describe_device(self, device: TypedDevice, qs: Optional[str], category_filter: Optional[str] = None) -> str:
         name, room = device.name, self._room_name(device)
+
+        if not device.available:
+            return f"{name} im {room} ist gerade nicht erreichbar."
 
         if device.device_class == C.DEVICE_CLASS_CLIMATE:
             # Auf die Frage nach der Temperatur antwortet die Klimaanlage mit Ist und Soll, der
@@ -237,6 +246,9 @@ class DeviceAnswers:
             if answer is not None:
                 return answer
 
+        down = [d for d in targets if not d.available]
+        targets = [d for d in targets if d.available]
+
         if qs == "on" or qs is None:
             on_devs = [d for d in targets if _value(d, K.SLOT_KIND_ON) is True]
             off_devs = [d for d in targets if _value(d, K.SLOT_KIND_ON) is False]
@@ -248,12 +260,15 @@ class DeviceAnswers:
                 parts.append(f"{', '.join(d.name for d in off_devs)} {'ist' if len(off_devs) == 1 else 'sind'} aus")
             if unknown:
                 parts.append(f"von {', '.join(d.name for d in unknown)} habe ich keinen Status")
+            if down:
+                parts.append(f"{', '.join(d.name for d in down)} {'ist' if len(down) == 1 else 'sind'} nicht erreichbar")
             if not parts:
                 return f"Ich habe noch keine Statusdaten für {room_label}."
             return f"Im {room_label}: " + ", ".join(parts) + "."
 
         if qs == "level":
             lines = [f"{d.name} {int(level)} Prozent" for d in targets if (level := self._level(d)) is not None]
+            lines += [f"{d.name} nicht erreichbar" for d in down]
             return (f"Helligkeit im {room_label}: " + ", ".join(lines) + ".") if lines \
                 else f"Keine Helligkeitsdaten für {room_label}."
 
@@ -274,14 +289,14 @@ class DeviceAnswers:
             return " ".join(lines) if lines else f"Keine {_category_label(category_filter)}-Daten verfügbar."
 
         if qs == "on" or qs is None:
-            rooms_on = sorted({self._room_name(d) for d in targets if _value(d, K.SLOT_KIND_ON) is True})
+            rooms_on = sorted({self._room_name(d) for d in targets if d.available and _value(d, K.SLOT_KIND_ON) is True})
             if not rooms_on:
                 return f"Keine {_category_label(category_filter)} sind eingeschaltet."
             return f"Eingeschaltete {_category_label(category_filter)} in: {', '.join(rooms_on)}."
 
         if qs == "level":
             lines = [f"{d.name} im {self._room_name(d)}: {int(level)} Prozent"
-                     for d in by_room if (level := self._level(d)) is not None]
+                     for d in by_room if d.available and (level := self._level(d)) is not None]
             return ("Helligkeit: " + ", ".join(lines) + ".") if lines else "Keine Helligkeitsdaten verfügbar."
 
         if len({self._describing_category(d, category_filter, qs) for d in targets}) == 1:

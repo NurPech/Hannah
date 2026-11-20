@@ -210,3 +210,47 @@ class TestFindDeviceByAddr:
         server = self._server_with({"a": ("192.168.1.100", 7776)})
 
         assert server._find_device_by_addr(("192.168.1.100", 50000)) == "a"
+
+
+class TestRoomFollowsAssignment:
+    """#519: the room of a registered satellite is the current DB assignment, not the one it
+    had when it registered. A room change used to be picked up only after the next register."""
+
+    def _server(self, rooms, callback=None):
+        server = _make_server(callback, resolve_satellite_room=lambda d: rooms.get(d))
+        _register(server, "wz-sat")
+        return server
+
+    def test_registered_devices_follow_a_room_change(self):
+        rooms = {"wz-sat": "wohnzimmer"}
+        server = self._server(rooms)
+
+        rooms["wz-sat"] = "buero"
+
+        assert server.registered_devices() == {"wz-sat": "buero"}
+        assert server.registered_devices_full()["wz-sat"]["room"] == "buero"
+
+    def test_a_removed_assignment_leaves_the_satellite_without_a_room(self):
+        rooms = {"wz-sat": "wohnzimmer"}
+        server = self._server(rooms)
+
+        rooms["wz-sat"] = None
+
+        assert server.registered_devices() == {"wz-sat": ""}
+
+    def test_snapshot_after_a_heartbeat_timeout_carries_the_current_room_of_the_others(self):
+        rooms = {"wz-sat": "wohnzimmer", "bad-sat": "bad"}
+        callback = MagicMock()
+        server = _make_server(callback, resolve_satellite_room=lambda d: rooms.get(d))
+        _register(server, "wz-sat", addr=("192.168.1.50", 7776))
+        _register(server, "bad-sat", addr=("192.168.1.51", 7776))
+        rooms["wz-sat"] = "buero"
+        with server._lock:
+            server._satellites["bad-sat"]["last_heartbeat"] = time.monotonic() - 31.0
+        time.sleep(0.1)  # register callbacks run in daemon threads
+        callback.reset_mock()
+
+        server._check_heartbeats()
+        time.sleep(0.1)
+
+        callback.assert_called_once_with({"wz-sat": "buero"})

@@ -17,7 +17,7 @@ hannah/                          ← Mono-Repo
 ├── core/                        ← Hannah Core (Python, Raspberry Pi)
 │   ├── hannah/
 │   │   ├── nlu.py               ← NLU (regelbasiert)
-│   │   ├── iobroker.py          ← execute()/Bestätigungen; alter State-basierter Gerätebaum (Legacy, #387)
+│   │   ├── iobroker.py          ← execute()/Bestätigungen (Gerätebaum seit #522 entfernt)
 │   │   ├── typed_devices.py     ← Typisierte Geräte-Registry (Klassen + Slots, hannah.v2-Modell)
 │   │   ├── legacy_devices.py    ← v1-Snapshot → typisierte Geräte (Klassifikation)
 │   │   ├── device_control.py    ← Steuern über Slots (DeviceController: SetSlot/SetState, Trust pro Slot)
@@ -43,7 +43,7 @@ hannah/                          ← Mono-Repo
 │   │   ├── weather.py           ← Wetter-Cache (Daten kommen vom ioBroker-Adapter, Core ruft keinen Wetterdienst selbst auf)
 │   │   └── audio.py             ← Audio-Utilities (Resampling, VAD)
 |   ├── main.py                  ← Einstiegspunkt, Orchestrierung
-│   └── config.yaml              ← Infra-/Bootstrap-Config; NLU-Wortlisten, llm.system_prompt, ble.tags und cars liegen in der DB (hannah.db, Settings-Tabelle) statt hier — siehe GetSettings/UpdateConfig gRPC. nlu wird bei leerer DB automatisch mit generischen Defaults befüllt (SettingsManager.seed_defaults(), #114). iobroker.state_names ist seit #257 kein DB-Setting mehr, sondern ein hartkodierter Fallback in core/hannah/iobroker.py (DEFAULT_IOBROKER_STATE_NAMES) für Adapter <1.1.0 (hannah-proto <3.8.0), nicht mehr nutzereditierbar
+│   └── config.yaml              ← Infra-/Bootstrap-Config; NLU-Wortlisten, llm.system_prompt, ble.tags und cars liegen in der DB (hannah.db, Settings-Tabelle) statt hier — siehe GetSettings/UpdateConfig gRPC. nlu wird bei leerer DB automatisch mit generischen Defaults befüllt (SettingsManager.seed_defaults(), #114). iobroker.state_names gibt es nicht mehr (seit #257 kein DB-Setting, seit #522 auch kein Fallback mehr: der Adapter liefert die Rolle als canonical_key)
 │
 ├── proxy/                       ← Go gRPC-Proxy (UDP-Satelliten → gRPC → Core)
 │
@@ -90,7 +90,7 @@ Satellit (Audio/PTT)
 **Schlüsselmodule:**
 - `nlu.py` — Drei-Ebenen-Matching: Raum + Gerätename + Aktion. Intents: TurnOn/TurnOff/SetLevel/SetColor/SetTemperature/SetMode/SetFanSpeed, Query, CarQuery, WeatherQuery u.a. Geräte sucht sie im Index von `nlu_devices.py` (aus der typisierten Registry).
 - `typed_devices.py`, `legacy_devices.py`, `device_control.py`, `nlu_devices.py`, `device_answers.py` — das typisierte Geräte-Modell, siehe „Typisiertes Geräte-Modell“ unter ioBroker-Integration.
-- `iobroker.py` — `execute()` (Sprachbefehl → Slot-Schreibbefehle über den `DeviceController`, inkl. Trust-Prüfung und Bestätigungen), `answer_query()` delegiert an `device_answers`. Der alte State-basierte Gerätebaum (`devices`, `Device`) ist Legacy.
+- `iobroker.py` — `execute()` (Sprachbefehl → Slot-Schreibbefehle über den `DeviceController`, inkl. Trust-Prüfung und Bestätigungen), `answer_query()` delegiert an `device_answers`. Einen eigenen Gerätebaum gibt es seit #522 nicht mehr.
 - `grpc_server.py` — Servicer für externe Services (Telegram, Proxy). Subscriber-Registry für Event-Streams.
 - `trigger_engine.py` — Abonniert ioBroker States per MQTT, prüft die `triggers`-Tabelle (SQLite, hannah.db), feuert Aktionen.
 - `user_registry.py` — SQLite, synct Roomies aus Residents-Adapter, speichert Trust-Level und Linked Accounts.
@@ -254,7 +254,7 @@ Alles liest und schreibt die Registry:
 - **Tool-Agent**: `set_device_state(device_id, slot_id, value)`, die Lese-Tools zeigen Slots mit Werten.
 - **GetDevices/ControlDevice**: v2 nativ (Telegram seit #389), v1-Clients (WebUI) bekommen die Registry über `hannah_grpc.translate` in State-Form.
 
-Der **alte Gerätebaum** (`IoBrokerClient.devices`/`Device`, `DEFAULT_IOBROKER_STATE_NAMES`) ist Legacy: er wird aus dem v1-Snapshot weiter gebaut, aber nichts Sichtbares liest ihn mehr. Entfernung nach einer Übergangszeit (weiche Abkündigung).
+Den **alten Gerätebaum** (`IoBrokerClient.devices`/`Device`, `DEFAULT_IOBROKER_STATE_NAMES`) gibt es seit #522 nicht mehr: Core hält nur noch die Registry. Der Snapshot-Handler in `iobroker.py` behält lediglich die States ohne Raum (Wetter, Auto u.ä.). Voraussetzung ist ein Adapter ab 1.4.0 (erster mit `hannah.v1`).
 
 Grenzen eines v1-Adapters, die Core nicht repariert (das macht der Adapter, ioBroker.hannah#210): jede `level.color.*`-Rolle landet auf dem Key `color` (Farbtemperatur als Kelvin unter `color`), `value.temperature`/`value.humidity` heißen beide `current`.
 
@@ -270,9 +270,8 @@ Vollständiger Pfad von einem Satelliten-Sensorwert bis zur Sprachantwort — al
 6. **Device-Type-/Canonical-Key-Erkennung**: `_resolveDeviceMeta()`/`resolveTypeAndCanonicalKey()` ermittelt pro State sowohl die Hannah-Kategorie (`type`) als auch die semantische Rolle (`canonicalKey`, z.B. `on`/`level`/`current`): zuerst `common.custom["<adapter-namespace>"]` (z.B. `"hannah.0": {enabled: true, type: "...", canonicalKey: "..."}` — offizielle ioBroker-Doku-Konvention, **nicht** ein loses `common.hannah`-Feld, das nicht garantiert persistiert wird), dann `common.role` über eine feste Rollen-Tabelle (`ROLE_TABLE`), dann Function-Namen-Keywords als Fallback nur für `type`. Ab Adapter 1.1.0 (hannah-proto 3.8.0, #257) schickt der Adapter `canonicalKey` direkt in der Gerätemeldung (`AgentDevice.canonical_key`) mit; ab hannah-proto 4.8 auch in Live-Updates (`AgentStateUpdate.canonical_key`), siehe Schritt 10.
 7. **Live-Updates (Adapter)**: `onStateChange()` prüft `ack` — bei Enum-discovered Device-States (`subscribedIds`) wird `ack:false` verworfen (Schutz vor Feedback-Schleifen, da Hannah selbst Befehle mit `ack:false` schreibt, siehe `handleSetState`). Bei `AgentWatchMore`-States (`watchMoreIds`, trigger_engine) wird jede Änderung weitergeleitet, unabhängig von `ack` — Hannah schreibt diese nie selbst. Manuell gesetzte Flags ohne bestätigendes Gerät (z.B. `0_userdata`-Booleans) bleiben bei `ack:false` stehen, wenn das Script sie nicht explizit mit `ack:true` setzt.
 8. **Adapter → Hannah Core (gRPC)**: `AgentStateUpdate` über den `AgentConnect`-Stream.
-9. **Hannah Core (Empfang)**: `main.py:_on_agent_state` → `_on_state_update` → ruft auf: `legacy_devices.apply_state_update()` (Registry), `iobroker.handle_state_update()` (Bestätigungen wartender Befehle, alter Gerätebaum) und `trigger_engine.on_state_update()`.
-10. **Hannah Core (Registry)**: `legacy_devices.apply_state_update()` findet den Slot zur `state_id` (`DeviceRegistry.lookup_state`, aufgebaut bei der Klassifikation des letzten Snapshots) und normalisiert den Wert auf die Skala der Slot-Art. Der `canonical_key` zählt nur noch bei der Klassifikation des Snapshots (Schritt 6). **Ein State, der im letzten Snapshot nicht vorkam (Gerät nach Adapter-Start angelegt), hat keinen Slot, sein Update wird verworfen** — der Wert bleibt auf dem Stand, bis ein neuer Snapshot kommt. Legacy: derselbe Wert geht in den alten Gerätebaum (`Device.current`), dort über `canonical_key` bzw. `DEFAULT_IOBROKER_STATE_NAMES`.
-11. **Sprachantwort**: die NLU (`nlu.py`, Index aus `nlu_devices.py`) erkennt Raum, Gerät und Kategorie, `device_answers.DeviceAnswers` liest die Slots und baut den Text.
+9. **Hannah Core (Empfang)**: `main.py:_on_agent_state` → `_on_state_update` → ruft auf: `legacy_devices.apply_state_update()` (Registry), `iobroker.handle_state_update()` (Bestätigungen wartender Befehle) und `trigger_engine.on_state_update()`.
+10. **Hannah Core (Registry)**: `legacy_devices.apply_state_update()` findet den Slot zur `state_id` (`DeviceRegistry.lookup_state`, aufgebaut bei der Klassifikation des letzten Snapshots) und normalisiert den Wert auf die Skala der Slot-Art. Der `canonical_key` zählt nur noch bei der Klassifikation des Snapshots (Schritt 6). **Ein State, der im letzten Snapshot nicht vorkam (Gerät nach Adapter-Start angelegt), hat keinen Slot, sein Update wird verworfen** — der Wert bleibt auf dem Stand, bis ein neuer Snapshot kommt.11. **Sprachantwort**: die NLU (`nlu.py`, Index aus `nlu_devices.py`) erkennt Raum, Gerät und Kategorie, `device_answers.DeviceAnswers` liest die Slots und baut den Text.
 
 **Häufigste Fallstricke:**
 - State, der beim letzten Snapshot zu keinem Slot klassifiziert wurde (Gerät nach Adapter-Start angelegt) → bekommt keine Live-Updates (siehe Schritt 10), Adapter neu verbinden bzw. neuen Snapshot abwarten

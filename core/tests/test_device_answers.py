@@ -132,3 +132,66 @@ def test_a_global_question_about_lights_names_the_rooms():
     aus = device("l3", "Stehlampe", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, False, True))
 
     assert answers(licht, bad, aus).answer(query(category="light", state="on")) == "Eingeschaltete Lichter in: Bad, Wohnzimmer."
+
+
+class TestUnreachableDevices:
+    """#523: ein Gerät, das der Adapter als nicht erreichbar meldet, nennt keinen Wert mehr."""
+
+    @staticmethod
+    def down(*devices):
+        for d in devices:
+            d.available = False
+        return devices
+
+    def test_a_single_device_says_it_is_not_reachable(self):
+        decke, = self.down(device("d1", "Decke", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, True)))
+
+        assert answers(decke).answer(query(device_id="d1", room="wohnzimmer")) == \
+            "Decke im Wohnzimmer ist gerade nicht erreichbar."
+
+    def test_a_sensor_does_not_report_its_last_value(self):
+        sensor, = self.down(device("s1", "Raumklima", C.DEVICE_CLASS_SENSOR, slot(K.SLOT_KIND_TEMPERATURE, 21.5)))
+
+        answer = answers(sensor).answer(query(device_id="s1", room="wohnzimmer", category="temperature_sensor"))
+
+        assert answer == "Raumklima im Wohnzimmer ist gerade nicht erreichbar."
+
+    def test_a_reachable_device_answers_as_before(self):
+        decke = device("d1", "Decke", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, True))
+
+        assert answers(decke).answer(query(device_id="d1", room="wohnzimmer")) == "Decke im Wohnzimmer ist an."
+
+    def test_a_room_summary_names_the_unreachable_device_and_does_not_count_it_as_on(self):
+        decke = device("d1", "Decke", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, True))
+        stehlampe, = self.down(device("d2", "Stehlampe", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, True)))
+
+        answer = answers(decke, stehlampe).answer(query(room="wohnzimmer", category="light"))
+
+        assert answer == "Im Wohnzimmer: Decke ist an, Stehlampe ist nicht erreichbar."
+
+    def test_a_category_summary_lists_the_unreachable_device_without_a_value(self):
+        a = device("s1", "Fenster links", C.DEVICE_CLASS_CONTACT, slot(K.SLOT_KIND_OPEN, False))
+        b, = self.down(device("s2", "Fenster rechts", C.DEVICE_CLASS_CONTACT, slot(K.SLOT_KIND_OPEN, True)))
+
+        answer = answers(a, b).answer(query(room="wohnzimmer", category="window"))
+
+        assert "Fenster links: geschlossen" in answer
+        assert "Fenster rechts: nicht erreichbar" in answer
+        assert "offen" not in answer
+
+    def test_the_global_question_for_lit_rooms_skips_an_unreachable_light(self):
+        decke = device("d1", "Decke", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, True))
+        bad_licht, = self.down(device("d2", "Spiegel", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, True), room="bad"))
+
+        answer = answers(decke, bad_licht).answer(query(category="light"))
+
+        assert "Wohnzimmer" in answer and "Bad" not in answer
+
+    def test_the_level_summary_names_the_unreachable_device(self):
+        decke = device("d1", "Decke", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_ON, True), slot(K.SLOT_KIND_BRIGHTNESS, 40.0))
+        stehlampe, = self.down(device("d2", "Stehlampe", C.DEVICE_CLASS_LIGHT, slot(K.SLOT_KIND_BRIGHTNESS, 80.0)))
+
+        answer = answers(decke, stehlampe).answer(query(room="wohnzimmer", category="light", state="level"))
+
+        assert "Decke 40 Prozent" in answer and "Stehlampe nicht erreichbar" in answer
+        assert "80" not in answer

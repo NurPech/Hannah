@@ -11,10 +11,10 @@ bedient diese Pfade mit denselben (v2-)Handlern und übersetzt an der Grenze:
   angenommen, dass die Generationen bytegleich wären.
 - `GetDevices`, `ControlDevice` und `AgentConnect` sind der Teil, in dem sich die
   Generationen unterscheiden (State-basiert vs. typisierte Geräte). Für v1-Clients
-  und v1-Adapter bleiben sie nativ: Core führt die Geräte eines v1-Adapters
-  weiterhin über den State-basierten Pfad (`IoBrokerClient.handle_device_snapshot`),
-  ohne Umweg über ein typisiertes Modell — das Verhalten für bestehende Nutzer
-  ändert sich nicht. Typisierte Geräte konsumiert Core erst mit #383.
+  und v1-Adapter bleiben sie nativ: Core klassifiziert die Geräte eines v1-Adapters
+  in die typisierte Registry (`hannah.legacy_devices`) und gibt sie v1-Clients in der
+  State-basierten Form wieder aus (`devices_response_v1`) — das Verhalten für
+  bestehende Nutzer ändert sich nicht.
 
 Der N−1-Servicer ist dauerhaft bis `hannah.v3`, kein Provisorium. Ändert sich eine
 Methode so, dass es kein gleichförmiges Gegenstück mehr gibt, wird sie nicht bedient
@@ -51,31 +51,8 @@ _PRESENCE_STATE_BY_ACTION = {
 # ------------------------------------------------------------------
 # GetDevices (State-basiert, nativ für v1-Clients)
 
-def get_devices_response(rooms_raw: list) -> "pb1.GetDevicesResponse":
-    """Geräteliste für Steuer-Menüs in der State-basierten Form von hannah.v1."""
-    rooms = []
-    for r in rooms_raw:
-        devices = [
-            pb1.DeviceInfo(
-                id=d["id"],
-                name=d["name"],
-                category=d["category"],
-                states=d["states"],
-                current=d["current"],
-                state_types=d["state_types"],
-                state_enum_values={
-                    k: pb1.EnumValues(values=v) for k, v in d["state_enum_values"].items()
-                },
-                state_writable=d["state_writable"],
-            )
-            for d in r["devices"]
-        ]
-        rooms.append(pb1.RoomInfo(key=r["key"], name=r["name"], devices=devices))
-    return pb1.GetDevicesResponse(rooms=rooms)
-
-
 def with_v1_state_format(response: "pb1.GetDevicesResponse") -> "pb1.GetDevicesResponse":
-    """Boolean-States im Format des alten Gerätebaums (`"True"`/`"False"`, #388).
+    """Boolean-States im Format von hannah.v1 (`"True"`/`"False"`, wie `str(bool)`, #388).
 
     Die Lib-Übersetzung schreibt `"true"`/`"false"`; v1-Clients (Telegram) vergleichen gegen
     `str(bool)`. hannah.v1 ist eingefroren, also gilt das alte Format weiter."""

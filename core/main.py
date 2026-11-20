@@ -184,8 +184,8 @@ def main():
 
     # Settings (nlu.*/llm.system_prompt — #27 Phase 5, aus config.yaml migriert via
     # deploy/migrate_config_settings.py). Fällt auf cfg/Code-Defaults zurück, solange eine
-    # Kategorie noch nicht migriert ist. iobroker.state_names war hier bis #257 auch dabei,
-    # ist jetzt ein hartkodierter Fallback in hannah.iobroker (nicht mehr editierbar).
+    # Kategorie noch nicht migriert ist. iobroker.state_names war hier bis #257 auch dabei und
+    # ist seit #522 ganz entfallen (der Adapter liefert die Rolle als canonical_key).
     # ble.tags/cars haben seit #115 eigene Modelle (BleTagManager/CarRegistry) statt hier
     # als JSON-Blob zu laufen.
     settings_manager = SettingsManager(get_db)
@@ -199,8 +199,8 @@ def main():
     # seed_defaults(), damit eine frische DB nur den Marker bekommt.
     settings_manager.run_data_migrations()
     # Karteileichen aus früher migrierten, inzwischen nicht mehr gelesenen Settings
-    # entfernen (aktuell: iobroker.state_names, seit #257 hartkodierter Fallback statt
-    # DB-Setting) — sonst bleiben sie wirkungslos editierbar in der Admin-UI stehen.
+    # entfernen (aktuell: iobroker.state_names, seit #522 ganz entfallen) — sonst bleiben sie
+    # wirkungslos editierbar in der Admin-UI stehen.
     settings_manager.cleanup_legacy_settings()
 
     # Presence-Fusion (#294): WLAN-/BLE-Rohsignale statt zwei unkoordinierter Presence-
@@ -228,16 +228,13 @@ def main():
                 provider_payload={"resident_type": "roomie", "roomie_id": _hannah_roomie},
             )
 
-    # ioBroker — state_names ist seit #257 kein DB-Setting mehr, iobroker.py bringt
-    # den hartkodierten Fallback (DEFAULT_IOBROKER_STATE_NAMES) selbst mit.
+    # ioBroker — state_names gibt es nicht mehr: der Adapter liefert die Rolle eines States als
+    # canonical_key (#257), ein Fallback über den State-Suffix entfiel mit #522.
     iobroker_cfg = {**cfg.get("iobroker", {})}
     iobroker = IoBrokerClient(iobroker_cfg)
-    # Typisierte Geräte (#385), neben dem State-basierten Gerätebaum von iobroker: gefüllt von
-    # hannah.v2-Adaptern direkt und von hannah.v1-Adaptern über die Legacy-Klassifikation.
+    # Typisierte Geräte (#385): gefüllt von hannah.v2-Adaptern direkt und von hannah.v1-Adaptern
+    # über die Legacy-Klassifikation. Einen eigenen Gerätebaum in iobroker gibt es seit #522 nicht mehr.
     typed_devices = DeviceRegistry()
-
-    if not iobroker.rooms:
-        log.warning("Keine Räume aus ioBroker geladen — NLU arbeitet ohne Raum-Erkennung.")
 
     # Room Manager (Räume, Gruppen) + Satellite Manager (Provisioning, Raum-/Owner-Zuweisung) —
     # teilen sich hannah.db mit der User-Registry
@@ -262,17 +259,18 @@ def main():
     voice_enrollment_cfg = settings_manager.get_settings_dict("voice_enrollment")
     # Die NLU sucht Geräte in der typisierten Registry (#387), nicht mehr im State-basierten
     # Baum. Der Suchindex wird bei jedem Snapshot (v1 klassifiziert oder v2) neu gebaut.
-    nlu = NLU(nlu_cfg, iobroker.rooms, nlu_devices.build_index(typed_devices),
+    # Die Räume kommen mit den ersten Geräten (`_refresh_nlu_devices`), beim Start ist die Registry leer.
+    nlu = NLU(nlu_cfg, {}, nlu_devices.build_index(typed_devices),
               satellites={s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()})
 
     def _nlu_rooms() -> dict:
-        """Die Räume, die die NLU erkennt: die mit Geräten in der Registry (egal von welchem Adapter),
-        mit dem Anzeigenamen aus dem Raum-Katalog, dazu die Raum-Gruppen. Räume ohne Gerät gehören
-        nicht dazu, sonst würde ein bloßer Raumname Zeit- oder Wetterfragen blockieren."""
-        names = {r["room_id"]: r["display_name"] for r in room_manager.get_rooms()}
-        names.update(iobroker.rooms)
-        rooms = {room: names.get(room, room) for room in {d.room for d in typed_devices.devices()}}
-        return {**rooms, **{g["group_id"]: g["display_name"] for g in room_manager.get_groups()}}
+        """Die Räume, die die NLU erkennt (siehe `nlu_devices.rooms_for_nlu`): Räume mit Geräten in der
+        Registry, mit den Anzeigenamen aus dem Raum-Katalog, dazu die Raum-Gruppen."""
+        return nlu_devices.rooms_for_nlu(
+            typed_devices,
+            {r["room_id"]: r["display_name"] for r in room_manager.get_rooms()},
+            {g["group_id"]: g["display_name"] for g in room_manager.get_groups()},
+        )
 
     def _refresh_nlu_devices() -> None:
         nlu._devices = nlu_devices.build_index(typed_devices)
@@ -1761,7 +1759,13 @@ def main():
                 mqtt_handler.publish_ble_watchlist(device_id, ble_macs)
             mqtt_handler.publish_asset_relevant(device_id, RELEVANT_ASSET_IDS)
         for device_id in _known_satellites - current:
-            grpc_servicer.agent_satellite_update(device_id, _prev_satellite_map.get(device_id, ""), "", False)
+            # Aktueller DB-Raum statt dem Raum vom Verbinden (#519): sonst überschreibt die
+            # Offline-Meldung eine zwischenzeitliche Raumänderung beim Adapter mit dem alten Raum.
+            grpc_servicer.agent_satellite_update(
+                device_id,
+                satellite_manager.get_satellite_room(device_id) or _prev_satellite_map.get(device_id, ""),
+                "", False,
+            )
         _known_satellites = current
         _prev_satellite_map = dict(satellite_map)
         nlu._satellites = {s["device_id"]: s["display_name"] for s in satellite_manager.get_satellites()}
@@ -1943,7 +1947,7 @@ def main():
         on_change=_refresh_watch_more,
     )
 
-    def _on_state_update(state_id: str, raw: str, canonical_key: str = "") -> None:
+    def _on_state_update(state_id: str, raw: str) -> None:
         # Die Registry zuerst: sie ist die Datenquelle für NLU, Abfragen und Steuern (#387), und eine
         # Bestätigung (handle_state_update) soll schon den neuen Wert sehen.
         try:
@@ -1951,7 +1955,7 @@ def main():
         except Exception:
             # Ein Fehler hier darf Bestätigungen, Trigger und Anwesenheit nicht stoppen.
             log.exception(f"[devices] Live-Update für {state_id} nicht in die Registry übernommen")
-        iobroker.handle_state_update(state_id, raw, canonical_key)
+        iobroker.handle_state_update(state_id, raw)
         trigger_engine.on_state_update(state_id, raw)
         presence_manager.on_state_update(state_id, raw)
 
@@ -2156,8 +2160,9 @@ def main():
         # Bestätigungen, Anwesenheit und Auto-Handler sehen keine Änderung, denn es gab keine.
         trigger_engine.seed_state(state_id, value)
 
-    def _on_agent_state(state_id: str, value: str, _ack=None, _ts=None, canonical_key: str = ""):
-        _on_state_update(state_id, value, canonical_key)
+    def _on_agent_state(state_id: str, value: str, _ack=None, _ts=None, _canonical_key: str = ""):
+        # Der canonical_key des Adapters wird nicht mehr gebraucht: die Registry findet den Slot über die state_id.
+        _on_state_update(state_id, value)
         # Route to handlers that expect slash-notation topics and plain string values
         topic = state_id.replace(".", "/")
         raw = _json_to_raw(value)
@@ -2389,9 +2394,9 @@ def main():
         # TriggerEngine nach einem Core-Neustart also/unless-States erst nach der
         # nächsten echten Änderung (#141).
         trigger_engine.seed_from_snapshot({d.state_id: d.value.value for d in devices})
-        # Kein sync_rooms() hier: iobroker.rooms enthält nur Räume mit mindestens einem
-        # aktuell passenden virtualDevice-State — Räume ohne virtualDevice (z.B. nur ein
-        # Satellit drin) würden fälschlich als verschwunden behandelt und gelöscht.
+        # Kein sync_rooms() hier: der Snapshot enthält nur Räume mit mindestens einem Gerät —
+        # Räume ohne Gerät (z.B. nur ein Satellit drin) würden fälschlich als verschwunden
+        # behandelt und gelöscht.
         # Raum-Lebenszyklus läuft ausschließlich über _on_agent_room_snapshot() (siehe
         # dort), das den vollständigen, geräteunabhängigen enum.rooms.*-Katalog bekommt (#134).
         nlu._rooms = _nlu_rooms()
@@ -2471,7 +2476,6 @@ def main():
         enable_udp=lambda: udp_server.start(),
         on_proxy_discovery=_on_proxy_discovery,
         on_satellite_change=_on_satellite_change,
-        get_devices=lambda: iobroker.get_devices_snapshot(),
         control_device=lambda device_id, state, value, trust_level: iobroker.control_direct(
             device_id, state, value, trust_level=trust_level
         ),

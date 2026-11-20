@@ -96,20 +96,19 @@ def home() -> list:
 def world():
     """(client, nlu, sent): `sent` sammelt die gesetzten States als (Pfad ab virtualDevice, Wert)."""
     client = IoBrokerClient({})
-    client.handle_device_snapshot(home())
-    # Die NLU sucht seit #387 (Schritt 1) in der typisierten Registry, execute/answer_query
-    # lesen bis Schritt 3/4 noch den alten Baum
+    # Geräte und Räume kommen aus der typisierten Registry, den alten Baum gibt es nicht mehr (#522)
     registry = DeviceRegistry()
     legacy_devices.load_snapshot(registry, home())
-    nlu = NLU(DEFAULT_NLU_SETTINGS, client.rooms, nlu_devices.build_index(registry))
-    client.set_answerer(device_answers.DeviceAnswers(registry, lambda: client.rooms).answer)
+    rooms = nlu_devices.rooms_for_nlu(registry, ROOM_NAMES, {})
+    nlu = NLU(DEFAULT_NLU_SETTINGS, rooms, nlu_devices.build_index(registry))
+    client.set_answerer(device_answers.DeviceAnswers(registry, lambda: rooms).answer)
     sent = []
     client.set_setter(lambda sid, payload: sent.append((sid.replace(BASE + ".", ""), json.loads(payload))) or True)
     # Geschrieben wird seit #387 (Schritt 4) über die Registry und den DeviceController
     controller = DeviceController(
         registry, send_set_slot=lambda *_: False, send_set_state=lambda sid, value: client.set_state(sid, value),
     )
-    client.set_slot_control(registry, controller, lambda: client.rooms)
+    client.set_slot_control(registry, controller, lambda: rooms)
     return client, nlu, sent
 
 

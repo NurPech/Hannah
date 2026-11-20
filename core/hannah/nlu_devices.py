@@ -100,3 +100,12 @@ def build_index(registry: DeviceRegistry) -> dict:
     for device in registry.devices():
         index.setdefault(device.room, {})[device.device_id] = to_nlu_device(device)
     return index
+
+
+def rooms_for_nlu(registry: DeviceRegistry, room_names: dict, groups: dict) -> dict:
+    """`{room_id: Anzeigename}`, die die NLU erkennt (#522): die Räume mit Geräten in der Registry,
+    egal von welchem Adapter, mit dem Anzeigenamen aus dem Raum-Katalog (fehlt er, gilt die Raum-ID),
+    dazu die Raum-Gruppen. Räume ohne Gerät gehören nicht dazu, sonst würde ein bloßer Raumname
+    Zeit- oder Wetterfragen blockieren."""
+    rooms = {room: room_names.get(room, room) for room in {d.room for d in registry.devices()}}
+    return {**rooms, **groups}

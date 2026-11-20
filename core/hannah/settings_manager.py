@@ -5,8 +5,7 @@ Verwaltet, über hannah.models, Persistenz für konfigurierbare Werte, die aus
 config.yaml in die DB gewandert sind (nlu.*, llm.system_prompt). iobroker.state_names
 war hier bis #257 auch dabei — der Adapter löst die semantische Rolle eines States
 inzwischen selbst über common.role auf (AgentDevice.canonical_key), state_names ist
-nur noch ein hartkodierter Fallback in hannah.iobroker für Deployments mit Adapter
-<1.1.0 (hannah-proto <3.8.0, siehe dort DEFAULT_IOBROKER_STATE_NAMES), nicht mehr nutzereditierbar.
+seit #522 ganz entfallen (auch der hartkodierte Fallback für Adapter <1.1.0).
 ble.tags/cars haben seit #115 eigene Modelle + CRUD (siehe hannah.ble_tags/hannah.car_registry)
 statt hier als JSON-Blob zu laufen. Zwei Tabellen:
   - settings_category: hierarchisch (self-referencing parent), name = voller

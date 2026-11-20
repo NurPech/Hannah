@@ -179,6 +179,33 @@ class TestChecks:
         assert controller.set_slot("lamp", "power", 5, trust_level=0) == SlotWrite(found=True, sent=False)
         send_slot.assert_not_called()
 
+    def test_an_unreachable_device_gets_no_command(self):
+        """#523: sonst liefe der Befehl in den Bestätigungs-Timeout."""
+        controller, _, send_slot, send_state = _controller(_light(ORIGIN_V2, available=False))
+
+        result = controller.set_slot("lamp", "on", True, trust_level=0, wait_confirm=True)
+
+        assert result == SlotWrite(found=True, sent=False, unreachable=True)
+        send_slot.assert_not_called()
+        send_state.assert_not_called()
+
+    def test_a_v1_device_that_is_marked_unreachable_gets_no_command_either(self):
+        controller, _, _, send_state = _controller(_light(ORIGIN_V1, available=False))
+
+        assert controller.set_slot("lamp", "on", True, trust_level=0).unreachable is True
+        send_state.assert_not_called()
+
+    def test_the_trust_check_comes_before_the_availability_check(self):
+        controller, _, _, _ = _controller(_light(ORIGIN_V2, available=False))
+
+        with pytest.raises(TrustLevelDenied):
+            controller.set_slot("lamp", "lock", True, trust_level=1)
+
+    def test_a_reachable_device_is_not_marked(self):
+        controller, _, _, _ = _controller(_light(ORIGIN_V2))
+
+        assert controller.set_slot("lamp", "on", True, trust_level=0).unreachable is False
+
     def test_unknown_device_or_slot(self):
         controller, _, _, _ = _controller(_light(ORIGIN_V2))
 
@@ -337,6 +364,13 @@ class TestControlDeviceNative:
 
         assert servicer.ControlDevice(self._request(), MagicMock()).ok is False
 
+    def test_an_unreachable_device_is_named_in_the_answer(self):
+        servicer = _servicer(control_slot=MagicMock(return_value=SlotWrite(True, False, unreachable=True)))
+
+        response = servicer.ControlDevice(self._request(), MagicMock())
+
+        assert response.ok is False and "nicht erreichbar" in response.message
+
     def test_a_device_the_registry_does_not_know_falls_back_to_the_state_based_path(self):
         control_device = MagicMock(return_value=True)
         servicer = _servicer(
@@ -373,17 +407,11 @@ class TestGetDevicesNative:
         assert slots["color"].value.rgb == 0x112233
         assert slots["lock"].required_trust_level == 8 and not slots["on"].HasField("required_trust_level")
 
-    def test_an_empty_registry_falls_back_to_the_state_based_list(self):
-        rooms = [{"key": "bad", "name": "Bad", "devices": [{
-            "id": "x.lamp", "name": "Decke", "category": "light", "states": ["on"], "current": {"on": "True"},
-            "state_types": {"on": 1}, "state_enum_values": {}, "state_writable": {"on": True},
-        }]}]
-        servicer = _servicer(get_typed_devices=lambda: [], get_devices=lambda: rooms)
+    def test_an_empty_registry_gives_an_empty_list(self):
+        """#522: es gibt keinen Rückfall auf den alten Gerätebaum mehr."""
+        servicer = _servicer(get_typed_devices=lambda: [])
 
-        response = servicer.GetDevices(None, None)
-
-        [device] = response.rooms[0].devices
-        assert device.device_class == pb.DEVICE_CLASS_LIGHT and device.slots[0].slot_id == "on"
+        assert list(servicer.GetDevices(None, None).rooms) == []
 
     def test_unknown_value_is_left_unset(self):
         device = TypedDevice("l", "L", "bad", slots={"on": Slot("on", K.SLOT_KIND_ON, None)})

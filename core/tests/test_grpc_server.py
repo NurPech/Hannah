@@ -15,18 +15,16 @@ from hannah.grpc_server import HannahServicer, _ChannelSub, _LogCollectorSub, _p
 from hannah.component_registry import KIND_CHANNEL, KIND_LOG_COLLECTOR
 from hannah_proto.v1 import hannah_pb2 as pb1
 from hannah_proto.v2 import hannah_pb2 as pb
-from hannah import grpc_v1
 from hannah.user_manager import UserManager
 from hannah.models.user import User
 from hannah.residents.Roomie import Roomie
-from hannah.iobroker import IoBrokerClient
 from hannah.weather import WeatherCache
-from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue, EnumValues, StateType
+from hannah_proto.v1.hannah_pb2 import AgentDevice, AgentStateValue
 from hannah_proto.v2.hannah_pb2 import AgentResident, AgentRoom, SatelliteRegistration, ResidentType, LinkAccountRequest, ProxyHeartbeat, CreateGroupRequest, UpdateGroupRequest, DeleteGroupRequest, SetGroupSatellitesRequest, SetSatelliteRoomRequest, SetSatelliteDisplayNameRequest, SetSatelliteOwnerRequest, SetSatelliteSmalltalkFollowupRequest, SetSatelliteLedBrightnessRequest, DeleteSatelliteRequest, AnnounceRequest, LoginRequest, CreateTriggerRequest, UpdateTriggerRequest, DeleteTriggerRequest, CreateAlarmRequest, UpdateAlarmRequest, DeleteAlarmRequest, UpdateConfigRequest, SettingUpdate, CreateBleTagRequest, UpdateBleTagRequest, DeleteBleTagRequest, CreateCarRequest, UpdateCarRequest, DeleteCarRequest, CreatePresenceSourceRequest, UpdatePresenceSourceRequest, DeletePresenceSourceRequest, CreateUserRequest, UpdateUserRequest, DeleteUserRequest, GetTimersRequest, DeleteTimerRequest, TimerInfo, TimerListResponse, AgentWeatherUpdate, WeatherCurrentData, ListActivityLogRequest, StreamActivityAudioRequest, CaptureCommand, StartVoiceEnrollmentRequest
 from hannah.satellite_manager import SatellitePermissionError
 from hannah.grpc_interceptors import CallerIdentity
 
-def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_presence_source_records=None,create_presence_source=None,update_presence_source=None,delete_presence_source=None,get_residents=None,get_devices=None,on_led_brightness=None):
+def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handle_voice=None,get_satellites=None,get_car_state=None,announce=None,notificate=None,on_agent_device_snapshot=None,on_agent_send_residents=None,on_agent_room_snapshot=None,on_weather_update=None,on_satellite_change=None,resolve_satellite_room=None,upsert_satellite=None,get_rooms=None,get_groups=None,create_group=None,update_group=None,delete_group=None,set_group_satellites=None,get_db_satellites=None,set_satellite_room=None,set_satellite_display_name=None,set_satellite_owner=None,get_trigger_records=None,create_trigger=None,update_trigger=None,delete_trigger=None,get_alarm_records=None,create_alarm=None,update_alarm=None,delete_alarm=None,get_categories=None,get_settings_records=None,update_setting_value=None,get_ble_tag_records=None,create_ble_tag=None,update_ble_tag=None,delete_ble_tag=None,get_car_records=None,create_car=None,update_car=None,delete_car=None,get_presence_source_records=None,create_presence_source=None,update_presence_source=None,delete_presence_source=None,get_residents=None,on_led_brightness=None):
     return HannahServicer(
         user_manager=user_manager or MagicMock(),
         satellite_manager=satellite_manager or MagicMock(),
@@ -36,7 +34,6 @@ def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handl
         notificate=notificate or MagicMock(),
         get_satellites=get_satellites or MagicMock(),
         get_car_state=get_car_state or MagicMock(),
-        get_devices=get_devices,
         on_agent_device_snapshot=on_agent_device_snapshot,
         on_agent_send_residents = on_agent_send_residents,
         on_agent_room_snapshot=on_agent_room_snapshot,
@@ -82,8 +79,8 @@ def _make_server(user_manager=None,satellite_manager=None,handle_text=None,handl
     )
 
 def test_device_snapshot_dispatched():
-    client = IoBrokerClient({"host": "localhost", "port": 8093})
-    servicer = _make_server(on_agent_device_snapshot=client.handle_device_snapshot)
+    on_snapshot = MagicMock()
+    servicer = _make_server(on_agent_device_snapshot=on_snapshot)
 
     devices = [
         AgentDevice(
@@ -98,87 +95,7 @@ def test_device_snapshot_dispatched():
         )
     ]
     servicer._on_agent_device_snapshot(devices)
-    assert "wohnzimmer" in client.rooms
-
-def test_get_devices_includes_state_types_and_enum_values():
-    """#117 — GetDevices reicht state_type/enum_values aus dem IoBrokerClient-Cache
-    unverändert bis in die DeviceInfo-Response durch (hannah.v1, State-basiert)."""
-    client = IoBrokerClient({"host": "localhost", "port": 8093})
-    servicer = _make_server(get_devices=client.get_devices_snapshot)
-
-    devices = [
-        AgentDevice(
-            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on",
-            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            canonical_key="on",
-            room="wohnzimmer",
-            device="Decke",
-            device_type="light",
-            value=AgentStateValue(value="true", ack=True),
-            room_names={"de": "Wohnzimmer"},
-            state_type=StateType.BOOLEAN,
-        ),
-        AgentDevice(
-            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.mode",
-            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            canonical_key="mode",
-            room="wohnzimmer",
-            device="Decke",
-            device_type="light",
-            value=AgentStateValue(value="1", ack=True),
-            room_names={"de": "Wohnzimmer"},
-            state_type=StateType.ENUM,
-            enum_values=EnumValues(values={"0": "Aus", "1": "An"}),
-        ),
-    ]
-    client.handle_device_snapshot(devices)
-
-    response = grpc_v1.get_devices_response(servicer.device_snapshot())
-
-    [room] = response.rooms
-    [device] = room.devices
-    assert device.state_types["on"] == StateType.BOOLEAN
-    assert device.state_types["mode"] == StateType.ENUM
-    assert dict(device.state_enum_values["mode"].values) == {"0": "Aus", "1": "An"}
-    assert "on" not in device.state_enum_values
-
-def test_get_devices_includes_state_writable():
-    """#144 — GetDevices reicht writable aus dem IoBrokerClient-Cache unverändert
-    bis in die DeviceInfo-Response durch."""
-    client = IoBrokerClient({"host": "localhost", "port": 8093})
-    servicer = _make_server(get_devices=client.get_devices_snapshot)
-
-    devices = [
-        AgentDevice(
-            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.on",
-            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            canonical_key="on",
-            room="wohnzimmer",
-            device="Decke",
-            device_type="light",
-            value=AgentStateValue(value="true", ack=True),
-            room_names={"de": "Wohnzimmer"},
-            writable=True,
-        ),
-        AgentDevice(
-            state_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke.power",
-            device_id="javascript.0.virtualDevice.Licht.EG.Wohnzimmer.Decke",
-            canonical_key="power",
-            room="wohnzimmer",
-            device="Decke",
-            device_type="light",
-            value=AgentStateValue(value="4.2", ack=True),
-            room_names={"de": "Wohnzimmer"},
-            writable=False,
-        ),
-    ]
-    client.handle_device_snapshot(devices)
-
-    response = grpc_v1.get_devices_response(servicer.device_snapshot())
-
-    [room] = response.rooms
-    [device] = room.devices
-    assert dict(device.state_writable) == {"on": True, "power": False}
+    on_snapshot.assert_called_once_with(devices)
 
 def test_room_snapshot_dispatched():
     sync_rooms = MagicMock()
@@ -2150,3 +2067,60 @@ class TestAgentConnectAck:
         commands, _ = self._run(msg)
 
         assert commands == []
+
+
+class TestSatelliteRoomFollowsAssignment:
+    """#519: the room of a connected satellite is the current DB assignment, not the one it
+    had at registration. A room change used to be picked up only after the next registration."""
+
+    def _servicer(self, rooms, **kwargs):
+        servicer = _make_server(resolve_satellite_room=lambda d: rooms.get(d), **kwargs)
+        servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
+        return servicer
+
+    def test_proxy_satellites_follow_a_room_change(self):
+        rooms = {"wz-sat": "wohnzimmer"}
+        servicer = self._servicer(rooms)
+
+        rooms["wz-sat"] = "buero"
+
+        assert servicer.proxy_satellites() == {"wz-sat": "buero"}
+        assert servicer.proxy_satellites_full() == {"wz-sat": {"room": "buero", "addr": "192.168.1.50"}}
+
+    def test_a_removed_assignment_leaves_the_satellite_without_a_room(self):
+        rooms = {"wz-sat": "wohnzimmer"}
+        servicer = self._servicer(rooms)
+
+        rooms["wz-sat"] = None
+
+        assert servicer.proxy_satellites() == {"wz-sat": ""}
+
+    def test_gone_notification_snapshot_carries_the_current_room_of_the_others(self):
+        rooms = {"wz-sat": "wohnzimmer", "bad-sat": "bad"}
+        on_satellite_change = MagicMock()
+        servicer = _make_server(on_satellite_change=on_satellite_change, resolve_satellite_room=lambda d: rooms.get(d))
+        servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="wz-sat", address="192.168.1.50"), None)
+        servicer.NotifySatelliteRegistered(SatelliteRegistration(device_id="bad-sat", address="192.168.1.51"), None)
+        rooms["wz-sat"] = "buero"
+        time.sleep(0.1)  # callbacks run in daemon threads
+        on_satellite_change.reset_mock()
+
+        servicer.NotifySatelliteGone(SatelliteRegistration(device_id="bad-sat"), None)
+        time.sleep(0.1)
+
+        on_satellite_change.assert_called_once_with({"wz-sat": "buero"})
+
+    def test_heartbeat_pushes_the_current_room_to_the_adapter(self):
+        """The whole-state push of every heartbeat must not write the old room back to the adapter."""
+        rooms = {"wz-sat": "wohnzimmer"}
+        servicer = self._servicer(
+            rooms, get_db_satellites=lambda: [{"device_id": "wz-sat", "display_name": "W", "room_id": rooms["wz-sat"]}],
+        )
+        rooms["wz-sat"] = "buero"
+        servicer.agent_satellite_update = MagicMock()
+
+        list(servicer.RegisterProxy(iter([ProxyHeartbeat(proxy_id="proxy-1")]), _OneHeartbeatContext()))
+
+        servicer.agent_satellite_update.assert_called_once_with(
+            "wz-sat", "buero", "192.168.1.50", True, display_name="W",
+        )
