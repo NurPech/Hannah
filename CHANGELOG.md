@@ -4,6 +4,17 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.105.0 (2026-11-20)
+### Satellite Firmware
+
+* Added: an opt-in build overlay, `satellite-esp/sdkconfig.defaults.secure`, that makes a satellite accept only OTA images signed with the key whose public key is in the signature block of its running firmware (ESP-IDF signed app verification without hardware Secure Boot). It covers the update over the network, not physical access; no Secure Boot, nothing is burned into eFuses. The first image flashed over the cable has to be signed. Builds without the overlay are unchanged. First step is a test on a bench device (Refs #524)
+* Changed: the satellite firmware of a release is now signed in the release pipeline, with a key that never leaves the Vault of the project. A satellite that takes such a release over OTA from then on only accepts images signed with the same key; going back to an unsigned image takes a cable (flash over USB). The same applies to the first image on a new satellite, the WebFlash package and the combined image contain the signed app. A satellite running a signed release does not take a self-built image over OTA any more, and builds from the repository (without the project key) stay unsigned. A release is not published if the signature fails (Refs #526)
+* Documented: where the signing key, its policy, the CI login and the signing step are defined, how signed and unsigned images behave and what to watch out for when testing, in the development guide of the satellite firmware (`satellite-esp/ENTWICKLUNG.md`) (Refs #525)
+
+### Hannah Proxy
+
+* Security: updated the Go libraries `golang.org/x/net` (v0.60.0 → v0.62.0), `golang.org/x/sys` (v0.48.0 → v0.49.0) and `golang.org/x/text` (v0.42.0 → v0.43.0) that the Proxy is built with. The `x/net` update closes two published weaknesses in its HTML parser (CVE-2026-78661, CVE-2026-97045); the Proxy's own code does not import that package, so no exposure is known, but it ships with the fixed version now
+
 ## 0.104.0 (2026-11-19)
 ### Hannah Core
 

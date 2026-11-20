@@ -1,0 +1,26 @@
+# Hannah Satellite — opt-in overlay: nur signierte OTA-Images akzeptieren (Refs #524)
+#
+# "Signed App Verification Without Hardware Secure Boot" (ESP-IDF, security/secure-boot-v2):
+# Der Satellit nimmt per OTA nur Images an, die mit dem Schluessel signiert sind,
+# dessen Public Key im Signaturblock der LAUFENDEN App steht. Das schliesst die
+# Netzwerk-Luecke (OTA), nicht die physische: kein Secure Boot, keine eFuses,
+# der Bootloader bleibt per Kabel tauschbar.
+#
+# Aufbau: nach den Basis- und Revisions-Overlays einbinden, z.B. Rev5:
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.rev5;sdkconfig.defaults.secure;sdkconfig.ci" build
+# Ohne dieses Overlay aendert sich nichts (Standard-Builds bleiben unveraendert).
+#
+# Pfad zum Signing-Key bewusst NICHT hier: der Key liegt ausserhalb des Repos.
+# Lokal in einem eigenen, nicht eingecheckten Overlay setzen, z.B.
+# sdkconfig.secure.local (ist in .gitignore):
+#   CONFIG_SECURE_BOOT_SIGNING_KEY="C:/pfad/zum/spike_signing_key.pem"
+# Key erzeugen: espsecure generate-signing-key --version 2 --scheme rsa3072 <datei>.pem
+#
+# Achtung: Das erste per Kabel geflashte Image MUSS signiert sein, sonst bricht
+# die App ab und es ist kein Update mehr moeglich. Ein Key-Wechsel braucht einen
+# seriellen Flash (nur der erste Key des Signaturblocks zaehlt).
+
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y

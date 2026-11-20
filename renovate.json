@@ -13,7 +13,9 @@
   "assignees": [
     "NurPech"
   ],
-  "dependencyDashboard": true,
+  "dependencyDashboard": {
+    "enabled": true
+  },
   "osvVulnerabilityAlerts": true,
   "packageRules": [
     {

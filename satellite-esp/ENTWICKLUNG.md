@@ -279,6 +279,46 @@ Kein Espressif-Account oder Online-Dienst nötig.
 
 ---
 
+## Signierte OTA-Images (Vault)
+
+Release-Builds der Satelliten-Firmware werden in der CI signiert (Refs #524, #525, #526).
+Ein Satellit mit dem Overlay `sdkconfig.defaults.secure` nimmt per OTA nur Images an, die mit
+dem Key signiert sind, dessen Public Key im Signaturblock seiner **laufenden** App steht. Das
+schützt das Update übers Netz, nicht den physischen Zugriff (kein Secure Boot, keine eFuses).
+
+### Wo was definiert ist
+
+| Was | Wo |
+|---|---|
+| Signing-Key | Vault Transit, Key `hannah-satellite-firmware` (`https://hcvault.sgessinger.de`): `rsa-3072`, nicht exportierbar, kein Plaintext-Backup, keine Auto-Rotation, Löschen verboten, nur Version 1 |
+| Policy | Vault-Policy `hannah-firmware-signer`: `sign` auf den Key, `read` auf `transit/keys/hannah-satellite-firmware`, sonst nichts (kein `rotate`, keine Konfiguration) |
+| Login der CI | Vault-JWT-Rolle `hannah-firmware-signer` am Auth-Mount `gitlab`: nur Projekt 319, geschützte Tags, Token-TTL 900 s |
+| CI-Variable | `VAULT_ADDR` (geschützt) im GitLab-Projekt |
+| Signierschritt | `scripts/sign_firmware.py`, aufgerufen in `build:esp32:rev4` und `build:esp32:rev5` (nur Tag-Pipelines) |
+
+### Verhalten
+
+- Schlägt die Signatur fehl, schlägt der Build-Job fehl. Es gibt keinen Fallback auf ein
+  unsigniertes Release.
+- Ein Satellit, der ein signiertes Release übernommen hat, nimmt danach nur noch Images mit
+  demselben Key an. Zurück zu unsigniert geht nur per Kabel.
+- Lokale Builds und Dev-Builds (`scripts/upload-dev-firmware.ps1`) sind unsigniert, ohne Overlay
+  ändert sich nichts. Ein Image **mit** Overlay aber ohne Signaturblock startet nicht (Abbruch
+  in `esp_secure_boot_init_checks`, Boot-Schleife, nur per Kabel zu beheben).
+- Der Key wird nie rotiert. Er ist nicht exportierbar, geht er verloren, muss jeder signierte
+  Satellit per Kabel neu geflasht werden. Die Sicherung des Keys ist noch nicht festgelegt.
+
+### Fallstricke beim Testen
+
+- Das signierte Image ist 4096 Byte länger als das gepaddete unsignierte. Flasht man ein
+  kürzeres Image über ein signiertes, bleibt der alte Signaturblock im Sektor dahinter liegen
+  und das Image sieht wieder signiert aus. Für Tests ohne Signatur den Sektor löschen
+  (`esptool erase-region <Slot-Ende> 0x1000`).
+- Der App-Slot ist 2 MiB, das Image wird vor dem Signaturblock auf 64 KiB aufgefüllt. Die App
+  darf dadurch nur bis etwa 2.031.616 Byte wachsen, bevor `partitions.csv` vergrößert werden muss.
+
+---
+
 ## Häufige Fehler
 
 | Fehler | Ursache | Lösung |
