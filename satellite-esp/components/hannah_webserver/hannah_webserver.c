@@ -714,6 +714,10 @@ static esp_err_t ota_get_handler(httpd_req_t *req)
 
 /* ── Handler: POST /ota ──────────────────────────────────────────────────── */
 
+/* So viele Empfangs-Timeouts am Stück (je recv_wait_timeout des httpd, Standard 5 s), bis der Upload
+ * als abgebrochen gilt — ca. eine Minute. */
+#define OTA_UPLOAD_MAX_STALLS  12
+
 static esp_err_t ota_post_handler(httpd_req_t *req)
 {
     const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
@@ -733,13 +737,31 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     char *buf = malloc(4096);
     if (!buf) { esp_ota_abort(ota_handle); return ESP_ERR_NO_MEM; }
 
+    /* Wie beim automatischen OTA (hannah_ota) die Wakeword-Inferenz anhalten, solange das Image
+     * ankommt (#527): sonst belegt der ww-Task Kern 1 so, dass IDLE1 den Task-Watchdog nicht mehr
+     * füttern kann und der Satellit mitten im Upload neu startet. Die Ursache (ww bekommt IDLE1
+     * nicht frei) ist in #533 zusätzlich im Wakeword selbst entschärft, das hier nimmt dem
+     * Upload die Last, solange er läuft. Bei jedem Fehlerausgang wieder fortsetzen; bei Erfolg
+     * folgt der Neustart. */
+    hannah_audio_pause_wakeword();
+
     int remaining = req->content_len;
     bool ok = true;
+    int  stalls = 0;   /* aufeinanderfolgende Empfangs-Timeouts */
 
     while (remaining > 0) {
         int chunk = remaining > 4096 ? 4096 : remaining;
         int recv  = httpd_req_recv(req, buf, chunk);
-        if (recv == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (recv == HTTPD_SOCK_ERR_TIMEOUT) {
+            /* Ein hängender Client darf den Satelliten nicht dauerhaft taub halten. */
+            if (++stalls >= OTA_UPLOAD_MAX_STALLS) {
+                ESP_LOGE(TAG, "OTA-Upload: Client sendet nicht mehr — abgebrochen.");
+                ok = false;
+                break;
+            }
+            continue;
+        }
+        stalls = 0;
         if (recv <= 0) { ok = false; break; }
         if (esp_ota_write(ota_handle, buf, recv) != ESP_OK) { ok = false; break; }
         remaining -= recv;
@@ -748,11 +770,13 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 
     if (!ok || esp_ota_end(ota_handle) != ESP_OK) {
         esp_ota_abort(ota_handle);
+        hannah_audio_resume_wakeword();
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Flash fehlgeschlagen");
         return ESP_FAIL;
     }
 
     if (esp_ota_set_boot_partition(update_part) != ESP_OK) {
+        hannah_audio_resume_wakeword();
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Boot-Partition konnte nicht gesetzt werden");
         return ESP_FAIL;
     }

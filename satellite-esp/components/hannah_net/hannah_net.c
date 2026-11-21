@@ -84,6 +84,7 @@ static TimerHandle_t             s_sntp_retry  = NULL;
 static TimerHandle_t             s_ap_recovery_retry = NULL;
 static esp_mqtt_client_handle_t  s_mqtt_client = NULL;
 static volatile bool             s_mqtt_stopped = false;  /* Client existiert, ist aber gestoppt (AP-Modus) */
+static volatile bool             s_mqtt_connected = false; /* Verbindung zum Broker steht (Netzwerk-Watchdog, #517) */
 static volatile int              s_mqtt_outbox_size = -1; /* Cache fürs Heap-Log, siehe on_mqtt_event() */
 static esp_netif_t              *s_sta_netif   = NULL;
 static esp_netif_t              *s_ap_netif    = NULL;
@@ -146,22 +147,29 @@ static void send_register(void)
 {
     const hannah_config_t *cfg = hannah_config_get();
 
+    /* Eigene LAN-IP mitschicken (#535): hinter einer NAT (Docker-Bridge) sieht
+     * der Empfänger als Absender nur das NAT-Gateway, der Adapter braucht für
+     * "Konfigurieren" und NVS-Updates aber die echte Adresse. Additives Feld;
+     * Audio und TTS laufen weiter über die gesehene Absenderadresse (#351). */
+    char ip[16];
+    hannah_net_get_ip_str(ip, sizeof(ip));
+
     char msg[400];
     if (cfg->seed[0]) {
         snprintf(msg, sizeof(msg),
                  "{\"type\":\"register\",\"device\":\"%s\","
-                 "\"listen_port\":%d,\"seed\":\"%s\"}",
+                 "\"listen_port\":%d,\"ip\":\"%s\",\"seed\":\"%s\"}",
                  cfg->device_id, CONFIG_HANNAH_UDP_LISTEN_PORT,
-                 cfg->seed);
+                 ip, cfg->seed);
     } else {
         snprintf(msg, sizeof(msg),
                  "{\"type\":\"register\",\"device\":\"%s\","
-                 "\"listen_port\":%d}",
-                 cfg->device_id, CONFIG_HANNAH_UDP_LISTEN_PORT);
+                 "\"listen_port\":%d,\"ip\":\"%s\"}",
+                 cfg->device_id, CONFIG_HANNAH_UDP_LISTEN_PORT, ip);
     }
     send_control(msg);
-    ESP_LOGI(TAG, "Register: device=%s port=%d%s",
-             cfg->device_id, CONFIG_HANNAH_UDP_LISTEN_PORT,
+    ESP_LOGI(TAG, "Register: device=%s ip=%s port=%d%s",
+             cfg->device_id, ip, CONFIG_HANNAH_UDP_LISTEN_PORT,
              cfg->seed[0] ? " (mit Seed)" : "");
 }
 
@@ -422,6 +430,16 @@ static void heartbeat_task(void *arg)
          * feuert und die reaktive Reconnect-Logik in on_wifi_event() daher
          * untätig bleibt. Im AP-Setup-Modus bewusst inaktiv (kein reguläres
          * STA-Netz erwartet). */
+        /* Fällt Core/Proxy aus, kommt kein heartbeat_ack mehr und im Idle auch keine
+         * MQTT-Daten — das Netz ist dann aber in Ordnung, ein Neustart hilft nicht
+         * und schickt jeden Satelliten alle ~4 Minuten in eine Neustart-Schleife,
+         * solange Core fehlt (#517). Eine stehende MQTT-Verbindung ist selbst ein
+         * Lebenszeichen: esp-mqtt bestätigt sie per Keepalive und meldet sonst
+         * MQTT_EVENT_DISCONNECTED. Im "Zombie"-WLAN-Fall bricht die Verbindung
+         * deshalb weg, das Flag fällt, und der Watchdog greift nach dem Timeout
+         * wie bisher. */
+        if (s_mqtt_connected) net_activity_mark();
+
         if (!s_ap_mode && s_last_net_activity_ms > 0) {
             int64_t elapsed_ms = esp_timer_get_time() / 1000 - s_last_net_activity_ms;
             if (elapsed_ms > (int64_t)CONFIG_HANNAH_NET_WATCHDOG_TIMEOUT_S * 1000) {
@@ -476,6 +494,7 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
     switch (event_id) {
     case MQTT_EVENT_CONNECTED: {
         ESP_LOGI(TAG, "MQTT verbunden.");
+        s_mqtt_connected = true;
         net_activity_mark();
         esp_ota_mark_app_valid_cancel_rollback();
         esp_mqtt_client_subscribe(s_mqtt_client, "hannah/server", 0);
@@ -525,6 +544,7 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
 
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "MQTT getrennt.");
+        s_mqtt_connected = false;
         break;
 
     case MQTT_EVENT_DATA: {
@@ -875,6 +895,7 @@ static void ap_switch_task(void *arg)
          * anzulegen und den gestoppten zu verwaisen. */
         esp_mqtt_client_stop(s_mqtt_client);
         s_mqtt_stopped = true;
+        s_mqtt_connected = false;
     }
     if (s_udp_sock >= 0) { close(s_udp_sock); s_udp_sock = -1; }
     s_proxy_ready = false;
@@ -882,6 +903,39 @@ static void ap_switch_task(void *arg)
     esp_wifi_stop();
     wifi_start_ap();
     vTaskDelete(NULL);
+}
+
+/* Kurztext zum Trennungsgrund der STA (#530). Ohne den Grund sehen ein falsches Passwort, ein
+ * abgelehnter Sicherheitsmodus und ein Kanalproblem im Log gleich aus. Nur die Gründe, die bei
+ * einer Einrichtung in der Praxis vorkommen, der Rest bleibt eine Zahl (Liste: WIFI_REASON_* in
+ * esp_wifi_types_generic.h). */
+static const char *wifi_reason_text(uint8_t reason)
+{
+    switch (reason) {
+    case WIFI_REASON_AUTH_EXPIRE:
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_MIC_FAILURE:
+        return "Anmeldung abgelehnt (meist falsches Passwort)";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "SSID nicht gefunden";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+        return "kein Netz mit passendem Sicherheitsmodus";
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+        return "Signal zu schwach";
+    case WIFI_REASON_ASSOC_FAIL:
+    case WIFI_REASON_CONNECTION_FAIL:
+        return "Verbindungsaufbau gescheitert";
+    case WIFI_REASON_BEACON_TIMEOUT:
+        return "Router antwortet nicht mehr";
+    case WIFI_REASON_AUTH_LEAVE:
+    case WIFI_REASON_ASSOC_LEAVE:
+        return "Router hat die Verbindung beendet";
+    default:
+        return "anderer Grund";
+    }
 }
 
 static void on_wifi_event(void *arg, esp_event_base_t base,
@@ -893,13 +947,17 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_ap_mode) return;   /* AP-Modus aktiv oder Wechsel läuft — ignorieren */
 
+        const wifi_event_sta_disconnected_t *dis = (const wifi_event_sta_disconnected_t *)event_data;
+        uint8_t reason = dis ? dis->reason : 0;
         if (s_wifi_retry < CONFIG_HANNAH_WIFI_MAX_RETRY) {
             s_wifi_retry++;
-            ESP_LOGW(TAG, "WiFi getrennt — Versuch %d/%d",
-                     s_wifi_retry, CONFIG_HANNAH_WIFI_MAX_RETRY);
+            ESP_LOGW(TAG, "WiFi getrennt — Versuch %d/%d, Grund %u (%s)",
+                     s_wifi_retry, CONFIG_HANNAH_WIFI_MAX_RETRY,
+                     (unsigned)reason, wifi_reason_text(reason));
             esp_wifi_connect();
         } else {
-            ESP_LOGE(TAG, "WiFi: maximale Versuche — starte AP-Modus.");
+            ESP_LOGE(TAG, "WiFi: maximale Versuche, letzter Grund %u (%s) — starte AP-Modus.",
+                     (unsigned)reason, wifi_reason_text(reason));
             s_ap_mode = true;
             xTaskCreate(ap_switch_task, "ap_switch", 4096, NULL, 5, NULL);
         }
@@ -946,6 +1004,16 @@ static void wifi_driver_init(void)
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
+
+    /* Ländercode setzen (#530): ohne gilt der IDF-Standard mit den Kanälen 1 bis 11, ein Router
+     * auf Kanal 12/13 (in Deutschland erlaubt) bliebe unsichtbar. Fest (false), damit ein
+     * abweichender Ländercode im Beacon des Routers den Wert nicht überschreibt. Ein Fehler hier
+     * ist nicht fatal: der Treiber läuft dann mit dem Standard weiter. */
+    esp_err_t cc_err = esp_wifi_set_country_code(CONFIG_HANNAH_WIFI_COUNTRY, false);
+    if (cc_err != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi-Ländercode '%s' nicht gesetzt: %s",
+                 CONFIG_HANNAH_WIFI_COUNTRY, esp_err_to_name(cc_err));
+    }
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL, NULL));

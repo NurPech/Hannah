@@ -60,14 +60,24 @@ menu "Hannah Network"
         help
             Maximale Anzahl WiFi-Reconnects bevor esp_restart() aufgerufen wird.
 
+    config HANNAH_WIFI_COUNTRY
+        string "WiFi-Ländercode"
+        default "DE"
+        help
+            Zweibuchstabiger Ländercode (ISO 3166) für den WiFi-Treiber. Ohne
+            Ländercode gilt der ESP-IDF-Standard mit den Kanälen 1 bis 11;
+            mit "DE" sind die Kanäle 1 bis 13 nutzbar (ein Router auf Kanal
+            12 oder 13 wird gefunden). Der Code ist fest, ein abweichender
+            Ländercode im Beacon des Routers wird ignoriert.
+
     config HANNAH_NET_WATCHDOG_TIMEOUT_S
         int "Netzwerk-Watchdog Timeout (s)"
         default 240
         range 30 600
         help
             Vergeht seit dem letzten bestätigten Netzwerk-Lebenszeichen
-            (IP-Bezug, MQTT-Connect/-Datenempfang oder heartbeat_ack vom
-            Proxy/Core) mehr Zeit als hier eingestellt, löst der
+            (IP-Bezug, stehende MQTT-Verbindung, MQTT-Datenempfang oder
+            heartbeat_ack vom Proxy/Core) mehr Zeit als hier eingestellt, löst der
             Heartbeat-Task aktiv esp_restart() aus. Fängt einen
             "Zombie"-WLAN-Zustand ab, bei dem WIFI_EVENT_STA_DISCONNECTED
             nicht mehr feuert und daher weder die reaktive Reconnect-Logik

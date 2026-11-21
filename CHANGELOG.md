@@ -4,6 +4,24 @@
     ## **WORK IN PROGRESS**
 -->
 
+
+## 0.106.0 (2026-11-21)
+### Satellite Firmware
+
+* Fixed: a satellite now tells its own LAN address when it registers. Behind a NAT (for example the Proxy or Core in a Docker bridge network) the receiver only saw the address of the NAT gateway, so the "Configure" button of a satellite in the ioBroker adapter opened the wrong address (`172.x.x.x`) and NVS updates did not reach the satellite. The new field is additive, Proxy and Core without it keep working as before. Audio and spoken answers still go to the address the packets come from (Refs #535)
+* Fixed: satellites no longer restart in a loop every few minutes while Core and the Proxy are offline. The network watchdog restarted a satellite when no answer to its heartbeat came for four minutes, although WiFi and the MQTT broker were fine and a restart cannot bring Core back. A standing MQTT connection now counts as a sign of life; the watchdog still restarts a satellite whose network is really dead (no connection to the broker any more). When Core or the Proxy comes back the satellite registers again by itself, as before (Refs #517)
+* Fixed: a firmware upload in the web UI (`/ota`) can no longer make the satellite restart with a task watchdog. The wakeword detection is paused while the image is received, like for the automatic update, and continues if the upload fails. An upload that stalls for about a minute is aborted instead of waiting forever (Refs #527)
+* Added: the satellite sets the WiFi country (default `DE`, build option `HANNAH_WIFI_COUNTRY`), so a router on channel 12 or 13 is found. Without it the driver only used channels 1 to 11 (Refs #530)
+* Added: the log now shows why a WiFi connection failed (reason code and a short text, for example wrong password, SSID not found or no network with a matching security mode) on every attempt, so these cases can be told apart (Refs #530)
+
+### Hannah Proxy
+
+* Fixed: the address of a satellite that is handed on to Core and the adapter is now the LAN address the satellite reports about itself, not the source address of its packets, which is the NAT gateway when the Proxy runs in a Docker bridge network. Only a private or link-local IPv4 address is accepted, anything else is logged and ignored; satellites with older firmware keep the observed address. Audio and spoken answers keep using the observed address (Refs #535)
+
+### Hannah Core
+
+* Fixed: same as in the Proxy for satellites connected directly over UDP (without Proxy): the address of the satellite that the adapter shows and uses is the LAN address it reports itself, if that is a private or link-local IPv4 address, otherwise the observed source address as before (Refs #535)
+
 ## 0.105.2 (2026-11-21)
 ### Satellite Firmware
 

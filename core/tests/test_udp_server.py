@@ -186,6 +186,49 @@ class TestTtsAddrBehindNat:
             assert server._satellites["nb"]["tts_addr"] == ("172.21.0.1", 45123)
 
 
+class TestReportedLanIp:
+    """#535 — hinter einer NAT zeigt der Adapter sonst das Gateway (172.x); der Satellit
+    meldet seine eigene LAN-IP im Register. Audio/TTS bleiben auf der gesehenen Adresse."""
+
+    @staticmethod
+    def _register_with_ip(server, ip, addr=("172.21.0.1", 44000)):
+        msg = {"type": "register", "device": "nb", "listen_port": 7776}
+        if ip is not None:
+            msg["ip"] = ip
+        server._handle_control(json.dumps(msg).encode("utf-8"), addr)
+
+    def test_reported_ip_is_shown_but_tts_stays_on_source(self):
+        server = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+
+        self._register_with_ip(server, "192.168.1.77")
+
+        assert server.registered_devices_full()["nb"]["addr"] == "192.168.1.77:44000"
+        with server._lock:
+            assert server._satellites["nb"]["tts_addr"] == ("172.21.0.1", 44000)
+
+    def test_without_reported_ip_the_observed_address_is_used(self):
+        server = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+
+        self._register_with_ip(server, None)
+
+        assert server.registered_devices_full()["nb"]["addr"] == "172.21.0.1:44000"
+
+    def test_unusable_reported_ip_is_ignored(self):
+        server = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+
+        for bad in ("8.8.8.8", "127.0.0.1", "0.0.0.0", "224.0.0.1", "not-an-ip", "::1", 5, ""):
+            self._register_with_ip(server, bad)
+            assert server.registered_devices_full()["nb"]["addr"] == "172.21.0.1:44000", bad
+
+    def test_heartbeat_keeps_reported_ip(self):
+        server = _make_server(resolve_satellite_room=lambda _d: "wohnzimmer")
+        self._register_with_ip(server, "10.1.2.3")
+
+        _heartbeat(server, "nb", addr=("172.21.0.1", 45123))
+
+        assert server.registered_devices_full()["nb"]["addr"] == "10.1.2.3:45123"
+
+
 class TestFindDeviceByAddr:
     """#351 — hinter derselben NAT teilen sich alle Satelliten die Gateway-IP."""
 

@@ -109,6 +109,59 @@ func TestRegister_TTSGoesToSourceAddressBehindNAT(t *testing.T) {
 	}
 }
 
+func TestRegister_ReportedLANIP(t *testing.T) {
+	// Refs #535: behind a NAT the adapter would show the gateway; the satellite
+	// reports its own address. Audio/TTS stay on the observed address.
+	natAddr := makeAddr("172.21.0.1", 44000)
+
+	cases := []struct {
+		name     string
+		reported any
+		want     string
+	}{
+		{"private address is used", "192.168.1.77", "192.168.1.77"},
+		{"link-local is used", "169.254.3.4", "169.254.3.4"},
+		{"missing falls back to observed", nil, "172.21.0.1"},
+		{"public is ignored", "8.8.8.8", "172.21.0.1"},
+		{"loopback is ignored", "127.0.0.1", "172.21.0.1"},
+		{"unspecified is ignored", "0.0.0.0", "172.21.0.1"},
+		{"multicast is ignored", "224.0.0.1", "172.21.0.1"},
+		{"garbage is ignored", "not-an-ip", "172.21.0.1"},
+		{"IPv6 is ignored", "fd00::1", "172.21.0.1"},
+		{"wrong type is ignored", 5, "172.21.0.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := makeServer()
+			var got string
+			done := make(chan struct{})
+			s.OnSatelliteChange(func(device, address, seed string, registered bool) {
+				got = address
+				close(done)
+			})
+			msg := map[string]any{"type": "register", "device": "notebook", "listen_port": 7776}
+			if tc.reported != nil {
+				msg["ip"] = tc.reported
+			}
+			s.handleControl(controlPayload(t, msg), natAddr)
+			<-done
+
+			if got != tc.want {
+				t.Errorf("reported address = %q, want %q", got, tc.want)
+			}
+			if info := s.RegisteredDevicesFull()["notebook"]; info.Address != tc.want {
+				t.Errorf("RegisteredDevicesFull address = %q, want %q", info.Address, tc.want)
+			}
+			s.mu.Lock()
+			tts := s.satellites["notebook"].ttsAddr
+			s.mu.Unlock()
+			if tts.String() != natAddr.String() {
+				t.Errorf("ttsAddr = %v, want %v", tts, natAddr)
+			}
+		})
+	}
+}
+
 // --- handleControl: heartbeat -----------------------------------------------
 
 func TestHeartbeat_FollowsNATRemapping(t *testing.T) {

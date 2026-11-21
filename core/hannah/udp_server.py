@@ -7,7 +7,7 @@ Protokoll (ein Port, 1-Byte Type-Prefix):
   0x03 + PCM   = TTS-Audio          (Server → Satellit, gleiches Format)
 
 Control-Nachrichten (Satellit → Server):
-  {"type": "register",   "device": "rpi-test"}  -- Raum kommt aus RoomManager, nicht vom Satelliten
+  {"type": "register",   "device": "rpi-test", "ip": "192.168.1.50"}  -- Raum kommt aus RoomManager, nicht vom Satelliten; "ip" (eigene LAN-IP, optional) für die Adresse im Adapter hinter einer NAT (#535)
   {"type": "audio_end",  "device": "rpi-test"}
   {"type": "heartbeat",  "device": "rpi-test"}
 
@@ -15,6 +15,7 @@ Control-Antworten (Server → Satellit):
   {"type": "registered", "ok": true}
 """
 
+import ipaddress
 import json
 import logging
 import socket
@@ -32,6 +33,24 @@ TYPE_TTS     = 0x03
 _MAX_PACKET = 65535
 # Max. Wartezeit auf audio_end nach letztem Audio-Chunk (Sekunden)
 _SESSION_TIMEOUT = 10.0
+
+
+# Adressbereiche, aus denen eine vom Satelliten selbst gemeldete IP akzeptiert wird
+# (RFC 1918 + Link-Local). Gleiche Regel wie im Proxy (parseLANIP).
+_LAN_NETS = tuple(ipaddress.ip_network(n) for n in
+                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"))
+
+
+def parse_lan_ip(raw) -> str:
+    """Nimmt die im Register gemeldete eigene IP eines Satelliten nur an, wenn sie eine
+    private oder Link-Local-IPv4 ist, sonst "". UDP ist unauthentifiziert: ein Gerät im
+    LAN kann jede Adresse behaupten, öffentliche, Loopback-, Multicast- und
+    unspezifizierte Adressen werden daher verworfen (#535)."""
+    try:
+        ip = ipaddress.IPv4Address(raw)
+    except (ValueError, TypeError):
+        return ""
+    return str(ip) if any(ip in net for net in _LAN_NETS) else ""
 
 
 class _AudioSession:
@@ -235,7 +254,8 @@ class UDPServer:
         """Gibt {device_name: {"room": room_id, "addr": "ip:port"}} zurück (Raum: aktuelle
         DB-Zuweisung, #519)."""
         with self._lock:
-            addrs = {d: s.get("addr", ("", 0)) for d, s in self._satellites.items()}
+            addrs = {d: (s.get("lan_ip") or s.get("addr", ("", 0))[0], s.get("addr", ("", 0))[1])
+                     for d, s in self._satellites.items()}
         return {d: {"room": self._live_room(d), "addr": f"{ip}:{port}"} for d, (ip, port) in addrs.items()}
 
     # ------------------------------------------------------------------
@@ -290,6 +310,16 @@ class UDPServer:
             # ist die gesehene IP das NAT-Gateway, und nur der von der NAT vergebene Port
             # führt zurück zum Satelliten (#351). Alle Satelliten senden über ihren
             # Listen-Socket, ohne NAT ist beides ohnehin identisch.
+            # Eigene LAN-IP des Satelliten (#535): nur für die Adresse, die der Adapter sieht
+            # (Konfigurieren, NVS-Updates). Hinter einer NAT ist die gesehene IP das Gateway.
+            # Audio und TTS laufen weiter über die gesehene Absenderadresse.
+            reported = msg.get("ip", "")
+            lan_ip = parse_lan_ip(reported)
+            if reported and not lan_ip:
+                log.warning(
+                    f"Satellit '{device}': gemeldete IP {reported!r} ignoriert "
+                    f"(keine private/Link-Local-IPv4), Absender {addr[0]}"
+                )
             listen_port = msg.get("listen_port")
             if listen_port is not None and listen_port != addr[1]:
                 log.info(
@@ -297,7 +327,7 @@ class UDPServer:
                     f"(NAT?) — antworte an Absenderadresse"
                 )
             with self._lock:
-                self._satellites[device] = {"addr": addr, "tts_addr": addr, "room": room, "last_heartbeat": time.monotonic()}
+                self._satellites[device] = {"addr": addr, "tts_addr": addr, "room": room, "lan_ip": lan_ip, "last_heartbeat": time.monotonic()}
             log.info(
                 f"Satellit registriert: '{device}' "
                 f"(Raum: '{room}', Adresse {addr[0]}:{addr[1]})"

@@ -62,7 +62,37 @@ const heartbeatTimeout = 30 * time.Second // 3 × 10s heartbeat interval
 type satellite struct {
 	audioAddr     *net.UDPAddr // source address of audio packets
 	ttsAddr       *net.UDPAddr // destination for TTS + control (observed source address, NAT-safe)
+	lanIP         string       // LAN address the satellite reported itself in "register" ("" = none/invalid)
 	lastHeartbeat time.Time
+}
+
+// reportedIP is the address handed on to Core and the adapter (web server,
+// NVS updates). It is the address the satellite reported itself, so it stays
+// correct behind a NAT; older firmware does not send one, then the observed
+// source address is used. Audio and TTS always use the observed address.
+func (sat *satellite) reportedIP() string {
+	if sat.lanIP != "" {
+		return sat.lanIP
+	}
+	return sat.audioAddr.IP.String()
+}
+
+// parseLANIP accepts the IP a satellite reports about itself only if it is a
+// private or link-local IPv4 unicast address. A device on the LAN can claim any
+// address (UDP is unauthenticated), so public, loopback, multicast and
+// unspecified addresses are ignored and the observed source address is kept.
+func parseLANIP(raw string) string {
+	ip := net.ParseIP(raw)
+	if ip == nil || ip.To4() == nil {
+		return ""
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+		return ""
+	}
+	if !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+		return ""
+	}
+	return ip.To4().String()
 }
 
 type audioSession struct {
@@ -252,7 +282,7 @@ func (s *Server) RegisteredDevicesFull() map[string]SatelliteInfo {
 	defer s.mu.Unlock()
 	out := make(map[string]SatelliteInfo, len(s.satellites))
 	for d, sat := range s.satellites {
-		out[d] = SatelliteInfo{Address: sat.audioAddr.IP.String()}
+		out[d] = SatelliteInfo{Address: sat.reportedIP()}
 	}
 	return out
 }
@@ -385,18 +415,26 @@ func (s *Server) handleControl(payload []byte, addr *net.UDPAddr) {
 		// Synology) the observed IP is the NAT gateway, and only the NAT-assigned
 		// port leads back to the satellite (Refs #351). All satellites send from
 		// their listen socket, so without NAT both are identical anyway.
+		// The satellite's own LAN address is what the adapter needs for the web
+		// server and NVS updates; behind a NAT the observed one is the gateway
+		// (Refs #535). Only used for that, never for audio/TTS.
+		reported, _ := msg["ip"].(string)
+		sat := &satellite{audioAddr: addr, ttsAddr: addr, lanIP: parseLANIP(reported), lastHeartbeat: time.Now()}
+		if reported != "" && sat.lanIP == "" {
+			slog.Warn("ignoring reported satellite IP (not a private/link-local IPv4)", "device", device, "reported", reported, "source", addr)
+		}
 		if lp, ok := msg["listen_port"].(float64); ok && int(lp) != addr.Port {
 			slog.Info("satellite source port differs from listen_port (NAT?) — replying to source address",
 				"device", device, "source", addr, "listen_port", int(lp))
 		}
 		s.mu.Lock()
-		s.satellites[device] = &satellite{audioAddr: addr, ttsAddr: addr, lastHeartbeat: time.Now()}
+		s.satellites[device] = sat
 		delete(s.sessions, device) // verwaiste Session verwerfen (z.B. nach ESP-Neustart ohne audio_end)
 		s.mu.Unlock()
-		slog.Info("satellite registered", "device", device, "addr", addr)
+		slog.Info("satellite registered", "device", device, "addr", addr, "lan_ip", sat.lanIP)
 		s.sendControl(map[string]any{"type": "registered", "ok": true}, addr)
 		if s.onSatelliteChange != nil {
-			go s.onSatelliteChange(device, addr.IP.String(), seed, true)
+			go s.onSatelliteChange(device, sat.reportedIP(), seed, true)
 		}
 
 	case "audio_end":
