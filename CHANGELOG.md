@@ -4,6 +4,11 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.106.1 (2026-11-21)
+### Satellite Firmware
+
+* Fixed: the download of the sounds (assets) no longer crashes a satellite that has little spare processing time. On one satellite the task watchdog fired during every asset download, so the sync never finished and sounds like the one on connect were missing for good. The wakeword detection and the microphone loop are now paused while an asset is downloaded and checked, like during an update over the network, and resume right after. The satellite does not react to the wake word for those few seconds. The sounds the satellite needs itself (the connect sound and the wakeword model) are now fetched first, so an interrupted sync no longer loses them. The log of an asset download shows how long the network and the writing took, to tell a slow network from slow flash (Refs #537)
+* Changed: pausing the wakeword is now counted, so that two things pausing it at the same time (an update over the network and the sound download, or a firmware upload in the web UI) cannot resume it too early (Refs #537)
 
 ## 0.106.0 (2026-11-21)
 ### Satellite Firmware

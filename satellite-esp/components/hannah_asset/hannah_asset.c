@@ -9,6 +9,7 @@
 #include <dirent.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_spiffs.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -227,12 +228,22 @@ static bool download_asset(const char *asset_id)
 
     char  buf[4096];
     int   read_len, total = 0;
-    while ((read_len = esp_http_client_read(client, buf, sizeof(buf))) > 0) {
+    /* Zeit getrennt nach Netzwerk (Lesen vom Socket) und Flash (Schreiben nach SPIFFS), damit ein
+     * langsamer Download im Log einer der beiden Seiten zugeordnet werden kann (#537). */
+    int64_t net_us = 0, write_us = 0;
+    for (;;) {
+        int64_t t0 = esp_timer_get_time();
+        read_len = esp_http_client_read(client, buf, sizeof(buf));
+        net_us += esp_timer_get_time() - t0;
+        if (read_len <= 0) break;
+        t0 = esp_timer_get_time();
         fwrite(buf, 1, read_len, f);
+        write_us += esp_timer_get_time() - t0;
         total += read_len;
     }
     fclose(f);
-    ESP_LOGI(TAG, "Asset %s: %d bytes → %s", asset_id, total, path);
+    ESP_LOGI(TAG, "Asset %s: %d bytes → %s (Netzwerk %lld ms, Schreiben %lld ms)", asset_id, total, path,
+             (long long)(net_us / 1000), (long long)(write_us / 1000));
     ok = (total > 0);
 
 done:
@@ -303,25 +314,28 @@ static int build_wanted_list(char out[][ASSET_ID_MAX])
 {
     int count = 0;
 
+    /* Die festen Assets zuerst (#537): bricht der Sync ab, soll das fehlen, was der Satellit selbst
+     * braucht ("connect" beim Registrieren, das Wakeword-Modell), nicht der Rest von Cores Liste.
+     * Vorher kamen sie zuletzt und wurden auf einem Satelliten, dessen Sync immer wieder abbrach,
+     * nie erreicht. */
+    for (size_t i = 0; i < FIXED_ASSET_COUNT; i++) {
+        strncpy(out[count], s_fixed_assets[i], ASSET_ID_MAX - 1);
+        out[count][ASSET_ID_MAX - 1] = '\0';
+        count++;
+    }
+
     xSemaphoreTake(s_relevant_mutex, portMAX_DELAY);
     for (int i = 0; i < s_relevant_count; i++) {
+        bool dup = false;
+        for (int j = 0; j < count; j++) {
+            if (strcmp(out[j], s_relevant[i]) == 0) { dup = true; break; }
+        }
+        if (dup) continue;
         strncpy(out[count], s_relevant[i], ASSET_ID_MAX - 1);
         out[count][ASSET_ID_MAX - 1] = '\0';
         count++;
     }
     xSemaphoreGive(s_relevant_mutex);
-
-    for (size_t i = 0; i < FIXED_ASSET_COUNT; i++) {
-        bool dup = false;
-        for (int j = 0; j < count; j++) {
-            if (strcmp(out[j], s_fixed_assets[i]) == 0) { dup = true; break; }
-        }
-        if (!dup) {
-            strncpy(out[count], s_fixed_assets[i], ASSET_ID_MAX - 1);
-            out[count][ASSET_ID_MAX - 1] = '\0';
-            count++;
-        }
-    }
     return count;
 }
 
@@ -357,6 +371,34 @@ static void garbage_collect(char wanted[][ASSET_ID_MAX], int wanted_count)
         ESP_LOGI(TAG, "Asset %s: nicht mehr relevant — aus Cache entfernt.", entry->d_name);
     }
     closedir(dir);
+}
+
+/* Lädt ein Asset und prüft den SHA256 gegen das Manifest — das verhindert, dass abgebrochene
+ * Teildownloads als gültig gecacht werden. Das Wakeword ist währenddessen pausiert (#537): Download,
+ * Schreiben und Prüfsumme belegen den Satelliten so, dass IDLE0 den Task-Watchdog nicht mehr
+ * bedient (gleiches Muster wie beim OTA, das aus demselben Grund pausiert). Es dauert nur Sekunden. */
+static void sync_one_asset(const char *id, const char *expected_sha)
+{
+    ESP_LOGI(TAG, "Asset %s herunterladen...", id);
+    hannah_audio_pause_wakeword();
+
+    if (download_asset(id)) {
+        char path[72];
+        snprintf(path, sizeof(path), ASSET_MOUNT "/%.*s", ASSET_ID_MAX - 1, id);
+        char    actual[65];
+        int64_t t0   = esp_timer_get_time();
+        bool    have = file_sha256_hex(path, actual);
+        long long sha_ms = (long long)((esp_timer_get_time() - t0) / 1000);
+        if (have && strcmp(actual, expected_sha) == 0) {
+            store_sha256(id, expected_sha);
+            ESP_LOGI(TAG, "Asset %s verifiziert (sha256 ok, Prüfsumme %lld ms).", id, sha_ms);
+        } else {
+            ESP_LOGW(TAG, "Asset %s: sha256-Mismatch — verwerfe Datei.", id);
+            remove(path);
+        }
+    }
+
+    hannah_audio_resume_wakeword();
 }
 
 /* Ein Sync-Durchlauf: Manifest holen, nur die aktuell relevanten Assets
@@ -407,23 +449,7 @@ static void do_sync(void)
                 continue;
             }
 
-            ESP_LOGI(TAG, "Asset %s herunterladen...", id);
-            if (!download_asset(id)) continue;
-
-            /* SHA256 der heruntergeladenen Datei gegen das Manifest prüfen —
-             * verhindert, dass abgebrochene Teildownloads als gültig gecacht
-             * werden. */
-            char path[72];
-            snprintf(path, sizeof(path), ASSET_MOUNT "/%.*s", ASSET_ID_MAX - 1, id);
-            char actual[65];
-            if (file_sha256_hex(path, actual) &&
-                strcmp(actual, jsha->valuestring) == 0) {
-                store_sha256(id, jsha->valuestring);
-                ESP_LOGI(TAG, "Asset %s verifiziert (sha256 ok).", id);
-            } else {
-                ESP_LOGW(TAG, "Asset %s: sha256-Mismatch — verwerfe Datei.", id);
-                remove(path);
-            }
+            sync_one_asset(id, jsha->valuestring);
         }
     }
     cJSON_Delete(root);

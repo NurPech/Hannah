@@ -91,13 +91,15 @@ void hannah_audio_set_sampling_mode(bool enabled);
 void hannah_audio_start_listen_after_tts(void);
 
 /* Wakeword-Inference pausieren — mic_task schläft statt TFLite auszuführen.
- * Wird von OTA aufgerufen um IDLE0-Starvation während des Downloads zu vermeiden.
- * Bei Erfolg reboot't OTA danach ohnehin; bei Fehlschlag siehe
- * hannah_audio_resume_wakeword(). */
+ * Wird von OTA, vom Web-UI-Upload und vom Asset-Sync aufgerufen, um IDLE0-Starvation
+ * während der Netzwerk- und Flash-Arbeit zu vermeiden. Bei Erfolg reboot't OTA danach
+ * ohnehin; sonst siehe hannah_audio_resume_wakeword(). Der Aufruf ist gezählt (#537):
+ * pausiert wird beim ersten pause(), fortgesetzt erst beim letzten resume(), jedes
+ * pause() braucht also genau ein resume(). */
 void hannah_audio_pause_wakeword(void);
 
-/* Gegenstück zu hannah_audio_pause_wakeword() — für den Fall, dass OTA
- * fehlschlägt und kein Neustart folgt (kein manueller Eingriff nötig). */
+/* Gegenstück zu hannah_audio_pause_wakeword(): hebt genau einen Aufruf auf. Das Wakeword
+ * läuft weiter, sobald kein Aufrufer mehr pausiert hat. */
 void hannah_audio_resume_wakeword(void);
 
 /* Baut die I2S-Kanäle (Mic-RX, Speaker-TX) komplett ab und gibt deren

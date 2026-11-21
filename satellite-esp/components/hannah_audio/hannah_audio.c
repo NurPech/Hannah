@@ -224,6 +224,13 @@ static volatile bool     s_ptt_active        = false;
 static bool              s_ptt_mic_power_override = false;
 static volatile bool     s_streaming_paused  = false;
 static volatile bool     s_wakeword_paused   = false;
+/* Pause/Resume des Wakeword sind gezählt (#537): OTA, Web-UI-Upload (#527) und Asset-Sync pausieren
+ * es, und zwei davon können sich überlappen (der Asset-Sync läuft kurz nach dem Boot, der OTA-Check
+ * nach 60 s). Ein einfaches Flag würde das Wakeword mitten im OTA wieder freigeben, wenn der
+ * Asset-Sync zuerst fertig wird, obwohl der OTA-Task die TFLite-Arena schon freigegeben hat.
+ * Pausiert wird beim ersten pause(), fortgesetzt erst beim letzten resume(). */
+static SemaphoreHandle_t s_ww_pause_lock = NULL;
+static int               s_ww_pause_refs = 0;
 /* Vollständige Hardware-Pause für OTA (#193) — anders als s_wakeword_paused
  * (nur TFLite-Inference übersprungen, I2S-Read läuft unverändert weiter)
  * verhindert das hier jeden i2s_channel_read()/i2s_channel_write()-Aufruf,
@@ -2162,6 +2169,7 @@ void hannah_audio_init(void)
     hannah_net_set_notifications_pending_callback(on_notifications_pending);
     hannah_net_set_volume_callback(on_volume_set);
     hannah_net_set_music_volume_callback(on_music_volume_set);
+    s_ww_pause_lock = xSemaphoreCreateMutex();
 #if !CONFIG_HANNAH_MIC_TYPE_NONE
     hannah_net_set_sampling_callback(on_sampling_mode);
     hannah_net_set_virtual_ptt_callback(on_virtual_ptt);
@@ -2459,28 +2467,37 @@ void hannah_audio_resume(void)
     s_streaming_paused = false;
 }
 
+/* Pause/Resume sind gezählt (#537), Zähler und Sperre stehen oben bei s_wakeword_paused. */
 void hannah_audio_pause_wakeword(void)
 {
-    /* Kein mic_task (CONFIG_HANNAH_MIC_TYPE_NONE) — Semaphore existiert nicht,
-     * es läuft ohnehin nie ein Invoke(), das auf die Arena zugreifen könnte. */
-    if (s_wakeword_parked_sem) {
-        /* Stale Give aus einem früheren Pause/Resume-Zyklus verwerfen, BEVOR
-         * das Flag gesetzt wird — der anschließende blockierende Take darf nur
-         * einen Give akzeptieren, der mic_task nachweislich NACH dem Setzen
-         * des Flags erreicht hat (#196). */
-        xSemaphoreTake(s_wakeword_parked_sem, 0);
-        s_wakeword_paused = true;
-        xSemaphoreTake(s_wakeword_parked_sem, portMAX_DELAY);
-    } else {
-        s_wakeword_paused = true;
+    if (s_ww_pause_lock) xSemaphoreTake(s_ww_pause_lock, portMAX_DELAY);
+    if (s_ww_pause_refs++ == 0) {
+        /* Kein mic_task (CONFIG_HANNAH_MIC_TYPE_NONE) — Semaphore existiert nicht,
+         * es läuft ohnehin nie ein Invoke(), das auf die Arena zugreifen könnte. */
+        if (s_wakeword_parked_sem) {
+            /* Stale Give aus einem früheren Pause/Resume-Zyklus verwerfen, BEVOR
+             * das Flag gesetzt wird — der anschließende blockierende Take darf nur
+             * einen Give akzeptieren, der mic_task nachweislich NACH dem Setzen
+             * des Flags erreicht hat (#196). */
+            xSemaphoreTake(s_wakeword_parked_sem, 0);
+            s_wakeword_paused = true;
+            xSemaphoreTake(s_wakeword_parked_sem, portMAX_DELAY);
+        } else {
+            s_wakeword_paused = true;
+        }
+        ESP_LOGI(TAG, "Wakeword-Inference pausiert (OTA, Upload oder Asset-Sync).");
     }
-    ESP_LOGI(TAG, "Wakeword-Inference pausiert (OTA aktiv).");
+    if (s_ww_pause_lock) xSemaphoreGive(s_ww_pause_lock);
 }
 
 void hannah_audio_resume_wakeword(void)
 {
-    s_wakeword_paused = false;
-    ESP_LOGI(TAG, "Wakeword-Inference fortgesetzt (OTA fehlgeschlagen).");
+    if (s_ww_pause_lock) xSemaphoreTake(s_ww_pause_lock, portMAX_DELAY);
+    if (s_ww_pause_refs > 0 && --s_ww_pause_refs == 0) {
+        s_wakeword_paused = false;
+        ESP_LOGI(TAG, "Wakeword-Inference fortgesetzt.");
+    }
+    if (s_ww_pause_lock) xSemaphoreGive(s_ww_pause_lock);
 }
 
 /* Baut die I2S-Kanäle (Mic-RX, Speaker-TX) komplett ab und gibt deren
