@@ -151,6 +151,11 @@ static char *fetch_manifest(void)
         .crt_bundle_attach = hannah_config_get()->tls_skip_verify ? NULL : esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        /* Die URL aus den Einstellungen ist nicht auswertbar (z. B. ohne "http://"), Refs #534 */
+        ESP_LOGE(TAG, "Manifest: HTTP-Client nicht erzeugt, ungültige Asset-Server-URL? (%s)", url);
+        return NULL;
+    }
     set_auth_header(client);
 
     char *body = NULL;
@@ -198,6 +203,10 @@ static bool download_asset(const char *asset_id)
         .crt_bundle_attach = hannah_config_get()->tls_skip_verify ? NULL : esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE(TAG, "Asset %s: HTTP-Client nicht erzeugt, ungültige Asset-Server-URL? (%s)", asset_id, url);
+        return false;
+    }
     set_auth_header(client);
 
     bool ok = false;

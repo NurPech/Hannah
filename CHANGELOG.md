@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.105.2 (2026-11-21)
+### Satellite Firmware
+
+* Fixed: a satellite no longer resets itself with a task watchdog when the wakeword detection cannot keep up. The wakeword task only gave up the processor when it had no audio left to process; if the calculation for one 10 ms frame took longer than 10 ms for a while (seen on a satellite that was downloading its sound assets for the first time), it never paused and the idle task of that processor core got no time for 5 seconds, which ended in a reset, again and again. Now the task throws away the audio it cannot process in time (a short gap in the wakeword detection) and always pauses for a moment. The debug log of the wakeword shows how often that happened (`overload`) (Refs #533)
+* Fixed: a satellite no longer crashes and restarts in a loop when the URL of the asset server in its settings cannot be used (for example `192.168.178.17:8746` without `http://`). The asset sync now logs that the URL is not valid and is skipped, like for a server that does not answer, and the satellite keeps running (Refs #534)
+
 ## 0.105.1 (2026-11-21)
 ### Satellite Firmware
 

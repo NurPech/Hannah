@@ -271,6 +271,7 @@ static volatile uint32_t s_ww_q_rd   = 0;       /* nur ww_task schreibt (bei Pau
 static TaskHandle_t      s_ww_task   = NULL;
 static float             s_ww_conf_max = 0.0f;  /* größte Confidence seit dem letzten ww_take_confidence() */
 static volatile uint32_t s_ww_dropped = 0;
+static volatile uint32_t s_ww_overload = 0;     /* Rückstau vom ww_task verworfen (Refs #533) */
 static portMUX_TYPE      s_ww_mux    = portMUX_INITIALIZER_UNLOCKED;
 #endif
 /* Lautstärke im NVS merken (Refs #445): jede Änderung startet einen Timer, geschrieben wird erst
@@ -1130,19 +1131,32 @@ static void ww_task(void *arg)
             if (++dbg_ctr >= 500) {
                 dbg_ctr = 0;
                 ESP_LOGI(TAG, "Wakeword-Debug: rms=%.4f peak=%.4f confidence(peak/5s)=%.4f threshold=%.2f "
-                              "noise_ema=%.4f feat_size(min/5s)=%u num_read=%u output_raw=%u invoke_fails=%lu frame_no=%lu dropped=%lu model=%uB/%uF",
+                              "noise_ema=%.4f feat_size(min/5s)=%u num_read=%u output_raw=%u invoke_fails=%lu frame_no=%lu dropped=%lu overload=%lu model=%uB/%uF",
                          hannah_rms(frame, WAKEWORD_STEP_SAMPLES), dbg_peak, dbg_max,
                          hannah_config_get()->wakeword_threshold / 100.0f, s_noise_floor_ema,
                          (unsigned)dbg_min_feat, (unsigned)wwdbg.num_read,
                          (unsigned)wwdbg.output_raw, (unsigned long)wwdbg.invoke_fail_count,
                          (unsigned long)s_debug_ring_frame_no, (unsigned long)s_ww_dropped,
-                         (unsigned)wwdbg.model_bytes, (unsigned)wwdbg.input_frames);
+                         (unsigned long)s_ww_overload, (unsigned)wwdbg.model_bytes, (unsigned)wwdbg.input_frames);
                 dbg_max      = 0.0f;
                 dbg_peak     = 0.0f;
                 dbg_min_feat = SIZE_MAX;
             }
 #endif
             s_ww_q_rd = s_ww_q_rd + 1;
+
+            /* Überlastschutz (Refs #533): Der ww_task gibt die CPU sonst nur ab, wenn die Queue leer
+             * ist. Braucht die Inferenz eine Weile mehr als 10 ms je Frame (Flash-Schreiben beim
+             * Asset-Download, Last auf Core 1), wird sie nie leer, der ww_task läuft ohne Pause und
+             * der Idle-Task von Core 1 bekommt 5 s lang keine Zeit: Task-Watchdog, Reset. Ist die
+             * Queue zur Hälfte voll, den Rückstau verwerfen (das Wakeword-Frontend verträgt Lücken,
+             * wie bei einer vollen Queue in ww_push) und einen Tick schlafen, damit Idle läuft. */
+            if (s_ww_q_wr - s_ww_q_rd >= WW_Q_FRAMES / 2) {
+                s_ww_q_rd = s_ww_q_wr;
+                s_ww_overload++;
+                vTaskDelay(1);
+                break;
+            }
         }
     }
 }
