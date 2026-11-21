@@ -4,6 +4,12 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.105.1 (2026-11-21)
+### Satellite Firmware
+
+* Documented: how the signing key of the satellite firmware is backed up and what happens if it is lost, in the development guide of the satellite firmware (`satellite-esp/ENTWICKLUNG.md`) (Refs #525)
+* Fixed: a satellite no longer acts on old values that an MQTT broker replays when it connects. With the MQTT adapter of ioBroker as broker a satellite restarted in a loop, started listening by itself, set its volume to 0 % or crashed (`LoadProhibited`, null pointer in the handler of the topic `sampling`). A `restart` or `listen` that arrives as a retained message is ignored (Core never sends them retained), an empty or non-numeric volume is ignored, and an empty `sampling` message does nothing. Core is not affected, its commands arrive as before (Refs #532)
+
 ## 0.105.0 (2026-11-20)
 ### Satellite Firmware
 

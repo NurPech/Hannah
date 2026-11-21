@@ -622,16 +622,29 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
             }
 
         } else if (strstr(topic, "/music_volume/set")) {
-            int vol = atoi(data);
-            if (vol < 0)   vol = 0;
-            if (vol > 100) vol = 100;
-            if (s_music_volume_cb) s_music_volume_cb(vol);
+            /* Refs #532 — strtol statt atoi (wie led_brightness): ein leerer Wert, den ein Broker
+             * beim Verbinden abspielt, darf die Lautstärke nicht auf 0 setzen. */
+            char *end = NULL;
+            long  vol = strtol(data, &end, 10);
+            if (end == data) {
+                ESP_LOGW(TAG, "music_volume/set: ungültiger Wert '%s', ignoriert.", data);
+            } else {
+                if (vol < 0)   vol = 0;
+                if (vol > 100) vol = 100;
+                if (s_music_volume_cb) s_music_volume_cb((int)vol);
+            }
 
         } else if (strstr(topic, "/volume/set")) {
-            int vol = atoi(data);
-            if (vol < 0)   vol = 0;
-            if (vol > 100) vol = 100;
-            if (s_volume_cb) s_volume_cb(vol);
+            /* Refs #532 — wie music_volume/set */
+            char *end = NULL;
+            long  vol = strtol(data, &end, 10);
+            if (end == data) {
+                ESP_LOGW(TAG, "volume/set: ungültiger Wert '%s', ignoriert.", data);
+            } else {
+                if (vol < 0)   vol = 0;
+                if (vol > 100) vol = 100;
+                if (s_volume_cb) s_volume_cb((int)vol);
+            }
 
         } else {
             char ota_ok_topic[128];
@@ -674,7 +687,9 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                         snprintf(sampling_topic, sizeof(sampling_topic),
                                  "hannah/satellite/%s/sampling",
                                  hannah_config_get()->device_id);
-                        if (strcmp(topic, sampling_topic) == 0 && s_sampling_cb) {
+                        /* Refs #532 — ein leerer Payload hat keine Aussage (event->data ist dann
+                         * NULL, der strstr-Fallback unten stürzte darauf ab): ignorieren. */
+                        if (strcmp(topic, sampling_topic) == 0 && s_sampling_cb && dlen > 0) {
                             /* Payload: {"enabled":true,"type":"noise"|"hey_hannah"} */
                             bool enabled = false;
                             char sample_type[32] = "noise";
@@ -686,8 +701,9 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                                 if (cJSON_IsString(jty)) strncpy(sample_type, jty->valuestring, sizeof(sample_type) - 1);
                                 cJSON_Delete(sroot);
                             } else {
-                                enabled = (strstr(event->data, "\"enabled\":true") != NULL ||
-                                           strstr(event->data, "\"enabled\": true") != NULL);
+                                /* data ist die NUL-terminierte Kopie von oben, event->data ist es nicht */
+                                enabled = (strstr(data, "\"enabled\":true") != NULL ||
+                                           strstr(data, "\"enabled\": true") != NULL);
                             }
                             ESP_LOGI(TAG, "Sampling-Modus: %s (type=%s)", enabled ? "an" : "aus", sample_type);
                             s_sampling_cb(enabled, sample_type);
@@ -724,14 +740,25 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                                              "hannah/satellite/%s/listen",
                                              hannah_config_get()->device_id);
                                     if (strcmp(topic, listen_topic) == 0) {
-                                        ESP_LOGI(TAG, "start_listening via MQTT.");
-                                        if (s_start_listening_cb) s_start_listening_cb();
+                                        /* Refs #532 — Core sendet listen und restart nie mit Retain. Eine
+                                         * retained Nachricht ist ein alter Wert, den ein Broker beim
+                                         * Verbinden abspielt (ioBroker.mqtt): nicht ausführen. */
+                                        if (event->retain) {
+                                            ESP_LOGW(TAG, "listen: retained Nachricht ignoriert (alter Wert).");
+                                        } else {
+                                            ESP_LOGI(TAG, "start_listening via MQTT.");
+                                            if (s_start_listening_cb) s_start_listening_cb();
+                                        }
                                     } else {
                                         char restart_topic[128];
                                         snprintf(restart_topic, sizeof(restart_topic),
                                                  "hannah/satellite/%s/restart",
                                                  hannah_config_get()->device_id);
-                                        if (strcmp(topic, restart_topic) == 0) {
+                                        if (strcmp(topic, restart_topic) == 0 && event->retain) {
+                                            /* Refs #532 — wie listen: ein retained restart ist ein alter Wert und
+                                             * löste beim Verbinden eine Neustartschleife aus. */
+                                            ESP_LOGW(TAG, "restart: retained Nachricht ignoriert (alter Wert).");
+                                        } else if (strcmp(topic, restart_topic) == 0) {
                                             /* Geordneter Neustart auf Zuruf (#161) — Diagnose-/
                                              * Rejuvenation-Werkzeug für den Ressourcenerschöpfungs-
                                              * Verdacht aus #150: läuft über denselben Pfad wie der

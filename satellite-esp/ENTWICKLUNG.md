@@ -305,8 +305,10 @@ schützt das Update übers Netz, nicht den physischen Zugriff (kein Secure Boot,
 - Lokale Builds und Dev-Builds (`scripts/upload-dev-firmware.ps1`) sind unsigniert, ohne Overlay
   ändert sich nichts. Ein Image **mit** Overlay aber ohne Signaturblock startet nicht (Abbruch
   in `esp_secure_boot_init_checks`, Boot-Schleife, nur per Kabel zu beheben).
-- Der Key wird nie rotiert. Er ist nicht exportierbar, geht er verloren, muss jeder signierte
-  Satellit per Kabel neu geflasht werden. Die Sicherung des Keys ist noch nicht festgelegt.
+- Der Key wird nie rotiert. Er ist nicht exportierbar und lässt sich nicht einzeln sichern.
+  Er steckt in den Raft-Snapshots von Vault. Zum Wiederherstellen in einem neuen Vault
+  braucht es den Snapshot und die Unseal-Keys. Gehen beide verloren, ist der Key weg, und
+  jeder signierte Satellit muss per Kabel neu geflasht werden.
 
 ### Fallstricke beim Testen
 
