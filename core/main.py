@@ -2898,6 +2898,8 @@ def main():
         on_satellite_change=_on_satellite_change,
         resolve_satellite_room=satellite_manager.get_satellite_room,
         upsert_satellite=satellite_manager.upsert_satellite,
+        pair_satellite=satellite_manager.pair_satellite,
+        satellite_is_paired=lambda d: bool((s := satellite_manager.get_satellite(d)) and s.paired_at),
     )
     udp_server.start()
 

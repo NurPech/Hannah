@@ -113,6 +113,7 @@ static const char *TAG = "hannah_audio";
 
 /* Sampling-Mode "noise": Auto-Flush-Intervall (Dauerstrom-Aufnahme) */
 #define NOISE_AUTOFLUSH_FRAMES 5000  /* 5000 × 10ms = 50s */
+#define WAKE_LED_FRAMES        15    /* 15 × 10ms: so lange zeigt die LED nach Wake-Word/PTT WAKE, bevor sie auf STREAM wechselt (Refs #544) */
 
 /* Debug-WAV-Snapshot (#180): Ringpuffer-Länge + Halte-Schwelle für die
  * Vol+/Vol--Tastenkombi. Auslösung per GPIO-Poll im mic_task, ~10ms/Iteration
@@ -280,6 +281,29 @@ static float             s_ww_conf_max = 0.0f;  /* größte Confidence seit dem 
 static volatile uint32_t s_ww_dropped = 0;
 static volatile uint32_t s_ww_overload = 0;     /* Rückstau vom ww_task verworfen (Refs #533) */
 static portMUX_TYPE      s_ww_mux    = portMUX_INITIALIZER_UNLOCKED;
+
+/* Streaming-Pfad in eigenem Task (Refs #544). Das blockierende sendto je 10-ms-Frame (+ malloc/free) kostete ~2,5 ms,
+ * die WebRTC-VAD bis ~1 ms: der mic_task brauchte im Stream 10 bis 11,4 ms je Frame statt 7,5 ms, hatte keine Reserve
+ * mehr und fiel hinter den I2S-DMA zurück; die ohnehin vorhandenen 30 bis 45 ms Aussetzer überliefen dann den DMA-Ring,
+ * Mikrofondaten gingen verloren und die AEC-Referenz lag für Sekunden daneben. Jetzt gibt der mic_task die Frames über
+ * eine Queue (PSRAM) an den strm_task; der besitzt auch die VAD (init, feed, free), damit ein neuer Stream direkt nach
+ * dem Ende des vorigen keinen Zugriff auf eine schon freigegebene VAD auslösen kann. START und END laufen in
+ * derselben Queue wie die Frames, audio_end überholt also nie noch nicht gesendetes Audio. */
+#define STRM_Q_FRAMES 64                         /* 640 ms Puffer */
+enum { STRM_MSG_START = 1, STRM_MSG_FRAME = 2, STRM_MSG_END = 3 };
+typedef struct {
+    uint8_t  kind;
+    uint8_t  by_wakeword;
+    uint16_t vad_silence_frames;
+    uint32_t stream_id;
+    int16_t  pcm[WAKEWORD_STEP_SAMPLES];
+} strm_msg_t;
+static strm_msg_t       *s_strm_q          = NULL;   /* PSRAM, STRM_Q_FRAMES Einträge */
+static volatile uint32_t s_strm_q_wr       = 0;      /* nur mic_task schreibt */
+static volatile uint32_t s_strm_q_rd       = 0;      /* nur strm_task schreibt */
+static TaskHandle_t      s_strm_task       = NULL;
+static volatile uint32_t s_strm_dropped    = 0;
+static volatile uint32_t s_strm_vad_end_id = 0;      /* Stream-Nummer, für die die VAD das Sprechende erkannt hat */
 #endif
 /* Lautstärke im NVS merken (Refs #445): jede Änderung startet einen Timer, geschrieben wird erst
  * nach VOLUME_SAVE_DELAY_US Ruhe, also einmal je Änderungsserie statt bei jedem Tastendruck. */
@@ -1167,6 +1191,89 @@ static void ww_task(void *arg)
         }
     }
 }
+
+/* Legt eine Nachricht für den strm_task ab. Frames werden bei voller Queue verworfen (der mic_task wartet nie auf
+ * Frames), START und END warten bis zu 100 ms auf einen freien Platz, weil ohne sie die VAD fehlt oder audio_end
+ * nie gesendet wird. */
+static bool strm_push(uint8_t kind, const int16_t *pcm, uint32_t stream_id, bool by_wakeword, int vad_silence_frames)
+{
+    if (!s_strm_q) return false;
+    for (int tries = 0; ; tries++) {
+        const uint32_t wr = s_strm_q_wr;
+        if (wr - s_strm_q_rd < STRM_Q_FRAMES) {
+            strm_msg_t *m = &s_strm_q[wr % STRM_Q_FRAMES];
+            m->kind               = kind;
+            m->by_wakeword        = by_wakeword ? 1 : 0;
+            m->vad_silence_frames = (uint16_t)vad_silence_frames;
+            m->stream_id          = stream_id;
+            if (pcm) memcpy(m->pcm, pcm, sizeof(m->pcm));
+            __sync_synchronize();
+            s_strm_q_wr = wr + 1;
+            if (s_strm_task) xTaskNotifyGive(s_strm_task);
+            return true;
+        }
+        if (kind == STRM_MSG_FRAME || tries >= 10) {
+            s_strm_dropped++;
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+/* Sendet die Frames des Streams (UDP), führt die VAD und schickt audio_end. Läuft auf Core 1, Stack im PSRAM
+ * (kein Flash-Zugriff: nur lwip und die VAD). */
+static void strm_task(void *arg)
+{
+    (void)arg;
+    bool     vad_on  = false;   /* VAD des laufenden Streams ist angelegt */
+    uint32_t id      = 0;       /* Nummer des laufenden Streams */
+    uint32_t frames  = 0;       /* Frames des laufenden Streams, die dieser Task schon gesehen hat */
+    uint32_t log_ctr = 0;
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+        while (s_strm_q_rd != s_strm_q_wr) {
+            const strm_msg_t *m = &s_strm_q[s_strm_q_rd % STRM_Q_FRAMES];
+            switch (m->kind) {
+            case STRM_MSG_START:
+                if (vad_on) hannah_webrtc_vad_free(&s_webrtc_vad);   /* der vorige Stream endete ohne END */
+                vad_on = (hannah_webrtc_vad_init(&s_webrtc_vad, CONFIG_HANNAH_VAD_WEBRTC_AGGRESSIVENESS,
+                                                 SAMPLE_RATE, 3, m->vad_silence_frames) == 0);
+                if (!vad_on) ESP_LOGE(TAG, "WebRTC VAD init fehlgeschlagen.");
+                else if (m->by_wakeword) s_webrtc_vad.speaking = 1;
+                id      = m->stream_id;
+                frames  = 0;
+                log_ctr = 0;
+                break;
+            case STRM_MSG_FRAME:
+                hannah_net_send_audio((const uint8_t *)m->pcm, sizeof(m->pcm));
+                frames++;
+                if (vad_on) {
+                    if (++log_ctr >= 50) {
+                        log_ctr = 0;
+                        ESP_LOGI(TAG, "VAD RMS=%.4f silence=%d/%d", hannah_rms(m->pcm, WAKEWORD_STEP_SAMPLES),
+                                 s_webrtc_vad.offset_count, s_webrtc_vad.offset_windows);
+                    }
+                    /* mind. 2 s nach dem Start, bevor die VAD abschneiden darf; danach genügt der erste Treffer */
+                    if (frames >= 200 && s_strm_vad_end_id != id &&
+                        hannah_webrtc_vad_feed(&s_webrtc_vad, m->pcm, WAKEWORD_STEP_SAMPLES) == HANNAH_VAD_OFFSET)
+                        s_strm_vad_end_id = id;
+                }
+                break;
+            case STRM_MSG_END:
+                hannah_net_send_audio_end();
+                if (vad_on) {
+                    hannah_webrtc_vad_free(&s_webrtc_vad);
+                    vad_on = false;
+                }
+                break;
+            default:
+                break;
+            }
+            __sync_synchronize();
+            s_strm_q_rd = s_strm_q_rd + 1;
+        }
+    }
+}
 #endif /* CONFIG_HANNAH_WAKEWORD_ENABLED */
 
 static void mic_task(void *arg)
@@ -1179,6 +1286,10 @@ static void mic_task(void *arg)
 
     audio_state_t state           = AUDIO_STATE_IDLE;
     bool          was_ptt         = false;
+#if CONFIG_HANNAH_WAKEWORD_ENABLED
+    int           wake_led_frames = 0;  /* Rest der WAKE-LED-Anzeige in Frames, ohne den Task anzuhalten (Refs #544) */
+    uint32_t      stream_id       = 0;  /* Nummer des Streams für den strm_task und die VAD-Zuordnung */
+#endif
     int           warmup_remaining = WARMUP_FRAMES;
 
 #if CONFIG_HANNAH_WAKEWORD_ENABLED
@@ -1542,14 +1653,15 @@ static void mic_task(void *arg)
                     confidence >= hannah_config_get()->wakeword_threshold / 100.0f) {
                     bool  by_wakeword  = !(s_ptt_active && !was_ptt);
                     int vad_silence_frames = (int)(hannah_config_get()->vad_silence_ms / 10);
+                    /* WAKE ca. 150 ms anzeigen, ohne den Mikrofon-Task anzuhalten (Refs #544): ein vTaskDelay
+                     * an dieser Stelle ließ den I2S-RX-DMA überlaufen, die Mikrofon-Zeitachse sprang um etwa
+                     * 50 ms gegen die Lautsprecher-Referenz und die AEC fiel für den Rest der Wiedergabe aus.
+                     * Der Wechsel auf STREAM passiert in STREAMING nach WAKE_LED_FRAMES Frames. */
                     mic_led(LED_STATE_WAKE);
-                    vTaskDelay(pdMS_TO_TICKS(150));
-                    mic_led(LED_STATE_STREAM);
-                    if (hannah_webrtc_vad_init(&s_webrtc_vad,
-                            CONFIG_HANNAH_VAD_WEBRTC_AGGRESSIVENESS,
-                            SAMPLE_RATE, 3, vad_silence_frames) != 0)
-                        ESP_LOGE(TAG, "WebRTC VAD init fehlgeschlagen.");
-                    if (by_wakeword) s_webrtc_vad.speaking = 1;
+                    wake_led_frames = WAKE_LED_FRAMES;
+                    /* VAD und Senden übernimmt der strm_task (Refs #544), START wartet in derselben Queue wie die Frames. */
+                    stream_id++;
+                    strm_push(STRM_MSG_START, NULL, stream_id, by_wakeword, vad_silence_frames);
                     s_stream_frames = 0;
                     ESP_LOGI(TAG, "%s erkannt → Streaming. (noise_ema=%.4f)",
                              by_wakeword ? "Wake-Word" : "PTT", s_noise_floor_ema);
@@ -1559,30 +1671,24 @@ static void mic_task(void *arg)
             }
 
             case AUDIO_STATE_STREAMING: {
-                static int s_rms_log_ctr = 0;
-                hannah_net_send_audio((uint8_t *)mono, mono_samples * 2);
+                if (wake_led_frames > 0 && --wake_led_frames == 0)
+                    mic_led(LED_STATE_STREAM);
+                strm_push(STRM_MSG_FRAME, mono, stream_id, false, 0);   /* Senden und VAD im strm_task (Refs #544) */
                 s_stream_frames++;
-                if (++s_rms_log_ctr >= 50) {
-                    s_rms_log_ctr = 0;
-                    ESP_LOGI(TAG, "VAD RMS=%.4f silence=%d/%d",
-                             hannah_rms(mono, (int)mono_samples),
-                             s_webrtc_vad.offset_count, s_webrtc_vad.offset_windows);
-                }
                 bool ptt_end   = (was_ptt && !s_ptt_active);
                 bool vad_end   = (!ptt_end &&
                                   s_stream_frames >= 200 &&  /* mind. 2s nach Wakeword bevor VAD abschneiden darf */
-                                  hannah_webrtc_vad_feed(&s_webrtc_vad, mono, (int)mono_samples) == HANNAH_VAD_OFFSET);
+                                  s_strm_vad_end_id == stream_id);
                 bool timed_out = (s_stream_frames >= 1000);  /* 10s Hard-Limit */
                 if (ptt_end || vad_end || timed_out) {
-                    hannah_net_send_audio_end();
-                    hannah_webrtc_vad_free(&s_webrtc_vad);
+                    strm_push(STRM_MSG_END, NULL, stream_id, false, 0);   /* sendet audio_end und gibt die VAD frei */
                     mic_led(LED_STATE_IDLE);
+                    wake_led_frames = 0;
                     state = AUDIO_STATE_IDLE;
                     if (s_virtual_listen_frames > 0) {
                         s_virtual_listen_frames = 0;
                         s_ptt_active = false;
                     }
-                    s_rms_log_ctr = 0;
                     if (ptt_end)       ESP_LOGI(TAG, "PTT losgelassen → audio_end.");
                     else if (vad_end)  ESP_LOGI(TAG, "VAD: Stille erkannt → audio_end.");
                     else               ESP_LOGI(TAG, "Stream-Timeout (10s) → audio_end.");
@@ -2184,6 +2290,14 @@ void hannah_audio_init(void)
      * Heap ist knapp (Heap-Watchdog, #266). Core 1 teilt sich nur den Speaker-Task, der fast nur wartet. */
     if (xTaskCreatePinnedToCoreWithCaps(ww_task, "ww", 8192, NULL, 4, &s_ww_task, 1, MALLOC_CAP_SPIRAM) != pdPASS)
         ESP_LOGE(TAG, "ww_task konnte nicht angelegt werden — keine Wake-Word-Erkennung.");
+    /* Streaming-Pfad (Refs #544): Queue und Stack im PSRAM, Core 1 wie der ww_task. */
+    s_strm_q = heap_caps_calloc(STRM_Q_FRAMES, sizeof(strm_msg_t), MALLOC_CAP_SPIRAM);
+    if (!s_strm_q ||
+        xTaskCreatePinnedToCoreWithCaps(strm_task, "strm", 6144, NULL, 4, &s_strm_task, 1, MALLOC_CAP_SPIRAM) != pdPASS) {
+        ESP_LOGE(TAG, "strm_task konnte nicht angelegt werden — kein Streaming zu Hannah.");
+        free(s_strm_q);
+        s_strm_q = NULL;
+    }
 #endif
     heap_mark("ww_task");
     xTaskCreatePinnedToCore(mic_task, "mic", 8192, NULL, 5, NULL, 0);

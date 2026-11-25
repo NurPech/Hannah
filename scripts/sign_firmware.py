@@ -30,7 +30,7 @@ import urllib.request
 
 SIGNATURE_BLOCK = 4096
 PAD_ALIGN = 64 * 1024
-APP_SLOT = 0x200000
+APP_SLOT = 0x300000
 
 
 def fail(msg):

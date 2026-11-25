@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_spiffs.h"
+#include "esp_partition.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
@@ -503,6 +504,66 @@ static void asset_relevant_cb(const char *json, int len)
     xSemaphoreGive(s_sync_trigger);
 }
 
+/* ── SPIFFS nach einer Layout-Änderung (#552) ───────────────────────────── */
+
+/* Die SPIFFS-Partition ist mit dem 3-MB-Layout (#549) von 0x410000 nach 0x610000
+ * gewandert, mitten in den Bereich des alten Dateisystems. Das Formatieren braucht
+ * es nicht extra: SPIFFS prüft pro Block eine Magic, die vom Blockindex abhängt
+ * (CONFIG_SPIFFS_USE_MAGIC_LENGTH), und gegenüber dem alten Dateisystem sind die
+ * Blöcke um 512 verschoben. Fremde Blöcke sind also nie gültig, der Mount scheitert
+ * (Test01: -10025), und format_if_mount_failed formatiert einmal.
+ *
+ * Was bleibt, ist der sha256-Cache der Assets im NVS, der bei einem Reflash ohne
+ * Erase erhalten bleibt: der Sync prüft nur ihn (sha256_matches()), nie die Datei.
+ * Ohne Löschen kämen die Sounds nach dem Formatieren nie wieder. Deshalb merken wir
+ * uns die Adresse der SPIFFS-Partition im NVS. Weicht sie ab (oder fehlt der
+ * Eintrag: Neu-Flash, Layout-Wechsel, Update eines Geräts mit alter Tabelle), wird
+ * der Cache vor dem Mount verworfen, und die Adresse erst nach dem erfolgreichen
+ * Mount gespeichert — bricht etwas dazwischen ab, läuft es beim nächsten Boot noch
+ * einmal. Das Formatieren dauert beim ersten Start etwa eine halbe Minute. */
+#define SPIFFS_ADDR_KEY "spiffs_addr"
+
+static uint32_t s_spiffs_addr_pending = 0;   /* != 0: nach dem Mount im NVS merken */
+
+static void spiffs_discard_cache_if_moved(void)
+{
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+    if (!part) {
+        ESP_LOGE(TAG, "SPIFFS-Partition nicht gefunden");
+        return;
+    }
+
+    nvs_handle_t h;
+    if (nvs_open(ASSET_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+
+    uint32_t stored = 0;
+    if (nvs_get_u32(h, SPIFFS_ADDR_KEY, &stored) == ESP_OK && stored == part->address) {
+        nvs_close(h);
+        return;
+    }
+
+    ESP_LOGW(TAG, "SPIFFS liegt an 0x%x (gemerkt: 0x%x) — verwerfe den Asset-Cache, der Mount formatiert neu (#552)",
+             (unsigned)part->address, (unsigned)stored);
+    nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+    s_spiffs_addr_pending = part->address;
+}
+
+static void spiffs_remember_address(void)
+{
+    if (s_spiffs_addr_pending == 0) return;
+
+    nvs_handle_t h;
+    if (nvs_open(ASSET_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u32(h, SPIFFS_ADDR_KEY, s_spiffs_addr_pending);
+    nvs_commit(h);
+    nvs_close(h);
+    s_spiffs_addr_pending = 0;
+    ESP_LOGI(TAG, "SPIFFS-Adresse gemerkt, Asset-Cache wird neu aufgebaut.");
+}
+
 /* ── Öffentliche API ─────────────────────────────────────────────────────── */
 
 bool hannah_asset_remount(void)
@@ -526,7 +587,9 @@ bool hannah_asset_remount(void)
 
 void hannah_asset_init(void)
 {
+    spiffs_discard_cache_if_moved();
     if (!hannah_asset_remount()) return;
+    spiffs_remember_address();
 
     s_relevant_mutex = xSemaphoreCreateMutex();
     s_sync_trigger   = xSemaphoreCreateBinary();

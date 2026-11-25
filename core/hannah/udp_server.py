@@ -23,11 +23,25 @@ import threading
 import time
 from typing import Callable, Optional
 
+from hannah.audio import resample_pcm
+
 log = logging.getLogger(__name__)
 
 TYPE_CONTROL = 0x01
 TYPE_AUDIO   = 0x02
 TYPE_TTS     = 0x03
+
+# TTS-Pakete: wie der Proxy (ttsChunk in proxy/internal/udp/server.go) unter der WLAN-MTU,
+# damit nichts IP-fragmentiert wird. Ein 60-KB-Datagramm (rund 41 Fragmente) kann die
+# Firmware nicht zusammensetzen (lwIP: IP_REASS_MAX_PBUFS=10) und passt auch nicht in den
+# 32-KB-Ringpuffer des Lautsprechers (#545).
+_TTS_CHUNK = 1400
+# Die Satelliten-Firmware spielt TTS immer mit dieser Rate (Core rechnet vor dem Senden um, #546).
+_TTS_RATE = 16000
+# Vorlauf vor der Abspielzeit: der Satellit bekommt die Pakete im Takt der Wiedergabe, mit
+# diesem Polster gegen Jitter. Ein Sendevorsprung wie ein Burst würde den Ringpuffer
+# überlaufen lassen.
+_TTS_LEAD_S = 0.3
 
 # Maximale Größe eines eingehenden UDP-Pakets
 _MAX_PACKET = 65535
@@ -82,6 +96,8 @@ class UDPServer:
         on_satellite_change: Optional[Callable[[dict], None]] = None,
         resolve_satellite_room: Optional[Callable[[str], Optional[str]]] = None,
         upsert_satellite: Optional[Callable[[str], None]] = None,
+        pair_satellite: Optional[Callable[[str, str], bool]] = None,
+        satellite_is_paired: Optional[Callable[[str], bool]] = None,
     ):
         """
         cfg                    : udp-Abschnitt aus config.yaml
@@ -91,9 +107,16 @@ class UDPServer:
         resolve_satellite_room : Callback(device_id) → room_id|None — RoomManager-Lookup.
                                  Ohne zugewiesenen Raum gilt ein Satellit als nicht
                                  funktional: kein Tracking, keine Weiterleitung an den Adapter.
+                                 Er bleibt aber verbunden (Register und Heartbeat werden
+                                 bestätigt, wie beim Proxy) und wird aufgenommen, sobald ihm
+                                 ein Raum zugewiesen ist (#547).
         upsert_satellite       : Callback(device_id) — trägt den Satelliten in die
                                  RoomManager-DB ein (auch ohne Raum), damit er in der
                                  Raum-Zuweisung in der Web UI auftaucht.
+        pair_satellite         : Callback(device_id, seed) → bool — koppelt einen vorab
+                                 provisionierten Seed an die Hardware-ID (wie über den Proxy).
+        satellite_is_paired    : Callback(device_id) → bool — True, wenn der Seed schon
+                                 verbraucht wurde (die "paired"-Bestätigung ging verloren).
         """
         self._host = cfg.get("host", "0.0.0.0")
         self._port = cfg.get("port", 7775)
@@ -102,12 +125,19 @@ class UDPServer:
         self._on_satellite_change = on_satellite_change
         self._resolve_satellite_room = resolve_satellite_room or (lambda *_: None)
         self._upsert_satellite = upsert_satellite or (lambda *_: None)
+        self._pair_satellite = pair_satellite or (lambda *_: False)
+        self._satellite_is_paired = satellite_is_paired or (lambda *_: False)
 
-        # { device_name: {"addr": (ip, port), "room": str, "last_heartbeat": float} }
+        # { device_name: {"addr": (ip, port), "room": str, "tracked": bool, "last_heartbeat": float} }
+        # tracked: der Satellit hatte beim Register oder später einen Raum und ist dem Rest von
+        # Core (Adapter, Satellitenliste) bekannt; ohne Raum ist er nur verbunden (#547).
         self._satellites: dict[str, dict] = {}
         # { device_name: _AudioSession }
         self._sessions: dict[str, _AudioSession] = {}
         self._lock = threading.Lock()
+        # Je Satellit ein Lock, damit zwei Ansagen kurz hintereinander nicht ineinander
+        # laufen: die zweite wartet, bis die erste (inkl. tts_end) gesendet ist (#545).
+        self._tts_locks: dict[str, threading.Lock] = {}
 
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -216,17 +246,53 @@ class UDPServer:
         log.debug(f"Command → {device}: {cmd}")
 
     def send_tts(self, device: str, pcm_bytes: bytes, sample_rate: int = 16000):
-        """Sendet TTS-Audio (raw PCM) an einen registrierten Satelliten."""
+        """Sendet TTS-Audio (raw PCM) an einen registrierten Satelliten.
+
+        Kleine Pakete im Takt der Wiedergabe (siehe _TTS_CHUNK), deshalb dauert das Senden so
+        lange wie die Ansage selbst. Es läuft in einem eigenen Thread, damit weder die
+        MQTT-Callbacks noch die Pipeline dafür blockieren (#545)."""
         with self._lock:
             sat = self._satellites.get(device)
         if not sat:
             log.warning(f"send_tts: Satellit '{device}' nicht registriert.")
             return
         tts_addr = sat.get("tts_addr", sat["addr"])
-        self._send_pcm(TYPE_TTS, pcm_bytes, tts_addr)
-        time.sleep(0.3)
-        self._send_control({"type": "tts_end", "sample_rate": sample_rate}, tts_addr)
-        log.info(f"TTS → {device} ({tts_addr[0]}:{tts_addr[1]}): {len(pcm_bytes)} Bytes @ {sample_rate}Hz gesendet.")
+        threading.Thread(
+            target=self._stream_tts,
+            args=(device, pcm_bytes, sample_rate, tts_addr),
+            daemon=True,
+            name=f"udp-tts-{device}",
+        ).start()
+
+    def _stream_tts(self, device: str, pcm_bytes: bytes, sample_rate: int, addr: tuple):
+        """Schickt die PCM-Daten in Paketen zu je _TTS_CHUNK Bytes, nach der Abspielzeit
+        getaktet (mit _TTS_LEAD_S Vorlauf), danach tts_end."""
+        with self._lock:
+            lock = self._tts_locks.setdefault(device, threading.Lock())
+        with lock:
+            if not self._sock:
+                return
+            if sample_rate != _TTS_RATE:
+                # Die Firmware spielt immer mit 16 kHz und ignoriert die Rate im tts_end:
+                # Piper (22050 Hz) klänge sonst zu tief und zu langsam (#546)
+                pcm_bytes = resample_pcm(pcm_bytes, sample_rate, _TTS_RATE)
+                sample_rate = _TTS_RATE
+            bytes_per_s = sample_rate * 2  # 16 Bit mono
+            start = time.monotonic()
+            sent = 0
+            for offset in range(0, len(pcm_bytes), _TTS_CHUNK):
+                chunk = pcm_bytes[offset : offset + _TTS_CHUNK]
+                try:
+                    self._sock.sendto(bytes([TYPE_TTS]) + chunk, addr)
+                except OSError as e:
+                    log.warning(f"TTS → {device}: Senden abgebrochen ({e}).")
+                    return
+                sent += len(chunk)
+                wait = start + sent / bytes_per_s - _TTS_LEAD_S - time.monotonic()
+                if wait > 0:
+                    time.sleep(wait)
+            self._send_control({"type": "tts_end", "sample_rate": sample_rate}, addr)
+        log.info(f"TTS → {device} ({addr[0]}:{addr[1]}): {len(pcm_bytes)} Bytes @ {sample_rate}Hz gesendet.")
 
     # ------------------------------------------------------------------
     # Registrierungs-Lookup (für main.py → Raum-Fallback)
@@ -235,7 +301,7 @@ class UDPServer:
         """Gibt den beim Register gemeldeten Raum zurück, oder None."""
         with self._lock:
             sat = self._satellites.get(device)
-        return sat["room"] if sat else None
+        return (sat["room"] or None) if sat else None
 
     def _live_room(self, device: str) -> str:
         """Aktuelle Raum-Zuweisung eines Satelliten aus der DB (#519). Der beim Register
@@ -245,18 +311,59 @@ class UDPServer:
 
     def registered_devices(self) -> dict[str, str]:
         """Gibt {device_name: room_id} aller aktuell registrierten Satelliten zurück.
-        Der Raum ist die aktuelle DB-Zuweisung, nicht der Stand beim Register (#519)."""
+        Der Raum ist die aktuelle DB-Zuweisung, nicht der Stand beim Register (#519).
+        Ein Satellit, der noch nie einen Raum hatte, ist nur verbunden und taucht hier nicht
+        auf (#547)."""
         with self._lock:
-            devices = list(self._satellites)
+            devices = [d for d, s in self._satellites.items() if s.get("tracked", True)]
         return {d: self._live_room(d) for d in devices}
 
     def registered_devices_full(self) -> dict[str, dict]:
         """Gibt {device_name: {"room": room_id, "addr": "ip:port"}} zurück (Raum: aktuelle
-        DB-Zuweisung, #519)."""
+        DB-Zuweisung, #519). Satelliten ohne je zugewiesenen Raum fehlen, wie bei registered_devices()."""
         with self._lock:
             addrs = {d: (s.get("lan_ip") or s.get("addr", ("", 0))[0], s.get("addr", ("", 0))[1])
-                     for d, s in self._satellites.items()}
+                     for d, s in self._satellites.items() if s.get("tracked", True)}
         return {d: {"room": self._live_room(d), "addr": f"{ip}:{port}"} for d, (ip, port) in addrs.items()}
+
+    def _pair_from_register(self, device: str, seed: str) -> bool:
+        """Koppelt einen vorab provisionierten Seed an die Hardware-ID, wie NotifySatelliteRegistered
+        über den Proxy. True, wenn der Satellit ein "paired" bekommen soll (damit er den Seed aus dem
+        NVS löscht). Ist der Seed schon verbraucht (die Bestätigung ging verloren), gilt das als
+        Erfolg und die Bestätigung geht erneut raus, sonst schickt der Satellit den Seed bei jedem
+        Neustart wieder mit (#547)."""
+        if not seed:
+            return False
+        try:
+            if self._pair_satellite(device, seed):
+                log.info(f"Satellit '{device}' gekoppelt (Seed eingelöst)")
+                return True
+            if self._satellite_is_paired(device):
+                log.info(f"Satellit '{device}': Seed schon eingelöst, sende die Bestätigung erneut")
+                return True
+            log.warning(f"Satellit '{device}': Seed nicht gefunden, weiter ohne Kopplung")
+        except Exception as e:  # DB-Fehler dürfen die Registrierung nicht verhindern
+            log.error(f"Satellit '{device}': Kopplung fehlgeschlagen: {e}")
+        return False
+
+    def _track_if_room_assigned(self, device: str):
+        """Nimmt einen bisher raumlosen Satelliten auf, sobald ihm ein Raum zugewiesen ist,
+        ohne dass er neu starten muss (#547)."""
+        room = self._live_room(device)
+        if not room:
+            return
+        with self._lock:
+            sat = self._satellites.get(device)
+            if not sat or sat.get("tracked", True):
+                return
+            sat["tracked"] = True
+            sat["room"] = room
+        log.info(f"Satellit '{device}' hat jetzt den Raum '{room}' — wird verfolgt")
+        if self._on_satellite_change:
+            snapshot = self.registered_devices()
+            threading.Thread(
+                target=self._on_satellite_change, args=(snapshot,), daemon=True
+            ).start()
 
     # ------------------------------------------------------------------
     # Empfangs-Loop
@@ -298,13 +405,8 @@ class UDPServer:
 
         if t == "register":
             self._upsert_satellite(device)
+            paired = self._pair_from_register(device, msg.get("seed", ""))
             room = self._resolve_satellite_room(device) or ""
-            if not room:
-                log.warning(
-                    f"Satellit '{device}' hat keinen Raum in RoomManager — "
-                    f"nicht funktional (kein Tracking, keine Weiterleitung an Adapter)."
-                )
-                return
             # TTS geht an die gesehene Absenderadresse (IP + Port), nicht an Absender-IP +
             # gemeldeten listen_port: hinter einer NAT (z.B. Docker-Bridge auf Synology)
             # ist die gesehene IP das NAT-Gateway, und nur der von der NAT vergebene Port
@@ -327,13 +429,28 @@ class UDPServer:
                     f"(NAT?) — antworte an Absenderadresse"
                 )
             with self._lock:
-                self._satellites[device] = {"addr": addr, "tts_addr": addr, "room": room, "lan_ip": lan_ip, "last_heartbeat": time.monotonic()}
-            log.info(
-                f"Satellit registriert: '{device}' "
-                f"(Raum: '{room}', Adresse {addr[0]}:{addr[1]})"
-            )
+                self._satellites[device] = {
+                    "addr": addr, "tts_addr": addr, "room": room, "tracked": bool(room),
+                    "lan_ip": lan_ip, "last_heartbeat": time.monotonic(),
+                }
+            if room:
+                log.info(
+                    f"Satellit registriert: '{device}' "
+                    f"(Raum: '{room}', Adresse {addr[0]}:{addr[1]})"
+                )
+            else:
+                # Wie beim Proxy: verbunden und bestätigt (sonst fordert jeder Heartbeat eine
+                # neue Registrierung an, alle 10 s), aber nicht funktional, bis ein Raum
+                # zugewiesen ist (#547).
+                log.warning(
+                    f"Satellit '{device}' hat keinen Raum in RoomManager — verbunden, aber nicht "
+                    f"funktional (kein Tracking, keine Weiterleitung an Adapter). Weise ihm in der "
+                    f"WebUI oder im Adapter einen Raum zu."
+                )
             self._send_control({"type": "registered", "ok": True}, addr)
-            if self._on_satellite_change:
+            if paired:
+                self._send_control({"type": "paired", "device": device}, addr)
+            if room and self._on_satellite_change:
                 snapshot = self.registered_devices()
                 threading.Thread(
                     target=self._on_satellite_change, args=(snapshot,), daemon=True
@@ -362,6 +479,7 @@ class UDPServer:
                     self._satellites[device]["addr"] = addr
                     self._satellites[device]["tts_addr"] = addr  # NAT-Neuzuordnung folgen (#351)
                     self._satellites[device]["last_heartbeat"] = time.monotonic()
+                    was_tracked = self._satellites[device].get("tracked", True)
                     self._send_control({"type": "heartbeat_ack", "device": device}, addr)
                     log.info(f"Heartbeat von '{device}' — ACK gesendet")
                 else:
@@ -369,6 +487,8 @@ class UDPServer:
                     self._send_control({"type": "reregister"}, addr)
                     return
             self._upsert_satellite(device)
+            if not was_tracked:
+                self._track_if_room_assigned(device)
 
         else:
             log.debug(f"UDP Control unbekannt: type='{t}' von {addr}")
@@ -405,20 +525,6 @@ class UDPServer:
         except OSError:
             pass
 
-    def _send_pcm(self, type_byte: int, pcm: bytes, addr: tuple):
-        """Sendet PCM-Daten in Chunks ≤ 60 KB (UDP-Limit)."""
-        if not self._sock:
-            return
-        chunk_size = 60_000
-        offset = 0
-        while offset < len(pcm):
-            chunk = pcm[offset : offset + chunk_size]
-            try:
-                self._sock.sendto(bytes([type_byte]) + chunk, addr)
-            except OSError:
-                return
-            offset += chunk_size
-
     # ------------------------------------------------------------------
 
     _HEARTBEAT_TIMEOUT = 30.0  # 3 × 10s heartbeat interval
@@ -435,11 +541,12 @@ class UDPServer:
             for device in list(self._satellites):
                 sat = self._satellites[device]
                 if now - sat["last_heartbeat"] > self._HEARTBEAT_TIMEOUT:
-                    timed_out.append((device, sat["room"]))
+                    timed_out.append((device, sat["room"], sat.get("tracked", True)))
                     del self._satellites[device]
-        for device, room in timed_out:
+        for device, room, tracked in timed_out:
             log.warning(f"Satellit '{device}' (Raum: '{room}') — kein Heartbeat seit {self._HEARTBEAT_TIMEOUT:.0f}s, markiere als offline")
-            if self._on_satellite_change:
+            # Ein raumloser Satellit war dem Rest von Core nie bekannt, also gibt es nichts zu melden
+            if tracked and self._on_satellite_change:
                 snapshot = self.registered_devices()
                 threading.Thread(
                     target=self._on_satellite_change, args=(snapshot,), daemon=True

@@ -4,6 +4,26 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.107.0 (2026-11-25)
+### Satellite Firmware
+
+* Changed: the two app slots of a satellite grow from 2 MB to 3 MB (new partition table: `app1` at `0x310000`, the sound storage at `0x610000`, the crash dump at `0xF10000`; `nvs`, `otadata` and `app0` keep their place). The signed Rev. 5 image of 0.106.2 no longer fitted into 2 MB, so there was no room left for any further feature. Rev. 4 and Rev. 5 use the same table. A satellite gets the new table only by a reflash, an update over the network does not change it, so satellites with the old table stay on 2 MB until then. The sounds are downloaded again after the move (Refs #549)
+* Removed: the one-time update of the partition table at boot (added with the crash dump partition in 0.79.6) is gone. It only ran on satellites older than 0.79.6, which have no crash dump partition. With the new, larger partition table it would have written the new table from inside a running update slot, which a satellite without a serial connection cannot recover from. Such an old satellite now has to be flashed once over the cable (Refs #551)
+* Fixed: after the partition table changes (sound storage moved, see above) a satellite forgets which sounds it had downloaded and loads them again from the asset server. Before, the list of already downloaded sounds, which survives a reflash that keeps the settings, would have told the satellite that all sounds were present although the files were gone, so they would never have come back. The satellite remembers the address of the sound storage, so this happens once after a reflash or after the first update to this version. The sound storage itself is formatted by its mount, which takes about half a minute during the first start (Refs #552)
+
+## 0.106.2 (2026-11-25)
+### Satellite Firmware
+
+* Fixed: when a satellite detects the wake word (or a button press) it no longer stops listening for 150 ms. The short pause made the microphone drift against the speaker signal that the echo cancellation uses. The LED still shows the wake colour for about 150 ms, and the audio right after the wake word is now sent without a gap (Refs #544)
+* Fixed: while a satellite sends a spoken command to Hannah, the microphone processing no longer falls behind. Sending the audio and detecting the end of the speech now run in a task of their own. Before, microphone data was lost during this time, and the echo cancellation lost track of the speaker signal for several seconds after the wake word during an announcement, which made a wake word during playback recognised worse. In the test this now happens far less often (Refs #544)
+
+### Hannah Core
+
+* Fixed: spoken answers and announcements reach a satellite that is connected directly over UDP (without the Proxy). Core sent them in datagrams of up to 60 KB, which a satellite can neither reassemble nor store, so it only received the end marker, stayed silent and never showed the speaking colour. Core now sends packets below the WiFi packet size, paced to the speed of the playback, like the Proxy does. A long answer therefore takes as long to send as it takes to say (Refs #545)
+* Fixed: answers to a spoken command sound normal again on a satellite that is connected directly over UDP (without the Proxy) when the voice is Piper. Piper speaks at 22050 Hz, the satellite always plays 16000 Hz and ignores the rate Core tells it, so the answer came out too slow and too deep. Core now converts all speech to 16000 Hz before it sends it. Azure already delivered 16000 Hz and was not affected (Refs #546)
+* Fixed: a new satellite without a room that is connected directly over UDP (without the Proxy) is no longer told to register again every 10 seconds. Core ignored its registration and answered every heartbeat with a request to register again, so the satellite never counted as connected and never played its connect sound. Now Core acknowledges it like the Proxy does, but still does not track it or hand it on to the adapter until a room is assigned; the log says so. When a room is assigned, Core picks the satellite up with its next heartbeat, no restart needed (Refs #547)
+* Fixed: the pairing seed of a satellite that is connected directly over UDP is now redeemed, like through the Proxy. Before, Core ignored it, the satellite never got the confirmation and sent the seed with every registration for good (Refs #547)
+
 ## 0.106.1 (2026-11-21)
 ### Satellite Firmware
 

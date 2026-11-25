@@ -316,8 +316,9 @@ schützt das Update übers Netz, nicht den physischen Zugriff (kein Secure Boot,
   kürzeres Image über ein signiertes, bleibt der alte Signaturblock im Sektor dahinter liegen
   und das Image sieht wieder signiert aus. Für Tests ohne Signatur den Sektor löschen
   (`esptool erase-region <Slot-Ende> 0x1000`).
-- Der App-Slot ist 2 MiB, das Image wird vor dem Signaturblock auf 64 KiB aufgefüllt. Die App
-  darf dadurch nur bis etwa 2.031.616 Byte wachsen, bevor `partitions.csv` vergrößert werden muss.
+- Der App-Slot ist 3 MiB (seit #549, vorher 2 MiB), das Image wird vor dem Signaturblock auf 64 KiB aufgefüllt. Die App
+  darf dadurch nur bis etwa 3.141.504 Byte wachsen, bevor `partitions.csv` vergrößert werden muss. Die Slotgröße steht
+  zusätzlich als `APP_SLOT` in `scripts/sign_firmware.py`, beide Stellen gemeinsam ändern.
 
 ---
 

@@ -6,6 +6,7 @@ idf_component_register(
         hannah_config
         nvs_flash
         spiffs
+        esp_partition
         esp_http_client
         espressif__cjson
         mbedtls

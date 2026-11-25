@@ -14,7 +14,6 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_partition.h"
-#include "esp_flash.h"
 #include "esp_core_dump.h"
 #include "esp_heap_caps.h"
 #include "esp_ota_ops.h"
@@ -111,95 +110,10 @@ static void check_factory_reset(void)
     }
 }
 
-/* ── Partitionstabellen-Selfupdate (#280) ────────────────────────────────── */
-
-/* #280 fügt der Partitionstabelle eine neue "coredump"-Partition hinzu. Normales
- * OTA (esp_https_ota(), siehe hannah_ota.c) schreibt nur den App-Slot, nie die
- * Partitionstabelle selbst (eigener Flash-Bereich bei CONFIG_PARTITION_TABLE_OFFSET,
- * außerhalb von partitions.csv) — bereits deployte Geräte bekommen die neue
- * Partition also nie automatisch über OTA. Diese Funktion gleicht das aus: sie
- * vergleicht die aktive Tabelle gegen die ins Firmware-Image eingebettete
- * Ziel-Tabelle (siehe main/CMakeLists.txt, target_add_binary_data) und schreibt
- * sie bei Bedarf einmalig um — als Allererstes in app_main(), bevor irgendein
- * anderes Subsystem den Flash-Bus braucht.
- *
- * Akzeptiertes Restrisiko (Leonie, 2026-09-11): ein Stromausfall exakt während
- * esp_flash_erase_region()/esp_flash_write() unten würde das Gerät ohne
- * Recovery-Möglichkeit bricken (kein UART/Download-Mode-Zugriff mehr auf
- * bereits verbaute, im Gehäuse steckende Rev5-Satelliten). Risiko ist auf
- * dieses kurze Schreibfenster begrenzt, da alle bestehenden Partitionen
- * (nvs/otadata/app0/app1/spiffs) ihre Offsets/Größen unverändert behalten —
- * die neue Tabelle unterscheidet sich nur um einen zusätzlichen Eintrag im
- * bisher ungenutzten Bereich nach spiffs. Deshalb: Readback-Verifikation vor
- * jedem Neustart — bei Fehlschlag KEIN Neustart, Gerät bootet mit der alten
- * (weiterhin funktionsfähigen) Tabelle normal weiter, nur ohne
- * Coredump-Feature für diesen Boot. */
-
-extern const uint8_t coredump_partition_table_start[] asm("_binary_coredump_partition_table_start");
-extern const uint8_t coredump_partition_table_end[]   asm("_binary_coredump_partition_table_end");
-
-static void apply_partition_table_update_if_needed(void)
-{
-    if (esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL)) {
-        return; /* Tabelle bereits aktuell (Neu-Flash, RMA, oder schon selbst-aktualisiert) */
-    }
-
-    const uint8_t *new_table = coredump_partition_table_start;
-    size_t new_table_size = (size_t)(coredump_partition_table_end - coredump_partition_table_start);
-
-    ESP_LOGW(TAG, "Partitionstabelle veraltet (#280) — schreibe neue Tabelle (%u Bytes) nach 0x%x",
-             (unsigned)new_table_size, CONFIG_PARTITION_TABLE_OFFSET);
-
-    uint8_t *readback = malloc(new_table_size);
-    if (!readback) {
-        ESP_LOGE(TAG, "Partitionstabellen-Update: kein Speicher für Readback-Puffer — abgebrochen.");
-        return;
-    }
-
-    bool ok = false;
-    for (int attempt = 1; attempt <= 3 && !ok; attempt++) {
-        if (esp_flash_erase_region(esp_flash_default_chip, CONFIG_PARTITION_TABLE_OFFSET, 0x1000) != ESP_OK) {
-            ESP_LOGE(TAG, "Partitionstabellen-Update: Erase fehlgeschlagen (Versuch %d)", attempt);
-            continue;
-        }
-        if (esp_flash_write(esp_flash_default_chip, new_table, CONFIG_PARTITION_TABLE_OFFSET, new_table_size) != ESP_OK) {
-            ESP_LOGE(TAG, "Partitionstabellen-Update: Write fehlgeschlagen (Versuch %d)", attempt);
-            continue;
-        }
-        if (esp_flash_read(esp_flash_default_chip, readback, CONFIG_PARTITION_TABLE_OFFSET, new_table_size) != ESP_OK ||
-            memcmp(readback, new_table, new_table_size) != 0) {
-            ESP_LOGE(TAG, "Partitionstabellen-Update: Verifikation fehlgeschlagen (Versuch %d)", attempt);
-            continue;
-        }
-        ok = true;
-    }
-    free(readback);
-
-    if (!ok) {
-        ESP_LOGE(TAG, "Partitionstabellen-Update endgültig fehlgeschlagen — bootet mit alter Tabelle weiter.");
-        return;
-    }
-
-    /* Kritisch: ohne das hier würde ESP-IDFs eigener Rollback-Schutz diesen
-     * selbst ausgelösten Neustart als "neue Firmware nach OTA nie für gültig
-     * erklärt und trotzdem neu gestartet" interpretieren und beim nächsten Boot
-     * automatisch auf die vorherige (alte) App-Partition zurückrollen — die neue
-     * Firmware würde sich dadurch bei jedem OTA, das noch die alte Partitions-
-     * tabelle vorfindet, selbst rückgängig machen. hannah_net.c markiert die App
-     * sonst erst bei MQTT_EVENT_CONNECTED als gültig, weit nach diesem Punkt hier. */
-    esp_ota_mark_app_valid_cancel_rollback();
-
-    ESP_LOGW(TAG, "Partitionstabelle erfolgreich aktualisiert — Neustart.");
-    esp_restart();
-}
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hannah Satellite starting...");
     log_internal_heap("boot");
-
-    /* Muss vor allem anderen laufen, das den Flash-Bus nutzt (#280) */
-    apply_partition_table_update_if_needed();
 
     /* NVS initialisieren (wird von hannah_config und WiFi-Stack genutzt) */
     esp_err_t ret = nvs_flash_init();
