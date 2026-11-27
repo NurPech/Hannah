@@ -28,3 +28,7 @@ void hannah_led_show_volume(uint8_t percent);
  * verzögert im NVS gespeichert und beim Start wieder geladen. */
 void    hannah_led_set_brightness(uint8_t percent);
 uint8_t hannah_led_get_brightness(void);
+
+/* Legt die LED-Datenleitung auf festen Pegel ("high", "low", "toggle", "off"), zum
+ * Durchmessen des Pfades mit dem Multimeter. Per MQTT: .../led_pin_test/set (siehe hannah_led.c). */
+void hannah_led_pin_test(const char *mode);

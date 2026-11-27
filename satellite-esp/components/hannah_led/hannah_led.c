@@ -36,6 +36,35 @@ static const char *TAG = "hannah_led";
 static led_strip_handle_t   s_strip         = NULL;
 static volatile led_state_t s_current_state = LED_STATE_IDLE;
 
+/* Legt den RMT-Kanal des Rings an (#548): mit DMA, sonst füllt ein Interrupt den RMT-Puffer nach. Wird
+ * er zu spät bedient (WLAN-Interrupt auf demselben Kern), ist die Übertragung verfälscht und der Ring
+ * zeigt falsche Farben und zu viele leuchtende LEDs (so beschreibt es die Doku des led_strip-Moduls).
+ * Mit DMA schickt die Hardware den ganzen Puffer ohne Interrupt, 1024 Symbole wie im Beispiel des
+ * Moduls. Klappt das nicht (kein DMA-Kanal frei), läuft der Ring wie bisher ohne DMA weiter.
+ * Wird vom Start und vom Ende des Pin-Tests benutzt, damit der Ring danach nicht ohne DMA bleibt. */
+static esp_err_t led_open_strip(bool *dma_used)
+{
+    led_strip_config_t strip_cfg = {
+        .strip_gpio_num = LED_GPIO,
+        .max_leds       = LED_COUNT,
+    };
+    led_strip_rmt_config_t rmt_cfg = {
+        .resolution_hz     = 10 * 1000 * 1000,
+        .mem_block_symbols = 1024,
+        .flags.with_dma    = true,
+    };
+    esp_err_t err = led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &s_strip);
+    if (err == ESP_OK) {
+        if (dma_used) *dma_used = true;
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "RMT mit DMA nicht möglich (%s), der Ring läuft ohne DMA.", esp_err_to_name(err));
+    rmt_cfg.mem_block_symbols = 0;       /* Standardgröße */
+    rmt_cfg.flags.with_dma    = false;
+    if (dma_used) *dma_used = false;
+    return led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &s_strip);
+}
+
 /* Lautstärke-Overlay — überlagert kurzzeitig die laufende Animation, ohne
  * den State selbst zu ändern (s_current_state wird im Hintergrund weiter
  * korrekt gepflegt, z.B. MUTE/CAPTURE). */
@@ -178,6 +207,88 @@ static void render_error(uint32_t frame)
         set_all(0, 0, 0);
 }
 
+/* ── Pin-Test der LED-Datenleitung ─────────────────────────
+ * Diagnose fuer einen Ring, der nicht reagiert (Hobbyraum01, Rev5), ohne Oszilloskop: Statt der kurzen
+ * Datenpulse legt der led_task die Datenleitung (LED_GPIO) auf einen festen Pegel, den ein Multimeter
+ * an jedem Punkt des Pfades sieht (ESP IO3 -> U7 SN74AHCT125 -> R10 -> D2 DIN).
+ *   MQTT hannah/satellite/<device>/led_pin_test/set  mit  high | low | toggle | off  (nicht retained senden!)
+ * toggle wechselt im Sekundentakt, nach 5 min ohne neuen Befehl geht es von selbst zurueck in den
+ * Normalbetrieb. Alles laeuft im led_task, der RMT-Kanal wird dort freigegeben und wieder geoeffnet. */
+enum { PIN_TEST_OFF = 0, PIN_TEST_HIGH, PIN_TEST_LOW, PIN_TEST_TOGGLE };
+#define PIN_TEST_TIMEOUT_US (5 * 60 * 1000000LL)
+static volatile int s_pin_test_req       = PIN_TEST_OFF;
+static int          s_pin_test_cur       = PIN_TEST_OFF;
+static int64_t      s_pin_test_since_us  = 0;
+static int64_t      s_pin_test_err_log_us = 0;
+
+void hannah_led_pin_test(const char *mode)
+{
+    int req;
+    if (!mode) return;
+    if (strcmp(mode, "high") == 0 || strcmp(mode, "1") == 0)        req = PIN_TEST_HIGH;
+    else if (strcmp(mode, "low") == 0 || strcmp(mode, "0") == 0)    req = PIN_TEST_LOW;
+    else if (strcmp(mode, "toggle") == 0)                           req = PIN_TEST_TOGGLE;
+    else if (strcmp(mode, "off") == 0)                              req = PIN_TEST_OFF;
+    else {
+        ESP_LOGW(TAG, "led_pin_test/set: unbekannter Wert '%s' (erlaubt: high, low, toggle, off).", mode);
+        return;
+    }
+    s_pin_test_req = req;
+}
+
+/* true, solange der Pin-Test laeuft: dann zeichnet der led_task nichts und sendet keine Pulse. */
+static bool pin_test_step(void)
+{
+    int           req = s_pin_test_req;
+    const int64_t now = esp_timer_get_time();
+
+    if (s_pin_test_cur != PIN_TEST_OFF && (now - s_pin_test_since_us) > PIN_TEST_TIMEOUT_US) {
+        req = PIN_TEST_OFF;
+        s_pin_test_req = PIN_TEST_OFF;
+        ESP_LOGI(TAG, "LED-Pin-Test: 5 min ohne neuen Befehl, zurueck in den Normalbetrieb.");
+    }
+
+    if (req != s_pin_test_cur) {
+        if (s_pin_test_cur == PIN_TEST_OFF) {
+            led_strip_clear(s_strip);
+            led_strip_del(s_strip);
+            s_strip = NULL;
+            gpio_reset_pin(LED_GPIO);
+            gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+            s_pin_test_since_us = now;
+        }
+        if (req == PIN_TEST_OFF) {
+            gpio_reset_pin(LED_GPIO);
+            esp_err_t err = led_open_strip(NULL);
+            if (err != ESP_OK) {
+                /* Kein Abbruch: der Pin-Test bleibt aktiv (der led_task zeichnet dann nichts) und der
+                 * RMT-Kanal wird beim naechsten Durchlauf erneut geoeffnet. Der Fehler wird gedrosselt geloggt. */
+                s_strip = NULL;
+                if (now - s_pin_test_err_log_us > 5 * 1000000LL) {
+                    s_pin_test_err_log_us = now;
+                    ESP_LOGE(TAG, "LED-Pin-Test: RMT-Kanal nicht wieder geoeffnet (%s), neuer Versuch.", esp_err_to_name(err));
+                }
+                return true;
+            }
+            led_strip_clear(s_strip);
+            s_pin_test_cur = PIN_TEST_OFF;
+            ESP_LOGI(TAG, "LED-Pin-Test beendet, Ring wieder im Normalbetrieb.");
+            return false;
+        }
+        s_pin_test_cur = req;
+        ESP_LOGI(TAG, "LED-Pin-Test: GPIO %d %s.", LED_GPIO,
+                 req == PIN_TEST_HIGH ? "dauerhaft HIGH" : req == PIN_TEST_LOW ? "dauerhaft LOW" : "toggelt im Sekundentakt");
+    }
+
+    if (s_pin_test_cur == PIN_TEST_OFF) return false;
+
+    int level = 0;
+    if (s_pin_test_cur == PIN_TEST_HIGH)        level = 1;
+    else if (s_pin_test_cur == PIN_TEST_TOGGLE) level = (int)(((now - s_pin_test_since_us) / 1000000LL) & 1);
+    gpio_set_level(LED_GPIO, level);
+    return true;
+}
+
 /* ── Animations-Task ─────────────────────────────────────────────────────── */
 
 static void led_task(void *arg)
@@ -186,6 +297,10 @@ static void led_task(void *arg)
     led_state_t   last_state = LED_STATE_BOOT;
 
     while (1) {
+        if (pin_test_step()) {
+            vTaskDelay(pdMS_TO_TICKS(TICK_MS));
+            continue;
+        }
         if (s_volume_overlay_frames > 0) {
             render_volume(s_volume_overlay_percent);
             s_volume_overlay_frames--;
@@ -246,18 +361,13 @@ void hannah_led_init(void)
     if (esp_timer_create(&save_timer_args, &s_brightness_save_timer) != ESP_OK)
         ESP_LOGW(TAG, "Timer zum Speichern der LED-Helligkeit nicht angelegt — Helligkeit bleibt nicht erhalten.");
 
-    led_strip_config_t strip_cfg = {
-        .strip_gpio_num = LED_GPIO,
-        .max_leds       = LED_COUNT,
-    };
-    led_strip_rmt_config_t rmt_cfg = {
-        .resolution_hz = 10 * 1000 * 1000,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &s_strip));
+    bool use_dma = false;
+    ESP_ERROR_CHECK(led_open_strip(&use_dma));
     led_strip_clear(s_strip);
 
     xTaskCreate(led_task, "hannah_led", 2048, NULL, 3, NULL);
-    ESP_LOGI(TAG, "LED ring initialized (%d LEDs, GPIO %d)", LED_COUNT, LED_GPIO);
+    ESP_LOGI(TAG, "LED ring initialized (%d LEDs, GPIO %d, RMT %s)", LED_COUNT, LED_GPIO,
+             use_dma ? "mit DMA" : "ohne DMA");
 }
 
 void hannah_led_set_state(led_state_t state)

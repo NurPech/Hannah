@@ -44,6 +44,9 @@
 #include "mbedtls/platform.h"
 #include "cJSON.h"
 
+/* Diagnose der LED-Datenleitung, hannah_led.c. Schwach gebunden: hannah_net haengt nicht von hannah_led ab. */
+extern void hannah_led_pin_test(const char *mode) __attribute__((weak));
+
 static const char *TAG = "hannah_net";
 
 #define TYPE_CONTROL    0x01
@@ -512,6 +515,9 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/led_brightness/set",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
+        snprintf(topic, sizeof(topic), "hannah/satellite/%s/led_pin_test/set",
+                 hannah_config_get()->device_id);
+        esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
         snprintf(topic, sizeof(topic), "hannah/satellite/%s/ota/ok",
                  hannah_config_get()->device_id);
         esp_mqtt_client_subscribe(s_mqtt_client, topic, 0);
@@ -620,6 +626,11 @@ static void on_mqtt_event(void *handler_arg, esp_event_base_t base,
                 s_notifications_pending_cache = pending;
                 s_notifications_pending_cache_valid = true;
             }
+
+        } else if (strstr(topic, "/led_pin_test/set")) {
+            /* Diagnose der LED-Datenleitung, hannah_led.c. Schwach gebunden, damit hannah_net
+             * nicht von hannah_led abhaengt. */
+            if (hannah_led_pin_test) hannah_led_pin_test(data);
 
         } else if (strstr(topic, "/led_brightness/set")) {
             /* Refs #452 — strtol statt atoi: ein ungültiger Payload darf den Ring nicht auf 0 schalten */

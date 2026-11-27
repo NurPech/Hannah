@@ -4,6 +4,17 @@
     ## **WORK IN PROGRESS**
 -->
 
+## 0.107.2 (2026-11-27)
+### Satellite Firmware
+
+* Changed: the LED ring is now driven with DMA, so a WiFi interrupt at the wrong moment can no longer corrupt the data sent to the ring. This is meant to stop wrong colours (pink, green) and more LEDs lighting up than the animation draws while WiFi is busy. If the chip has no free DMA channel, the ring runs as before and the start log says which mode is active. Not yet confirmed on a satellite (Refs #555)
+* Changed: the built-in wake word model is replaced by a retrained one. In tests at the same threshold it was triggered by mistake by background dialogue about half as often as the previous model (about 0.6 against 1.2 times per hour), and it recognised a recorded "Hey Hannah" more often while the satellite itself played sound. The threshold setting, the settings saved on a satellite and a wake word model loaded from the asset server are not changed by this (Refs #556)
+
+## 0.107.1 (2026-11-25)
+### Satellite Firmware
+
+* Added: a ring that stays dark can now be diagnosed with a multimeter, without a special firmware. The MQTT topic `hannah/satellite/<device>/led_pin_test/set` accepts `high`, `low`, `toggle` and `off` and holds the data line of the LED ring at a fixed level (`toggle` changes it every second), so the level at every point of the line from the ESP to the first LED can be measured. After 5 minutes without a new command the ring returns to normal operation by itself. As long as no command is sent, nothing changes (Refs #554)
+
 ## 0.107.0 (2026-11-25)
 ### Satellite Firmware
 

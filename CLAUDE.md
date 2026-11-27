@@ -182,6 +182,7 @@ Kein TLS auf UDP (zu teuer für ESP32, im LAN akzeptabel).
 | `hannah/satellite/{device}/volume/set` (+ `/state`) | Lautstärke pro Satellit |
 | `hannah/satellite/{device}/mute/set` (+ `/state`) | Mute pro Satellit |
 | `hannah/satellite/{device}/led_brightness/set` (+ `/state`, retained) | Helligkeit des LED-Rings pro Satellit, 0–100 %, bleibt im NVS erhalten; 0 = Ring aus (#452). Core speichert den Wert pro Satellit (Quelle der Wahrheit, Spalte `satellites.led_brightness`), schickt ihn als retained `set`, sobald sich der Satellit meldet und bei jeder Änderung, und übernimmt eine live auf `/state` gemeldete Abweichung (retained Stände beim Abonnieren zählen nicht) (#453) |
+| `hannah/satellite/{device}/led_pin_test/set` | Extern → Satellit: legt die LED-Datenleitung (IO3) auf einen festen Pegel (`high`, `low`, `toggle` im Sekundentakt, `off`), damit ein Multimeter den Pfad ESP → U7 → R10 → erste LED durchmessen kann; nicht retained senden, nach 5 min ohne Befehl zurück im Normalbetrieb (#554) |
 | `hannah/satellite/{device}/dnd` (+ `/state`) | Do-Not-Disturb |
 | `hannah/satellite/{device}/listen` | Core → Satellit: virtuelles PTT aktivieren (nach TTS-Frage, Issue #18) |
 | `hannah/satellite/{device}/ptt` | Core → Satellit: virtuelles PTT an/aus |
@@ -393,6 +394,10 @@ Gilt für das Hannah-Mono-Repo **und** das `iobroker.hannah`-Submodule (eigener 
    - Änderungen am Mono-Repo (Core, Firmware, ...) — auch wenn sie nebenbei den Adapter mit anfassen: **GitLab Issue, project 319.**
    - Reine `iobroker.hannah`-Adapter-Änderungen (nichts im Mono-Repo angefasst): **GitHub Issue im Adapter-Repo** (`NurPech/ioBroker.hannah`), nicht GitLab — sonst im Adapter-Repo nicht nachvollziehbar.
    - Änderungen an `hannah-proto` (eigenständiges Repo auf gitlab.com, `gessinger/hannah-proto` — **nicht** Teil des Mono-Repos, seit dem Umzug ~2026-09-03 auch nicht mehr `dev.kernstock.net`): **eigenes Issue dort**, nicht in project 319 — selbst wenn der Anlass ein Core- oder Adapter-Feature ist, das den Proto-Wechsel nur nebenbei braucht.
+
+   **Issue oder Task — je nachdem, ob nach der Umsetzung noch verifiziert werden muss** (Monorepo, GitLab):
+   - **Fall 1 — das Issue lässt sich direkt lösen, ohne weitere Verifikation:** Branch nach dem Issue benennen (`<iid>-kurzer-name`), das Issue in Commit und MR referenzieren, das Issue wird mit dem Release geschlossen (Punkte 8 bis 10).
+   - **Fall 2 — das Issue darf nicht geschlossen werden, weil nach der Umsetzung noch Verifikationen ausstehen** (z.B. Test auf echter Hardware, Feldtest): für die Umsetzung wird ein **Task** unter dem Issue angelegt (Work-Item-Typ Task, Parent = das Issue). Branch nach dem Task benennen, den Task in Commit und MR referenzieren, den Task (nicht das Issue) bei Fertigstellung in den Milestone `next` setzen — er wird mit dem Release geschlossen. Das Issue bleibt offen und ohne Milestone, bis die Verifikation erledigt ist; es trägt dann die offene Prüfung.
 7. **Beim Start der Arbeit an einem Issue wird es dem Bearbeiter zugeordnet** (Assignee: `NurPech`, GitLab-Username). Zeigt im Milestone/Board sichtbar "in Bearbeitung" an, unabhängig vom Status des zugehörigen MR.
 8. **Wenn die Arbeit für ein Issue fertig ist — bevor daraus ein MR/PR wird — wird das Issue dem rollierenden Milestone `next` (project 319) zugeordnet.** Grund: sobald ein Issue im Milestone `next` steht, ist klar, dass die Umsetzung fertig ist und mit dem nächsten Release ausgeliefert wird; ergänzt die Assignee-Zuordnung aus Punkt 8 (die nur "in Bearbeitung" markiert, nicht "fertig").
 9. **Commit Messages bei funktionalen Änderungen referenzieren das Work Item** mit `Refs #ID` (im jeweils zuständigen Tracker aus Punkt 7).
